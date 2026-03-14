@@ -295,6 +295,7 @@ class AgentChatService private constructor(
     }
 
     override fun dispose() {
+        cancelCurrent()
         saveCurrentSession()
         saveAllToStore()
         scope.cancel()

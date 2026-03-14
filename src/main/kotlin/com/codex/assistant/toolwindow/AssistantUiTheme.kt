@@ -9,24 +9,24 @@ import javax.swing.JComponent
 import javax.swing.JLabel
 
 object AssistantUiTheme {
-    val APP_BG = JBColor(0x0B1015, 0x0B1015)
-    val CHROME_BG = JBColor(0x0E141C, 0x0E141C)
-    val CHROME_RAISED = JBColor(0x111923, 0x111923)
-    val SURFACE = JBColor(0x101823, 0x101823)
-    val SURFACE_RAISED = JBColor(0x15202C, 0x15202C)
-    val SURFACE_SUBTLE = JBColor(0x0C1218, 0x0C1218)
-    val BORDER = JBColor(0x22303D, 0x22303D)
-    val BORDER_STRONG = JBColor(0x324455, 0x324455)
-    val BORDER_SUBTLE = JBColor(0x18222D, 0x18222D)
-    val TEXT_PRIMARY = JBColor(0xE7EDF7, 0xE7EDF7)
-    val TEXT_SECONDARY = JBColor(0x9FAFC3, 0x9FAFC3)
-    val TEXT_MUTED = JBColor(0x73839A, 0x73839A)
-    val ACCENT = JBColor(0x4D95FF, 0x4D95FF)
-    val ACCENT_BG = JBColor(0x15345C, 0x15345C)
-    val ACCENT_BG_SOFT = JBColor(0x12263E, 0x12263E)
-    val SUCCESS = JBColor(0x56C27A, 0x56C27A)
-    val WARNING = JBColor(0xD9B15C, 0xD9B15C)
-    val DANGER = JBColor(0xE47D7D, 0xE47D7D)
+    val APP_BG = JBColor(0x15171B, 0x15171B)
+    val CHROME_BG = JBColor(0x1A1D22, 0x1A1D22)
+    val CHROME_RAISED = JBColor(0x20242A, 0x20242A)
+    val SURFACE = JBColor(0x1B1F25, 0x1B1F25)
+    val SURFACE_RAISED = JBColor(0x222730, 0x222730)
+    val SURFACE_SUBTLE = JBColor(0x13161A, 0x13161A)
+    val BORDER = JBColor(0x313743, 0x313743)
+    val BORDER_STRONG = JBColor(0x404857, 0x404857)
+    val BORDER_SUBTLE = JBColor(0x252A32, 0x252A32)
+    val TEXT_PRIMARY = JBColor(0xE3E7ED, 0xE3E7ED)
+    val TEXT_SECONDARY = JBColor(0xA7B0BE, 0xA7B0BE)
+    val TEXT_MUTED = JBColor(0x757F8E, 0x757F8E)
+    val ACCENT = JBColor(0x53A6FF, 0x53A6FF)
+    val ACCENT_BG = JBColor(0x234B78, 0x234B78)
+    val ACCENT_BG_SOFT = JBColor(0x1C3553, 0x1C3553)
+    val SUCCESS = JBColor(0x52C7A5, 0x52C7A5)
+    val WARNING = JBColor(0xD7B866, 0xD7B866)
+    val DANGER = JBColor(0xF07F84, 0xF07F84)
 
     fun panel(component: JComponent) {
         component.background = SURFACE
@@ -70,7 +70,7 @@ object AssistantUiTheme {
         button.foreground = TEXT_PRIMARY
         button.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(ACCENT, 1, true),
-            BorderFactory.createEmptyBorder(5, 11, 5, 11),
+            BorderFactory.createEmptyBorder(8, 16, 8, 16),
         )
     }
 
@@ -80,7 +80,7 @@ object AssistantUiTheme {
         button.foreground = TEXT_PRIMARY
         button.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(BORDER_STRONG, 1, true),
-            BorderFactory.createEmptyBorder(5, 10, 5, 10),
+            BorderFactory.createEmptyBorder(6, 12, 6, 12),
         )
     }
 
@@ -90,7 +90,7 @@ object AssistantUiTheme {
         button.foreground = TEXT_SECONDARY
         button.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(BORDER_SUBTLE, 1, true),
-            BorderFactory.createEmptyBorder(4, 9, 4, 9),
+            BorderFactory.createEmptyBorder(5, 10, 5, 10),
         )
     }
 

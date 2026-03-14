@@ -434,6 +434,7 @@ class ConversationTimelineBuilder(
         val narratives = linkedMapOf<String, NarrativeState>()
         val tools = linkedMapOf<String, TimelineAction.UpsertTool>()
         val commands = linkedMapOf<String, TimelineAction.UpsertCommand>()
+        val fileChanges = mutableListOf<TimelineNodeViewModel>()
         val failures = mutableListOf<TimelineNodeViewModel>()
         val thinking = StringBuilder()
         var thinkingTimestamp: Long? = defaultTimestamp
@@ -510,7 +511,28 @@ class ConversationTimelineBuilder(
                     )
                 }
 
-                is TimelineAction.DiffProposalReceived,
+                is TimelineAction.DiffProposalReceived -> {
+                    val index = fileChanges.size + 1
+                    fileChanges += TimelineNodeViewModel(
+                        id = "file-change-$index-${action.filePath.hashCode()}",
+                        kind = TimelineNodeKind.TOOL_STEP,
+                        title = "file_change",
+                        body = if (action.newContent.isBlank()) {
+                            "已检测到文件变更：${action.filePath}"
+                        } else {
+                            "已检测到文件变更：${action.filePath}\n\n${action.newContent}"
+                        },
+                        status = TimelineNodeStatus.SUCCESS,
+                        expanded = false,
+                        timestamp = action.timestampMs ?: defaultTimestamp,
+                        toolName = "file_change",
+                        toolInput = action.filePath,
+                        toolOutput = action.newContent,
+                        filePath = action.filePath,
+                        origin = TimelineNodeOrigin.EVENT,
+                    )
+                }
+
                 TimelineAction.FinishTurn,
                 -> Unit
             }
@@ -572,6 +594,7 @@ class ConversationTimelineBuilder(
                         origin = TimelineNodeOrigin.EVENT,
                     )
                 } +
+                fileChanges +
                 failures,
         )
 
@@ -766,8 +789,8 @@ class ConversationTimelineBuilder(
 
     private fun mergeSequencedNodes(nodes: List<TimelineNodeViewModel>): List<TimelineNodeViewModel> {
         return nodes.sortedWith(
-            compareBy<TimelineNodeViewModel> { it.sequence ?: Int.MAX_VALUE }
-                .thenBy { it.timestamp ?: Long.MAX_VALUE }
+            compareBy<TimelineNodeViewModel> { it.timestamp ?: Long.MAX_VALUE }
+                .thenBy { it.sequence ?: Int.MAX_VALUE }
                 .thenBy { kindPriority(it.kind) }
                 .thenBy { it.id },
         )
@@ -1014,17 +1037,55 @@ class ConversationTimelineBuilder(
 
     private fun mapToolStatus(raw: String): TimelineNodeStatus {
         return when (raw.lowercase()) {
-            "done" -> TimelineNodeStatus.SUCCESS
-            "failed" -> TimelineNodeStatus.FAILED
+            "done",
+            "completed",
+            "complete",
+            "success",
+            -> TimelineNodeStatus.SUCCESS
+
+            "failed",
+            "failure",
+            "error",
+            "incomplete",
+            -> TimelineNodeStatus.FAILED
+
+            "skipped",
+            "cancelled",
+            "canceled",
+            -> TimelineNodeStatus.SKIPPED
+
+            "searching",
+            "running",
+            "in_progress",
+            -> TimelineNodeStatus.RUNNING
+
             else -> TimelineNodeStatus.RUNNING
         }
     }
 
     private fun mapCommandStatus(raw: String): TimelineNodeStatus {
         return when (raw.lowercase()) {
-            "done" -> TimelineNodeStatus.SUCCESS
-            "failed" -> TimelineNodeStatus.FAILED
-            "skipped" -> TimelineNodeStatus.SKIPPED
+            "done",
+            "completed",
+            "complete",
+            "success",
+            -> TimelineNodeStatus.SUCCESS
+
+            "failed",
+            "failure",
+            "error",
+            "incomplete",
+            -> TimelineNodeStatus.FAILED
+
+            "skipped",
+            "cancelled",
+            "canceled",
+            -> TimelineNodeStatus.SKIPPED
+
+            "running",
+            "in_progress",
+            -> TimelineNodeStatus.RUNNING
+
             else -> TimelineNodeStatus.RUNNING
         }
     }

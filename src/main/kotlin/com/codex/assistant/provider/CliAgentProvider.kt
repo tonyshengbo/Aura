@@ -104,7 +104,7 @@ abstract class CliAgentProvider(
         }
 
         awaitClose {
-            logSummary("request.disconnected requestId=${request.requestId}")
+            logSummary("request.disconnected requestId=$‰{request.requestId}")
             running.remove(request.requestId)?.destroy()
         }
     }

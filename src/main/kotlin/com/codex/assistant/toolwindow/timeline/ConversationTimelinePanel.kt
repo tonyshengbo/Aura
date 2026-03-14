@@ -33,6 +33,7 @@ import javax.swing.JViewport
 
 class ConversationTimelinePanel(
     private val onCopyMessage: (String) -> Unit,
+    private val onRetryMessage: (String) -> Unit = {},
     private val onOpenFile: (String) -> Unit,
     private val onRetryTool: (String, String) -> Unit,
     private val onRetryCommand: (String, String) -> Unit,
@@ -47,7 +48,7 @@ class ConversationTimelinePanel(
         contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
         contentPanel.isOpaque = true
         contentPanel.background = Colors.APP_BG
-        contentPanel.border = BorderFactory.createEmptyBorder(12, 14, 18, 14)
+        contentPanel.border = BorderFactory.createEmptyBorder(14, 14, 18, 14)
 
         scrollPane.border = BorderFactory.createEmptyBorder()
         scrollPane.viewport.background = Colors.APP_BG
@@ -57,8 +58,9 @@ class ConversationTimelinePanel(
     fun renderTurns(
         turns: List<TimelineTurnViewModel>,
         forceAutoScroll: Boolean,
+        keepNearBottomAutoScroll: Boolean = true,
     ) {
-        val autoScroll = forceAutoScroll || isNearBottom()
+        val autoScroll = forceAutoScroll || (keepNearBottomAutoScroll && isNearBottom())
         contentPanel.removeAll()
         if (turns.isEmpty()) {
             contentPanel.add(Box.createVerticalGlue())
@@ -66,7 +68,7 @@ class ConversationTimelinePanel(
             turns.forEachIndexed { index, turn ->
                 contentPanel.add(buildTurnPanel(turn))
                 if (index != turns.lastIndex) {
-                    contentPanel.add(Box.createVerticalStrut(8))
+                    contentPanel.add(Box.createVerticalStrut(14))
                 }
             }
         }
@@ -102,63 +104,62 @@ class ConversationTimelinePanel(
 
         turn.userMessage?.let {
             main.add(buildUserBubble(it))
-            main.add(Box.createVerticalStrut(8))
+            main.add(Box.createVerticalStrut(10))
         }
-        turn.nodes.forEachIndexed { index, node ->
+        val visibleNodes = turn.nodes.filter(::shouldRenderNode)
+        visibleNodes.forEachIndexed { index, node ->
             main.add(buildNodeCard(node))
-            if (index != turn.nodes.lastIndex) {
+            if (index != visibleNodes.lastIndex) {
                 main.add(Box.createVerticalStrut(8))
             }
         }
-        if (turn.userMessage != null || turn.nodes.isNotEmpty()) {
+        if (turn.userMessage != null || visibleNodes.isNotEmpty()) {
             main.add(Box.createVerticalStrut(8))
         }
-        main.add(buildTurnFooter(turn))
+        if (turn.isRunning) {
+            main.add(buildTurnFooter(turn))
+        }
 
         panel.add(main, BorderLayout.CENTER)
         return panel
     }
 
     private fun buildUserBubble(message: ChatMessage): JComponent {
-        val block = JPanel(BorderLayout(0, 8))
-        block.name = "task-block-${message.id}"
-        block.isOpaque = true
-        block.background = Colors.TASK_BG
-        block.alignmentX = LEFT_ALIGNMENT
-        block.maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
-        block.border = BorderFactory.createCompoundBorder(
+        val bubble = JPanel(BorderLayout(0, 10))
+        bubble.name = "task-block-${message.id}"
+        bubble.isOpaque = true
+        bubble.background = Colors.TASK_BG
+        bubble.alignmentX = LEFT_ALIGNMENT
+        bubble.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(Colors.TASK_BORDER, 1, true),
             BorderFactory.createEmptyBorder(10, 12, 10, 12),
         )
+        bubble.maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
 
         val header = JPanel(BorderLayout(8, 0)).apply {
             isOpaque = false
         }
-        val titleRow = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.X_AXIS)
+        val titleRow = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false
         }
-        titleRow.add(JLabel("Task").apply {
-            foreground = Colors.TASK_LABEL
-            font = font.deriveFont(Font.BOLD, 11f)
-        })
-        titleRow.add(Box.createHorizontalStrut(8))
         titleRow.add(JLabel(formatClockTime(message.timestamp)).apply {
-            foreground = Colors.META
-            font = font.deriveFont(11f)
+            foreground = Colors.TASK_META
+            font = font.deriveFont(10f)
         })
 
         val actions = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             isOpaque = false
         }
-        actions.add(buildActionButton("Copy") { onCopyMessage(message.id) })
+        actions.add(buildActionButton("重试", compact = true) { onRetryMessage(message.content) })
+        actions.add(Box.createHorizontalStrut(6))
+        actions.add(buildActionButton("复制", compact = true) { onCopyMessage(message.id) })
 
         header.add(titleRow, BorderLayout.WEST)
         header.add(actions, BorderLayout.EAST)
-        block.add(header, BorderLayout.NORTH)
-        block.add(createBodyView(message.content, Colors.TEXT_PRIMARY, fontSize = 14f), BorderLayout.CENTER)
-        return block
+        bubble.add(header, BorderLayout.NORTH)
+        bubble.add(createBodyView(message.content, Colors.TASK_TEXT, fontSize = 13f), BorderLayout.CENTER)
+        return bubble
     }
 
     private fun buildNodeCard(node: TimelineNodeViewModel): JComponent {
@@ -166,13 +167,16 @@ class ConversationTimelinePanel(
         val expandable = isExpandable(node)
         val expanded = if (expandable) effectiveExpanded(node) else true
 
-        return when (presentation.chrome) {
-            TimelineNodeChrome.EXECUTION -> buildExecutionNodeCard(node, expanded, expandable)
+        return when {
+            usesExecutionChrome(node) -> buildExecutionNodeCard(node, expanded, expandable)
+            else -> when (presentation.chrome) {
             TimelineNodeChrome.NARRATIVE,
             TimelineNodeChrome.RESULT,
             TimelineNodeChrome.ALERT,
             TimelineNodeChrome.SUPPORTING,
             -> buildNarrativeNodeCard(node, presentation)
+            TimelineNodeChrome.EXECUTION -> buildExecutionNodeCard(node, expanded, expandable)
+        }
         }
     }
 
@@ -197,16 +201,36 @@ class ConversationTimelinePanel(
     private fun buildNodeButtons(node: TimelineNodeViewModel): List<JComponent> {
         val buttons = mutableListOf<JComponent>()
         if (node.filePath != null) {
-            buttons += buildActionButton("Open") { onOpenFile(node.filePath) }
+            val label = if (isFileMutationNode(node)) "Diff" else "打开"
+            buttons += buildActionButton(label, compact = true) { onOpenFile(node.filePath) }
         }
         if (!node.command.isNullOrBlank()) {
-            buttons += buildActionButton("Copy") { onCopyCommand(node.command) }
+            buttons += buildActionButton("复制", compact = true) { onCopyCommand(node.command) }
             if (node.status == TimelineNodeStatus.FAILED) {
-                buttons += buildActionButton("Retry") { onRetryCommand(node.command, node.cwd.orEmpty()) }
+                buttons += buildActionButton("重试", compact = true) { onRetryCommand(node.command, node.cwd.orEmpty()) }
             }
         }
         if (!node.toolName.isNullOrBlank() && node.status == TimelineNodeStatus.FAILED) {
-            buttons += buildActionButton("Retry") { onRetryTool(node.toolName, node.toolInput.orEmpty()) }
+            buttons += buildActionButton("重试", compact = true) { onRetryTool(node.toolName, node.toolInput.orEmpty()) }
+        }
+        return buttons
+    }
+
+    private fun buildNodeIconButtons(node: TimelineNodeViewModel): List<JComponent> {
+        val buttons = mutableListOf<JComponent>()
+        if (node.filePath != null) {
+            val icon = if (isFileMutationNode(node)) "◧" else "↗"
+            val tip = if (isFileMutationNode(node)) "查看 Diff" else "打开文件"
+            buttons += buildIconActionButton(icon, tip) { onOpenFile(node.filePath) }
+        }
+        if (!node.command.isNullOrBlank()) {
+            buttons += buildIconActionButton("⧉", "复制命令") { onCopyCommand(node.command) }
+            if (node.status == TimelineNodeStatus.FAILED) {
+                buttons += buildIconActionButton("↻", "重试命令") { onRetryCommand(node.command, node.cwd.orEmpty()) }
+            }
+        }
+        if (!node.toolName.isNullOrBlank() && node.status == TimelineNodeStatus.FAILED) {
+            buttons += buildIconActionButton("↻", "重试工具调用") { onRetryTool(node.toolName, node.toolInput.orEmpty()) }
         }
         return buttons
     }
@@ -216,8 +240,12 @@ class ConversationTimelinePanel(
 
     private fun renderTurnsSnapshot(anchorNodeId: String? = null) {
         val anchor = anchorNodeId?.let(::captureAnchor)
-        renderTurns(lastTurns, forceAutoScroll = false)
-        anchor?.let(::restoreAnchorAfterLayout)
+        val previousViewPosition = Point(scrollPane.viewport.viewPosition)
+        renderTurns(lastTurns, forceAutoScroll = false, keepNearBottomAutoScroll = false)
+        val restored = anchor?.let(::restoreAnchorAfterLayout) == true
+        if (!restored) {
+            setViewportY(previousViewPosition.y)
+        }
     }
 
     override fun addNotify() {
@@ -231,16 +259,20 @@ class ConversationTimelinePanel(
     ) {
         lastTurns = turns
         lastForceAutoScroll = forceAutoScroll
-        renderTurns(turns, forceAutoScroll)
+        renderTurns(turns, forceAutoScroll, keepNearBottomAutoScroll = true)
     }
 
     private fun effectiveExpanded(node: TimelineNodeViewModel): Boolean {
         expansionOverrides[node.id]?.let { return it }
-        return node.expanded
+        return if (usesExecutionChrome(node)) {
+            false
+        } else {
+            true
+        }
     }
 
     private fun isExpandable(node: TimelineNodeViewModel): Boolean {
-        if (!TimelineNodePresentation.forKind(node.kind).isToggleable) return false
+        if (!usesExecutionChrome(node) && !TimelineNodePresentation.forKind(node.kind).isToggleable) return false
         return !node.command.isNullOrBlank() ||
             !node.cwd.isNullOrBlank() ||
             !node.toolInput.isNullOrBlank() ||
@@ -248,8 +280,14 @@ class ConversationTimelinePanel(
             node.body.isNotBlank()
     }
 
+    private fun usesExecutionChrome(node: TimelineNodeViewModel): Boolean {
+        if (TimelineNodePresentation.forKind(node.kind).chrome == TimelineNodeChrome.EXECUTION) return true
+        return node.kind == TimelineNodeKind.FAILURE && (!node.command.isNullOrBlank() || !node.toolName.isNullOrBlank())
+    }
+
     private fun collapsedSummary(node: TimelineNodeViewModel): String {
         val source = when {
+            isFileMutationNode(node) -> node.body
             !node.command.isNullOrBlank() -> node.command
             !node.body.isBlank() -> node.body
             !node.toolInput.isNullOrBlank() -> node.toolInput
@@ -260,17 +298,17 @@ class ConversationTimelinePanel(
 
     private fun nodeTitle(node: TimelineNodeViewModel): String {
         return when (node.kind) {
-            TimelineNodeKind.ASSISTANT_NOTE -> "Assistant"
-            TimelineNodeKind.THINKING -> "Thinking"
+            TimelineNodeKind.ASSISTANT_NOTE -> "助手"
+            TimelineNodeKind.THINKING -> "思考"
             TimelineNodeKind.TOOL_STEP -> node.toolName ?: node.title
-            TimelineNodeKind.COMMAND_STEP -> "Command"
-            TimelineNodeKind.RESULT -> "Result"
+            TimelineNodeKind.COMMAND_STEP -> "命令"
+            TimelineNodeKind.RESULT -> "结果"
             TimelineNodeKind.FAILURE -> when {
-                !node.command.isNullOrBlank() -> "Command Failed"
-                !node.toolName.isNullOrBlank() -> "${node.toolName} failed"
-                else -> "Failure"
+                !node.command.isNullOrBlank() -> "命令失败"
+                !node.toolName.isNullOrBlank() -> "${node.toolName} 失败"
+                else -> "执行失败"
             }
-            TimelineNodeKind.SYSTEM_AUX -> "System"
+            TimelineNodeKind.SYSTEM_AUX -> "系统"
         }
     }
 
@@ -278,13 +316,13 @@ class ConversationTimelinePanel(
         val parts = mutableListOf<String>()
         node.timestamp?.let { parts += formatClockTime(it) }
         if (node.exitCode != null) {
-            parts += "exit ${node.exitCode}"
+            parts += "退出码 ${node.exitCode}"
         }
         parts += when (node.status) {
-            TimelineNodeStatus.RUNNING -> "running"
-            TimelineNodeStatus.SUCCESS -> "done"
-            TimelineNodeStatus.FAILED -> "failed"
-            TimelineNodeStatus.SKIPPED -> "skipped"
+            TimelineNodeStatus.RUNNING -> "进行中"
+            TimelineNodeStatus.SUCCESS -> "已完成"
+            TimelineNodeStatus.FAILED -> "失败"
+            TimelineNodeStatus.SKIPPED -> "已跳过"
         }
         return parts.joinToString(" · ")
     }
@@ -320,7 +358,7 @@ class ConversationTimelinePanel(
         expanded: Boolean,
         expandable: Boolean,
     ): JComponent {
-        val card = JPanel(BorderLayout(0, 8))
+        val card = JPanel(BorderLayout(0, 0))
         card.name = "node-card-${node.id}"
         card.isOpaque = true
         card.background = Colors.EXECUTION_BG
@@ -328,97 +366,46 @@ class ConversationTimelinePanel(
         card.maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
         card.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(Colors.EXECUTION_BORDER, 1, true),
-            BorderFactory.createEmptyBorder(9, 10, 9, 10),
+            BorderFactory.createEmptyBorder(8, 10, 8, 10),
         )
 
-        val header = JPanel(BorderLayout(10, 0)).apply {
+        val header = JPanel(BorderLayout(8, 0)).apply {
             isOpaque = false
         }
-        val titleWrap = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-        }
-        val titleLine = JPanel().apply {
+        val left = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.X_AXIS)
             isOpaque = false
         }
         if (expandable) {
-            titleLine.add(JLabel(if (expanded) "\u25BE" else "\u25B8").apply {
-                foreground = Colors.TEXT_SECONDARY
-                font = font.deriveFont(12f)
-            })
-            titleLine.add(Box.createHorizontalStrut(6))
-        }
-        titleLine.add(JLabel(executionTitle(node)).apply {
-            foreground = Colors.TEXT_PRIMARY
-            font = font.deriveFont(Font.BOLD, 12.5f)
-        })
-        titleWrap.add(titleLine)
-        val subtitle = executionSubtitle(node)
-        if (subtitle.isNotBlank()) {
-            titleWrap.add(Box.createVerticalStrut(2))
-            titleWrap.add(JLabel(subtitle).apply {
-                foreground = Colors.TEXT_SECONDARY
+            left.add(JLabel(if (expanded) "\u25BE" else "\u25B8").apply {
+                foreground = Colors.TEXT_TERTIARY
                 font = font.deriveFont(11f)
             })
+            left.add(Box.createHorizontalStrut(6))
+        }
+        executionTitleSegments(node).forEachIndexed { index, segment ->
+            if (index > 0) {
+                left.add(Box.createHorizontalStrut(6))
+            }
+            left.add(JLabel(segment.text).apply {
+                foreground = segment.color
+                font = font.deriveFont(if (segment.strong) Font.BOLD else Font.PLAIN, segment.size)
+            })
         }
 
-        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
+        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
             isOpaque = false
         }
-        buildNodeButtons(node).forEach(actions::add)
+        buildNodeIconButtons(node).forEach(actions::add)
         actions.add(buildDot(statusColor(node.status), 8))
 
-        header.add(titleWrap, BorderLayout.CENTER)
+        header.add(left, BorderLayout.CENTER)
         header.add(actions, BorderLayout.EAST)
 
-        val bodyPanel = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-        }
-
-        if (expanded) {
-            when (node.kind) {
-                TimelineNodeKind.TOOL_STEP -> {
-                    if (!node.toolInput.isNullOrBlank()) {
-                        bodyPanel.add(createMetaLabel("Input"))
-                        bodyPanel.add(createBodyView(node.toolInput, Colors.TEXT_SECONDARY, 12f))
-                    }
-                    if (!node.toolOutput.isNullOrBlank()) {
-                        bodyPanel.add(Box.createVerticalStrut(6))
-                        bodyPanel.add(createMetaLabel("Output"))
-                        bodyPanel.add(createBodyView(node.toolOutput, Colors.TEXT_PRIMARY, 12f))
-                    }
-                    if (node.toolInput.isNullOrBlank() && node.toolOutput.isNullOrBlank() && node.body.isNotBlank()) {
-                        bodyPanel.add(createBodyView(node.body, Colors.TEXT_PRIMARY, 12f))
-                    }
-                }
-
-                TimelineNodeKind.COMMAND_STEP -> {
-                    if (!node.command.isNullOrBlank()) {
-                        bodyPanel.add(createMetaLabel("Command"))
-                        bodyPanel.add(createCodeView("$ ${node.command}"))
-                    }
-                    if (!node.cwd.isNullOrBlank()) {
-                        bodyPanel.add(Box.createVerticalStrut(6))
-                        bodyPanel.add(createMetaLabel("Directory"))
-                        bodyPanel.add(createBodyView(node.cwd, Colors.TEXT_SECONDARY, 12f))
-                    }
-                    if (!node.body.isBlank()) {
-                        bodyPanel.add(Box.createVerticalStrut(6))
-                        bodyPanel.add(createMetaLabel("Output"))
-                        bodyPanel.add(createBodyView(node.body, Colors.TEXT_PRIMARY, 12f))
-                    }
-                }
-
-                else -> Unit
-            }
-        } else {
-            bodyPanel.add(createBodyView(collapsedSummary(node), Colors.TEXT_SECONDARY, 12f))
-        }
-
         card.add(header, BorderLayout.NORTH)
-        card.add(bodyPanel, BorderLayout.CENTER)
+        if (expanded) {
+            card.add(buildExecutionDetails(node), BorderLayout.CENTER)
+        }
         if (expandable) {
             installCardToggle(card) {
                 expansionOverrides[node.id] = !expanded
@@ -432,53 +419,96 @@ class ConversationTimelinePanel(
         node: TimelineNodeViewModel,
         presentation: TimelineNodePresentation,
     ): JComponent {
-        val row = JPanel(BorderLayout(12, 0))
+        val row = JPanel(BorderLayout(0, 6))
         row.name = "node-card-${node.id}"
         row.alignmentX = LEFT_ALIGNMENT
         row.maximumSize = Dimension(Int.MAX_VALUE, Int.MAX_VALUE)
         row.isOpaque = false
-        row.border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
+        row.border = BorderFactory.createEmptyBorder(2, 0, 6, 0)
 
-        val labelColumn = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-            preferredSize = Dimension(92, 1)
-            minimumSize = Dimension(92, 1)
-            maximumSize = Dimension(92, Int.MAX_VALUE)
-        }
-        labelColumn.add(JLabel(inlineLabel(node)).apply {
-            foreground = narrativeTitleColor(presentation)
-            font = font.deriveFont(Font.BOLD, 10.5f)
-        })
-
-        val bodyColumn = JPanel().apply {
+        val content = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
         }
         if (node.body.isNotBlank()) {
-            bodyColumn.add(
+            content.add(
                 createBodyView(
                     text = node.body,
                     foreground = narrativeBodyColor(presentation),
-                    fontSize = if (presentation.chrome == TimelineNodeChrome.NARRATIVE) 13f else 12.5f,
+                    fontSize = if (presentation.chrome == TimelineNodeChrome.NARRATIVE) 12.5f else 12f,
                 ),
             )
         }
-        val subtitle = nodeSubtitle(node)
-        if (subtitle.isNotBlank()) {
-            if (node.body.isNotBlank()) {
-                bodyColumn.add(Box.createVerticalStrut(4))
-            }
-            bodyColumn.add(JLabel(subtitle).apply {
-                foreground = Colors.META
-                font = font.deriveFont(11f)
-                alignmentX = LEFT_ALIGNMENT
-            })
+        row.add(content, BorderLayout.CENTER)
+        return row
+    }
+
+    private fun shouldRenderNode(node: TimelineNodeViewModel): Boolean {
+        if (node.body.isNotBlank()) return true
+        return usesExecutionChrome(node) || isExpandable(node)
+    }
+
+    private fun buildExecutionDetails(node: TimelineNodeViewModel): JComponent {
+        val bodyPanel = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            border = BorderFactory.createEmptyBorder(10, 0, 0, 0)
         }
 
-        row.add(labelColumn, BorderLayout.WEST)
-        row.add(bodyColumn, BorderLayout.CENTER)
-        return row
+        bodyPanel.add(JLabel(nodeSubtitle(node)).apply {
+            foreground = Colors.TEXT_MUTED
+            font = font.deriveFont(10.5f)
+            alignmentX = LEFT_ALIGNMENT
+        })
+        bodyPanel.add(Box.createVerticalStrut(6))
+
+        when (node.kind) {
+            TimelineNodeKind.TOOL_STEP -> {
+                if (isFileMutationNode(node) && node.filePath != null) {
+                    bodyPanel.add(createMetaLabel("位置"))
+                    bodyPanel.add(createBodyView("`${node.filePath}`", Colors.TEXT_PRIMARY, 11.5f))
+                }
+                if (!node.toolInput.isNullOrBlank() && !isFileMutationNode(node)) {
+                    bodyPanel.add(createMetaLabel("输入"))
+                    bodyPanel.add(createBodyView(node.toolInput, Colors.TEXT_SECONDARY, 11.5f))
+                }
+                val detail = node.toolOutput?.takeIf { it.isNotBlank() } ?: node.body.takeIf { it.isNotBlank() }
+                if (!detail.isNullOrBlank()) {
+                    if (bodyPanel.componentCount > 0) {
+                        bodyPanel.add(Box.createVerticalStrut(6))
+                    }
+                    bodyPanel.add(createMetaLabel("输出"))
+                    bodyPanel.add(createBodyView(detail, Colors.TEXT_PRIMARY, 11.5f))
+                }
+            }
+
+            TimelineNodeKind.COMMAND_STEP,
+            TimelineNodeKind.FAILURE,
+            -> {
+                if (!node.command.isNullOrBlank()) {
+                    bodyPanel.add(createMetaLabel("命令"))
+                    bodyPanel.add(createCodeView("$ ${node.command}"))
+                } else if (!node.toolName.isNullOrBlank()) {
+                    if (!node.toolInput.isNullOrBlank()) {
+                        bodyPanel.add(createMetaLabel("输入"))
+                        bodyPanel.add(createBodyView(node.toolInput, Colors.TEXT_SECONDARY, 11.5f))
+                    }
+                }
+                if (!node.cwd.isNullOrBlank()) {
+                    bodyPanel.add(Box.createVerticalStrut(6))
+                    bodyPanel.add(createMetaLabel("目录"))
+                    bodyPanel.add(createBodyView("`${node.cwd}`", Colors.TEXT_PRIMARY, 11.5f))
+                }
+                if (!node.body.isBlank()) {
+                    bodyPanel.add(Box.createVerticalStrut(6))
+                    bodyPanel.add(createMetaLabel("输出"))
+                    bodyPanel.add(createBodyView(node.body, Colors.TEXT_PRIMARY, 11.5f))
+                }
+            }
+
+            else -> Unit
+        }
+        return bodyPanel
     }
 
     private fun createMetaLabel(text: String): JComponent {
@@ -504,7 +534,33 @@ class ConversationTimelinePanel(
     }
 
     private fun createCodeView(text: String): JComponent {
-        return JBTextArea(text).apply {
+        return object : JBTextArea(text) {
+            override fun getPreferredSize(): Dimension {
+                val availableWidth = resolveAvailableWidth()
+                setSize(availableWidth, Int.MAX_VALUE / 8)
+                val preferred = super.getPreferredSize()
+                return Dimension(availableWidth, preferred.height)
+            }
+
+            override fun getMaximumSize(): Dimension = preferredSize
+
+            private fun resolveAvailableWidth(): Int {
+                val widths = mutableListOf<Int>()
+                var current: Container? = parent
+                while (current != null) {
+                    val width = when (current) {
+                        is JViewport -> current.extentSize.width
+                        else -> current.width
+                    }
+                    if (width > 0) {
+                        widths += width
+                    }
+                    current = current.parent
+                }
+                val baseWidth = widths.minOrNull() ?: 320
+                return (baseWidth - 64).coerceAtLeast(120)
+            }
+        }.apply {
             isEditable = false
             lineWrap = true
             wrapStyleWord = true
@@ -521,6 +577,7 @@ class ConversationTimelinePanel(
 
     private fun buildActionButton(
         text: String,
+        compact: Boolean = false,
         action: () -> Unit,
     ): JButton {
         return JButton(text).apply {
@@ -530,9 +587,29 @@ class ConversationTimelinePanel(
             background = Colors.ACTION_BG
             border = BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(Colors.ACTION_BORDER, 1, true),
-                BorderFactory.createEmptyBorder(2, 7, 2, 7),
+                BorderFactory.createEmptyBorder(if (compact) 2 else 3, if (compact) 6 else 8, if (compact) 2 else 3, if (compact) 6 else 8),
+            )
+            font = font.deriveFont(if (compact) 10.2f else 10.8f)
+            addActionListener { action() }
+        }
+    }
+
+    private fun buildIconActionButton(
+        icon: String,
+        tooltip: String,
+        action: () -> Unit,
+    ): JButton {
+        return JButton(icon).apply {
+            isFocusable = false
+            horizontalAlignment = SwingConstants.CENTER
+            foreground = Colors.ACTION_TEXT
+            background = Colors.ACTION_BG
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(Colors.ACTION_BORDER, 1, true),
+                BorderFactory.createEmptyBorder(1, 5, 1, 5),
             )
             font = font.deriveFont(10.5f)
+            toolTipText = tooltip
             addActionListener { action() }
         }
     }
@@ -555,46 +632,264 @@ class ConversationTimelinePanel(
             .forEach { child -> installCardToggle(child, onToggle) }
     }
 
-    private fun executionTitle(node: TimelineNodeViewModel): String {
-        val fileName = node.filePath?.let { java.io.File(it).name }.orEmpty()
+    private data class ExecutionTitleSegment(
+        val text: String,
+        val color: Color,
+        val strong: Boolean = false,
+        val size: Float = 12f,
+    )
+
+    private enum class ExecutionCategory(val label: String) {
+        READ_FILE("读取文件"),
+        EDIT_FILE("编辑文件"),
+        SEARCH_FILE("搜索文件"),
+        RUN_COMMAND("运行命令"),
+        FILE_SEARCH("文件检索"),
+        WEB_SEARCH("网页检索"),
+        FUNCTION_CALL("调用函数"),
+        MCP_CALL("MCP 工具"),
+        CODE_INTERPRETER("代码解释器"),
+        COMPUTER_USE("计算机操作"),
+        IMAGE_GENERATION("图像生成"),
+        GENERIC_TOOL("执行工具"),
+    }
+
+    private fun executionCategory(node: TimelineNodeViewModel): ExecutionCategory {
+        if (node.kind == TimelineNodeKind.COMMAND_STEP) return ExecutionCategory.RUN_COMMAND
+        if (node.kind == TimelineNodeKind.FAILURE && !node.command.isNullOrBlank()) return ExecutionCategory.RUN_COMMAND
+        val normalized = node.toolName
+            ?.lowercase()
+            .orEmpty()
+            .removeSuffix("_call_output")
+            .removeSuffix("_call")
+            .removeSuffix("_output")
         return when {
-            node.kind == TimelineNodeKind.TOOL_STEP && fileName.isNotBlank() && isFileMutationTool(node.toolName) -> "Updated $fileName"
-            node.kind == TimelineNodeKind.TOOL_STEP && fileName.isNotBlank() -> fileName
-            else -> nodeTitle(node)
+            normalized == "shell" || normalized.contains("shell_call") ||
+                normalized == "local_shell" || normalized.contains("terminal") || normalized.contains("run_command") ||
+                normalized == "bash" || normalized == "zsh" || normalized == "sh" ->
+                ExecutionCategory.RUN_COMMAND
+            normalized == "file_search" -> ExecutionCategory.FILE_SEARCH
+            normalized == "web_search" -> ExecutionCategory.WEB_SEARCH
+            normalized == "tool_search" -> ExecutionCategory.SEARCH_FILE
+            normalized == "function" || normalized == "function_call" -> ExecutionCategory.FUNCTION_CALL
+            normalized == "mcp" -> ExecutionCategory.MCP_CALL
+            normalized.contains("code_interpreter") -> ExecutionCategory.CODE_INTERPRETER
+            normalized.contains("computer") || normalized.contains("computer_use") -> ExecutionCategory.COMPUTER_USE
+            normalized.contains("image_generation") -> ExecutionCategory.IMAGE_GENERATION
+            normalized.contains("read") || normalized.contains("view") || normalized.contains("open_file") -> ExecutionCategory.READ_FILE
+            normalized.contains("grep") || normalized.contains("search") || normalized.contains("find") || normalized.contains("glob") -> ExecutionCategory.SEARCH_FILE
+            normalized.contains("file_change") || normalized.contains("edit") || normalized.contains("patch") || normalized.contains("apply") || normalized.contains("write") || normalized.contains("create") -> ExecutionCategory.EDIT_FILE
+            else -> ExecutionCategory.GENERIC_TOOL
         }
     }
 
-    private fun executionSubtitle(node: TimelineNodeViewModel): String {
-        val parts = mutableListOf<String>()
-        if (node.filePath != null) {
-            parts += node.filePath
-        } else if (node.toolName != null && node.kind == TimelineNodeKind.TOOL_STEP) {
-            parts += node.toolName
+    private fun executionTitleSegments(node: TimelineNodeViewModel): List<ExecutionTitleSegment> {
+        val category = executionCategory(node)
+        val fileName = node.filePath?.let { java.io.File(it).name }
+        val delta = extractDiffDelta(node)
+        val collapsedSummary = collapsedSummaryForNode(node, category)
+        val rawCommand = node.command ?: node.toolInput ?: node.body
+        return when {
+            category == ExecutionCategory.EDIT_FILE && fileName != null -> buildList {
+                add(ExecutionTitleSegment(category.label, Colors.TEXT_SECONDARY, strong = true, size = 11.8f))
+                add(ExecutionTitleSegment(fileName, Colors.ACCENT_TEXT, strong = true, size = 12.8f))
+                if (delta != null) {
+                    add(ExecutionTitleSegment(delta, Colors.SUCCESS, strong = true, size = 12f))
+                } else if (collapsedSummary.isNotBlank()) {
+                    add(ExecutionTitleSegment(collapsedSummary, Colors.TEXT_MUTED, size = 11.4f))
+                }
+            }
+
+            category == ExecutionCategory.READ_FILE || category == ExecutionCategory.SEARCH_FILE -> buildList {
+                add(ExecutionTitleSegment(category.label, Colors.TEXT_SECONDARY, strong = true, size = 11.8f))
+                add(ExecutionTitleSegment(fileName ?: collapsedSummary, Colors.ACCENT_TEXT, strong = true, size = 12.8f))
+            }
+
+            category == ExecutionCategory.RUN_COMMAND -> buildList {
+                val executable = extractExecutableName(rawCommand)
+                add(ExecutionTitleSegment(category.label, Colors.TEXT_SECONDARY, strong = true, size = 11.8f))
+                add(ExecutionTitleSegment(executable, Colors.ACCENT_TEXT, strong = true, size = 12.8f))
+                val details = compactCommand(rawCommand)
+                if (details.isNotBlank() && !details.equals(executable, ignoreCase = true)) {
+                    add(ExecutionTitleSegment(details, Colors.TEXT_MUTED, size = 11.3f))
+                }
+            }
+
+            category != ExecutionCategory.GENERIC_TOOL -> buildList {
+                add(ExecutionTitleSegment(category.label, Colors.TEXT_SECONDARY, strong = true, size = 11.8f))
+                add(ExecutionTitleSegment(collapsedSummary, Colors.TEXT_PRIMARY, strong = true, size = 12.4f))
+            }
+
+            node.kind == TimelineNodeKind.TOOL_STEP && fileName != null -> buildList {
+                add(ExecutionTitleSegment(ExecutionCategory.GENERIC_TOOL.label, Colors.TEXT_SECONDARY, strong = true, size = 11.8f))
+                add(ExecutionTitleSegment(fileName, Colors.ACCENT_TEXT, strong = true, size = 12.8f))
+            }
+
+            else -> listOf(
+                ExecutionTitleSegment(ExecutionCategory.GENERIC_TOOL.label, Colors.TEXT_SECONDARY, strong = true, size = 11.8f),
+                ExecutionTitleSegment(collapsedSummary, Colors.TEXT_PRIMARY, strong = true, size = 12.3f),
+            )
         }
-        val subtitle = nodeSubtitle(node)
-        if (subtitle.isNotBlank()) {
-            parts += subtitle
+    }
+
+    private fun collapsedSummaryForNode(node: TimelineNodeViewModel, category: ExecutionCategory): String {
+        return when (category) {
+            ExecutionCategory.RUN_COMMAND -> compactCommand(node.command ?: node.toolInput ?: node.body)
+            ExecutionCategory.READ_FILE,
+            ExecutionCategory.EDIT_FILE,
+            -> node.filePath?.let { java.io.File(it).name }
+                ?: extractPathLikeName(node.toolInput)
+                ?: compactText(node.toolInput ?: node.body)
+
+            ExecutionCategory.SEARCH_FILE,
+            ExecutionCategory.FILE_SEARCH,
+            ExecutionCategory.WEB_SEARCH,
+            -> extractQueryText(node.toolInput)
+                ?: compactText(node.toolInput ?: node.body)
+
+            ExecutionCategory.FUNCTION_CALL,
+            ExecutionCategory.MCP_CALL,
+            ExecutionCategory.CODE_INTERPRETER,
+            ExecutionCategory.COMPUTER_USE,
+            ExecutionCategory.IMAGE_GENERATION,
+            -> normalizeToolDisplayName(node.toolName)
+                ?: compactText(node.toolInput ?: node.body)
+
+            ExecutionCategory.GENERIC_TOOL -> normalizeToolDisplayName(node.toolName)
+                ?: compactText(node.toolInput ?: node.body.ifBlank { node.title })
         }
-        return parts.joinToString(" · ")
+    }
+
+    private fun extractQueryText(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val line = raw.lineSequence().firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+        if (line.isBlank()) return null
+        val query = Regex("""(?i)query\s*[:=]\s*(.+)$""").find(line)?.groupValues?.getOrNull(1)?.trim()
+        return compactText(query ?: line)
+    }
+
+    private fun extractPathLikeName(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val match = Regex("""([A-Za-z0-9_./-]+\.(kt|kts|java|xml|md|json|yaml|yml|js|ts|tsx|jsx|py|go|rs))""")
+            .find(raw)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?: return null
+        return java.io.File(match).name
+    }
+
+    private fun normalizeToolDisplayName(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        return raw
+            .trim()
+            .substringAfterLast(':')
+            .substringAfterLast('/')
+            .removeSuffix("_call_output")
+            .removeSuffix("_call")
+            .removeSuffix("_output")
+            .replace('_', ' ')
+            .ifBlank { null }
+            ?.let(::compactText)
+    }
+
+    private fun extractDiffDelta(node: TimelineNodeViewModel): String? {
+        val text = listOfNotNull(node.toolInput, node.toolOutput, node.body).joinToString("\n")
+        val added = Regex("""\+(\d+)""").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val removed = Regex("""-(\d+)""").find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        return when {
+            added != null && removed != null -> "+$added -$removed"
+            added != null -> "+$added"
+            removed != null -> "-$removed"
+            else -> null
+        }
+    }
+
+    private fun compactCommand(command: String?): String {
+        val normalized = command.orEmpty().trim()
+        if (normalized.isBlank()) return "命令"
+        val firstLine = normalized.lineSequence().first().trim()
+        return firstLine.take(24).let { line ->
+            if (line.length == firstLine.length) line else "$line…"
+        }
+    }
+
+    private fun extractExecutableName(command: String?): String {
+        val normalized = command.orEmpty().trim()
+        if (normalized.isBlank()) return "命令"
+        val shellScript = extractShellScript(normalized)
+        val source = shellScript ?: normalized
+        val segments = source.split(Regex("""\s*(?:&&|\|\||;|\|)\s*"""))
+        val candidate = segments
+            .asSequence()
+            .map { it.trim() }
+            .firstOrNull { segment ->
+                segment.isNotBlank() &&
+                    !segment.startsWith("cd ") &&
+                    !segment.startsWith("export ") &&
+                    !segment.startsWith("set ")
+            }
+            ?: source
+        val tokens = candidate.split(Regex("""\s+""")).filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return "命令"
+        val firstToken = if (tokens.first() == "env") {
+            tokens.drop(1).firstOrNull { !it.contains('=') } ?: tokens.first()
+        } else {
+            tokens.first()
+        }
+        return firstToken
+            .removePrefix("./")
+            .substringAfterLast('/')
+            .ifBlank { "命令" }
+    }
+
+    private fun extractShellScript(command: String): String? {
+        val patterns = listOf(
+            Regex("""^(?:/bin/)?(?:zsh|bash|sh)\s+-lc\s+(.+)$"""),
+            Regex("""^cmd\s+/c\s+(.+)$""", RegexOption.IGNORE_CASE),
+            Regex("""^powershell(?:\.exe)?\s+-Command\s+(.+)$""", RegexOption.IGNORE_CASE),
+        )
+        val rawScript = patterns.firstNotNullOfOrNull { regex ->
+            regex.find(command)?.groupValues?.getOrNull(1)
+        } ?: return null
+        return rawScript
+            .trim()
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
+            .trim()
+            .ifBlank { null }
+    }
+
+    private fun compactText(text: String?): String {
+        val normalized = text.orEmpty().trim()
+        if (normalized.isBlank()) return "详情"
+        val firstLine = normalized.lineSequence().first().trim()
+        return firstLine.take(24).let { line ->
+            if (line.length == firstLine.length) line else "$line…"
+        }
     }
 
     private fun isFileMutationTool(toolName: String?): Boolean {
         val normalized = toolName?.lowercase().orEmpty()
         return normalized.contains("edit") ||
+            normalized.contains("file_change") ||
             normalized.contains("write") ||
             normalized.contains("patch") ||
             normalized.contains("apply")
     }
 
+    private fun isFileMutationNode(node: TimelineNodeViewModel): Boolean {
+        return node.filePath != null && isFileMutationTool(node.toolName)
+    }
+
     private fun inlineLabel(node: TimelineNodeViewModel): String {
         return when (node.kind) {
-            TimelineNodeKind.ASSISTANT_NOTE -> "ASSISTANT"
-            TimelineNodeKind.THINKING -> "THINKING"
-            TimelineNodeKind.RESULT -> "RESULT"
-            TimelineNodeKind.FAILURE -> "FAILED"
-            TimelineNodeKind.SYSTEM_AUX -> "SYSTEM"
-            TimelineNodeKind.TOOL_STEP -> "TOOL"
-            TimelineNodeKind.COMMAND_STEP -> "COMMAND"
+            TimelineNodeKind.ASSISTANT_NOTE -> "助手"
+            TimelineNodeKind.THINKING -> "思考"
+            TimelineNodeKind.RESULT -> "结果"
+            TimelineNodeKind.FAILURE -> "失败"
+            TimelineNodeKind.SYSTEM_AUX -> "系统"
+            TimelineNodeKind.TOOL_STEP -> "执行"
+            TimelineNodeKind.COMMAND_STEP -> "执行"
         }
     }
 
@@ -626,20 +921,19 @@ class ConversationTimelinePanel(
         return ScrollAnchor(nodeId = nodeId, relativeTop = relativeTop)
     }
 
-    private fun restoreAnchorAfterLayout(anchor: ScrollAnchor) {
-        val restore = Runnable {
-            layoutHierarchy(this)
-            findNodeCard(anchor.nodeId)?.let { card ->
-                val targetY = (card.y - anchor.relativeTop).coerceAtLeast(0)
-                scrollPane.viewport.viewPosition = Point(0, targetY)
-            }
-        }
-        val application = ApplicationManager.getApplication()
-        if (application != null) {
-            application.invokeLater { restore.run() }
-        } else {
-            restore.run()
-        }
+    private fun restoreAnchorAfterLayout(anchor: ScrollAnchor): Boolean {
+        layoutHierarchy(this)
+        val card = findNodeCard(anchor.nodeId) ?: return false
+        val targetY = (card.y - anchor.relativeTop).coerceAtLeast(0)
+        setViewportY(targetY)
+        return true
+    }
+
+    private fun setViewportY(targetY: Int) {
+        val viewport = scrollPane.viewport ?: return
+        val view = viewport.view ?: return
+        val maxY = (view.preferredSize.height - viewport.extentSize.height).coerceAtLeast(0)
+        viewport.viewPosition = Point(0, targetY.coerceIn(0, maxY))
     }
 
     private fun findNodeCard(nodeId: String): JPanel? {
@@ -779,6 +1073,16 @@ class ConversationTimelinePanel(
     }
 
     private class TimelineContentPanel : JPanel(), Scrollable {
+        override fun getPreferredSize(): Dimension {
+            val preferred = super.getPreferredSize()
+            val viewportWidth = (parent as? JViewport)?.extentSize?.width ?: 0
+            return if (viewportWidth > 0) {
+                Dimension(minOf(preferred.width, viewportWidth), preferred.height)
+            } else {
+                preferred
+            }
+        }
+
         override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
 
         override fun getScrollableUnitIncrement(
@@ -800,19 +1104,23 @@ class ConversationTimelinePanel(
 
     private object Colors {
         val APP_BG = AssistantUiTheme.APP_BG
-        val TASK_BG = AssistantUiTheme.CHROME_BG
-        val TASK_BORDER = AssistantUiTheme.BORDER
-        val TASK_LABEL = AssistantUiTheme.ACCENT
-        val EXECUTION_BG = AssistantUiTheme.CHROME_BG
-        val EXECUTION_BORDER = AssistantUiTheme.BORDER
+        val TASK_BG = JBColor(0x1554A6, 0x1554A6)
+        val TASK_BORDER = JBColor(0x3678D4, 0x3678D4)
+        val TASK_TEXT = JBColor(0xF6FAFF, 0xF6FAFF)
+        val TASK_META = JBColor(0xC4DCF8, 0xC4DCF8)
+        val EXECUTION_BG = JBColor(0x1B2027, 0x1B2027)
+        val EXECUTION_BORDER = JBColor(0x2A313C, 0x2A313C)
         val RESULT_TEXT = JBColor(0xD8F3E4, 0xD8F3E4)
         val CODE_BG = AssistantUiTheme.SURFACE_SUBTLE
         val CODE_BORDER = AssistantUiTheme.BORDER_STRONG
-        val ACTION_BG = AssistantUiTheme.SURFACE_SUBTLE
-        val ACTION_BORDER = AssistantUiTheme.BORDER_SUBTLE
-        val ACTION_TEXT = AssistantUiTheme.TEXT_SECONDARY
+        val ACTION_BG = JBColor(0x222831, 0x222831)
+        val ACTION_BORDER = JBColor(0x313948, 0x313948)
+        val ACTION_TEXT = JBColor(0xC9D3E2, 0xC9D3E2)
+        val ACCENT_TEXT = JBColor(0x67A9FF, 0x67A9FF)
         val TEXT_PRIMARY = AssistantUiTheme.TEXT_PRIMARY
         val TEXT_SECONDARY = AssistantUiTheme.TEXT_SECONDARY
+        val TEXT_TERTIARY = JBColor(0x6D7686, 0x6D7686)
+        val TEXT_MUTED = AssistantUiTheme.TEXT_MUTED
         val LINK = AssistantUiTheme.ACCENT
         val META = AssistantUiTheme.TEXT_MUTED
         val SUCCESS = AssistantUiTheme.SUCCESS

@@ -13,7 +13,7 @@ class TimelineActionAssembler(
     private var toolIndex: Int = 0
     private var commandIndex: Int = 0
     private val toolSequences = linkedMapOf<String, Int>()
-    private val openToolIdsByName = linkedMapOf<String, String>()
+    private val openToolIdsByName = linkedMapOf<String, ArrayDeque<String>>()
     private val narrativeBuffer = StringBuilder()
     private var failureRecorded: Boolean = false
 
@@ -52,9 +52,10 @@ class TimelineActionAssembler(
             is EngineEvent.ToolCallStarted -> {
                 val actions = mutableListOf<TimelineAction>()
                 flushNarrative(TimelineNarrativeKind.NOTE)?.let(actions::add)
-                val toolId = event.callId ?: "tool-${++toolIndex}"
+                val normalizedName = event.name.lowercase()
+                val toolId = event.callId?.takeIf { it.isNotBlank() } ?: "tool-${++toolIndex}"
                 val sequence = toolSequences.getOrPut(toolId) { nextSequence() }
-                openToolIdsByName[event.name.lowercase()] = toolId
+                enqueueOpenToolId(normalizedName, toolId)
                 actions += TimelineAction.UpsertTool(
                     id = toolId,
                     name = event.name,
@@ -69,8 +70,9 @@ class TimelineActionAssembler(
             is EngineEvent.ToolCallFinished -> {
                 val actions = mutableListOf<TimelineAction>()
                 flushNarrative(TimelineNarrativeKind.NOTE)?.let(actions::add)
-                val toolId = event.callId
-                    ?: openToolIdsByName.remove(event.name.lowercase())
+                val normalizedName = event.name.lowercase()
+                val toolId = event.callId?.takeIf { it.isNotBlank() }?.also { removeOpenToolId(it) }
+                    ?: dequeueOpenToolId(normalizedName)
                     ?: "tool-${++toolIndex}"
                 val sequence = toolSequences.getOrPut(toolId) { nextSequence() }
                 actions += TimelineAction.UpsertTool(
@@ -181,5 +183,34 @@ class TimelineActionAssembler(
     private fun nextSequence(): Int {
         nextSequenceValue += 1
         return nextSequenceValue
+    }
+
+    private fun enqueueOpenToolId(toolName: String, toolId: String) {
+        val normalized = toolName.trim().lowercase()
+        if (normalized.isBlank()) return
+        val queue = openToolIdsByName.getOrPut(normalized) { ArrayDeque() }
+        queue.addLast(toolId)
+    }
+
+    private fun dequeueOpenToolId(toolName: String): String? {
+        val normalized = toolName.trim().lowercase()
+        if (normalized.isBlank()) return null
+        val queue = openToolIdsByName[normalized] ?: return null
+        val id = queue.removeFirstOrNull()
+        if (queue.isEmpty()) {
+            openToolIdsByName.remove(normalized)
+        }
+        return id
+    }
+
+    private fun removeOpenToolId(toolId: String) {
+        val iterator = openToolIdsByName.entries.iterator()
+        while (iterator.hasNext()) {
+            val (_, queue) = iterator.next()
+            queue.remove(toolId)
+            if (queue.isEmpty()) {
+                iterator.remove()
+            }
+        }
     }
 }

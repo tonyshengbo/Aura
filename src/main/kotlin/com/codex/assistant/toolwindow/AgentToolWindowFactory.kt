@@ -1,6 +1,7 @@
 package com.codex.assistant.toolwindow
 
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
@@ -20,6 +21,9 @@ class AgentToolWindowFactory : ToolWindowFactory, DumbAware {
             buildFallbackPanel(t)
         }
         val content = ContentFactory.getInstance().createContent(panel, "", false)
+        if (panel is Disposable) {
+            content.setDisposer(panel)
+        }
         toolWindow.contentManager.addContent(content)
     }
 

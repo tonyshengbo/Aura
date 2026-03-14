@@ -77,4 +77,48 @@ class TimelineActionAssemblerTest {
         assertTrue(threadStarted.isEmpty(), "thread.started should not become a visible narrative action")
         assertTrue(itemStarted.isEmpty(), "item.started should not become a visible narrative action")
     }
+
+    @Test
+    fun `merges tool start and finish by same call id`() {
+        val assembler = TimelineActionAssembler()
+
+        val started = assembler.accept(
+            EngineEvent.ToolCallStarted(
+                callId = "item_1",
+                name = "shell",
+                input = "./gradlew test",
+            ),
+        )
+        val finished = assembler.accept(
+            EngineEvent.ToolCallFinished(
+                callId = "item_1",
+                name = "shell",
+                output = "BUILD SUCCESSFUL",
+            ),
+        )
+
+        val running = assertIs<TimelineAction.UpsertTool>(started.single())
+        val done = assertIs<TimelineAction.UpsertTool>(finished.single())
+        assertEquals("item_1", running.id)
+        assertEquals("item_1", done.id)
+        assertEquals(running.sequence, done.sequence)
+    }
+
+    @Test
+    fun `falls back to fifo matching for unnamed tool events`() {
+        val assembler = TimelineActionAssembler()
+
+        val start1 = assembler.accept(EngineEvent.ToolCallStarted(callId = null, name = "shell", input = "echo first"))
+        val start2 = assembler.accept(EngineEvent.ToolCallStarted(callId = null, name = "shell", input = "echo second"))
+        val finish1 = assembler.accept(EngineEvent.ToolCallFinished(callId = null, name = "shell", output = "first done"))
+        val finish2 = assembler.accept(EngineEvent.ToolCallFinished(callId = null, name = "shell", output = "second done"))
+
+        val idStart1 = assertIs<TimelineAction.UpsertTool>(start1.single()).id
+        val idStart2 = assertIs<TimelineAction.UpsertTool>(start2.single()).id
+        val idFinish1 = assertIs<TimelineAction.UpsertTool>(finish1.single()).id
+        val idFinish2 = assertIs<TimelineAction.UpsertTool>(finish2.single()).id
+
+        assertEquals(idStart1, idFinish1)
+        assertEquals(idStart2, idFinish2)
+    }
 }

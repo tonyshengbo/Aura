@@ -16,6 +16,11 @@ Codex Assistant is an IntelliJ IDEA plugin that provides a unified Agent workflo
 - Context input: current file + manually attached files
 - Project-local session persistence
 - Settings page for local Codex CLI path
+- **Smart Context Management**: Auto-detect open files, git diff integration, file search
+- **Code Editing & Diff Preview**: Visual diff viewer, one-click apply changes
+- **Multi-Provider Support**: Codex CLI, Claude CLI support
+- **Keyboard Shortcuts**: Cmd+K/Ctrl+K to quick open tool window
+- **Enhanced UI**: Code block rendering, search panel, welcome screen
 
 ## Requirements
 

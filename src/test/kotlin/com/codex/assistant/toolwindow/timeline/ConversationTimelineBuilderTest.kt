@@ -2,6 +2,8 @@ package com.codex.assistant.toolwindow.timeline
 
 import com.codex.assistant.model.ChatMessage
 import com.codex.assistant.model.MessageRole
+import com.codex.assistant.model.TimelineAction
+import com.codex.assistant.model.TimelineActionCodec
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -66,6 +68,41 @@ class ConversationTimelineBuilderTest {
         assertFalse(turn.nodes[2].expanded)
         assertTrue(turn.nodes.last().expanded)
         assertEquals("Reworked the timeline renderer and preserved session controls.", turn.nodes.last().body)
+    }
+
+    @Test
+    fun `renders file change actions as collapsed edit evidence nodes`() {
+        val actions = listOf(
+            TimelineAction.DiffProposalReceived(
+                filePath = "src/main/kotlin/com/example/App.kt",
+                newContent = "class App",
+                timestampMs = 2_000L,
+            ),
+            TimelineAction.FinishTurn,
+        )
+        val turns = builder.build(
+            messages = listOf(
+                ChatMessage(
+                    id = "user-1",
+                    role = MessageRole.USER,
+                    content = "apply this change",
+                    timestamp = 1_000L,
+                ),
+                ChatMessage(
+                    id = "assistant-1",
+                    role = MessageRole.ASSISTANT,
+                    content = "done",
+                    timelineActionsPayload = TimelineActionCodec.encode(actions),
+                    timestamp = 2_000L,
+                ),
+            ),
+        )
+
+        val node = turns.single().nodes.single()
+        assertEquals(TimelineNodeKind.TOOL_STEP, node.kind)
+        assertEquals("file_change", node.toolName)
+        assertEquals("src/main/kotlin/com/example/App.kt", node.filePath)
+        assertFalse(node.expanded)
     }
 
     @Test

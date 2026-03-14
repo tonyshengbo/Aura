@@ -78,15 +78,16 @@ internal object CliStructuredEventParser {
         }
 
         if (isToolEvent(normalizedType, obj)) {
-            val toolName = findToolName(obj) ?: "tool"
+            val toolName = findToolName(obj) ?: inferToolNameFromType(normalizedType) ?: "tool"
             val payload = findToolPayload(obj)
             val callId = findCallId(obj)
+            val isError = isToolError(normalizedType, obj)
             return if (normalizedType.contains("result") || normalizedType.contains("output") || normalizedType.endsWith("completed")) {
                 EngineEvent.ToolCallFinished(
                     name = toolName,
                     output = payload,
                     callId = callId,
-                    isError = normalizedType.contains("error"),
+                    isError = isError,
                 )
             } else {
                 EngineEvent.ToolCallStarted(
@@ -118,6 +119,16 @@ internal object CliStructuredEventParser {
 
         parseProposalEvent(itemType, item)?.let { return it }
 
+        if (itemType.contains("file_change") || itemType.contains("diff") || itemType.contains("patch")) {
+            val filePath = findDiffPath(item)
+            if (!filePath.isNullOrBlank()) {
+                return EngineEvent.DiffProposal(
+                    filePath = filePath,
+                    newContent = findDiffContent(item).orEmpty(),
+                )
+            }
+        }
+
         if (itemType == "reasoning" || itemType.contains("thinking")) {
             val text = item.string("text") ?: findText(item)
             return text?.takeIf { it.isNotBlank() }?.let { EngineEvent.ThinkingDelta(it) }
@@ -130,10 +141,11 @@ internal object CliStructuredEventParser {
             return text?.takeIf { it.isNotBlank() }?.let { EngineEvent.AssistantTextDelta(it) }
         }
 
-        if (itemType.contains("tool") || itemType.contains("function_call")) {
+        if (isToolItemType(itemType)) {
             val name = item.string("tool_name")
                 ?: item.objectValue("tool")?.string("name")
                 ?: item.string("name")
+                ?: inferToolNameFromType(itemType)
                 ?: "tool"
             val callId = item.string("call_id") ?: item.string("id")
             val input = item.string("input")
@@ -141,8 +153,19 @@ internal object CliStructuredEventParser {
                 ?: item.string("arguments")
                 ?: item.objectValue("arguments")?.toString()
                 ?: item.string("command")
+            val output = item.string("output")
+                ?: item.objectValue("output")?.toString()
+                ?: item.string("result")
+                ?: item.objectValue("result")?.toString()
+            val payload = output ?: input
+            val isError = isToolError(eventType, item)
             return if (eventType.contains("completed") || itemType.contains("result") || itemType.contains("output")) {
-                EngineEvent.ToolCallFinished(name = name, output = input, callId = callId)
+                EngineEvent.ToolCallFinished(
+                    name = name,
+                    output = payload,
+                    callId = callId,
+                    isError = isError,
+                )
             } else {
                 EngineEvent.ToolCallStarted(name = name, input = input, callId = callId)
             }
@@ -164,6 +187,9 @@ internal object CliStructuredEventParser {
 
         val filePath = findDiffPath(obj)
         val newContent = findDiffContent(obj)
+        if (!filePath.isNullOrBlank() && type.contains("file_change")) {
+            return EngineEvent.DiffProposal(filePath = filePath, newContent = newContent.orEmpty())
+        }
         if (!filePath.isNullOrBlank() && !newContent.isNullOrBlank() &&
             (type.contains("diff") || type.contains("patch") || type.contains("proposal"))
         ) {
@@ -199,6 +225,7 @@ internal object CliStructuredEventParser {
     private fun isToolEvent(type: String, obj: JsonObject): Boolean {
         if (type.contains("tool")) return true
         if (type.contains("function_call")) return true
+        if (isToolItemType(type)) return true
         return obj.containsKey("tool_name") || obj.containsKey("toolName") || obj.containsKey("tool")
     }
 
@@ -281,6 +308,57 @@ internal object CliStructuredEventParser {
 
     private fun findCallId(obj: JsonObject): String? {
         return obj.string("call_id") ?: obj.string("id")
+    }
+
+    private fun isToolError(type: String, obj: JsonObject): Boolean {
+        if (type.contains("error")) return true
+        if (isFailureStatus(obj.string("status"))) return true
+        if (obj.containsKey("error")) return true
+        return false
+    }
+
+    private fun isToolItemType(type: String): Boolean {
+        val normalized = type.trim().lowercase()
+        if (normalized.isBlank()) return false
+        val baseTypes = setOf(
+            "file_search",
+            "web_search",
+            "tool_search",
+            "mcp",
+            "computer",
+            "code_interpreter",
+            "image_generation",
+            "shell",
+            "local_shell",
+        )
+        return normalized.endsWith("_call") ||
+            normalized.endsWith("_call_output") ||
+            normalized.endsWith(".call") ||
+            normalized.endsWith(".call_output") ||
+            normalized in baseTypes ||
+            baseTypes.any { normalized == "${it}_output" }
+    }
+
+    private fun inferToolNameFromType(type: String): String? {
+        val normalized = type.trim().lowercase()
+        if (normalized.isBlank()) return null
+        return normalized
+            .substringAfterLast('.')
+            .removeSuffix("_call_output")
+            .removeSuffix("_call")
+            .removeSuffix("_output")
+            .ifBlank { null }
+    }
+
+    private fun isFailureStatus(status: String?): Boolean {
+        val normalized = status?.trim()?.lowercase().orEmpty()
+        if (normalized.isBlank()) return false
+        return normalized == "failed" ||
+            normalized == "failure" ||
+            normalized == "error" ||
+            normalized == "incomplete" ||
+            normalized == "cancelled" ||
+            normalized == "canceled"
     }
 
     private fun findText(obj: JsonObject): String? {

@@ -54,6 +54,16 @@ Codex Assistant 是一个 IntelliJ IDEA 插件，提供统一的 Agent 交互入
 - 在沙盒中打开任意项目并测试 Tool Window。
 - 适合调试 UI 交互、消息流、命令确认、Diff 应用流程。
 
+### 1.1) 时间线独立 Swing 预览（快速手动调 UI）
+
+```bash
+./gradlew runTimelinePreview --no-daemon
+```
+
+- 直接启动独立窗口，不需要先拉起完整 IDEA 沙盒。
+- 用于快速调试时间线折叠/展开、标题映射、状态点和详情展示。
+- 入口代码：`src/test/kotlin/com/codex/assistant/toolwindow/timeline/TimelinePreviewMain.kt`
+
 ### 2) 构建失败排查
 
 ```bash

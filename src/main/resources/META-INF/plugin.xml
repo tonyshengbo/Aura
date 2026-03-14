@@ -9,6 +9,7 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
+    <depends>Git4Idea</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow
@@ -23,4 +24,14 @@
                 id="com.codex.assistant.settings"
                 displayName="Codex Assistant"/>
     </extensions>
+
+    <actions>
+        <action id="com.codex.assistant.QuickOpen"
+                class="com.codex.assistant.actions.QuickOpenAction"
+                text="Open Codex Assistant"
+                description="Quick open Codex Assistant tool window">
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl K"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta K"/>
+        </action>
+    </actions>
 </idea-plugin>

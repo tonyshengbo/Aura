@@ -19,16 +19,14 @@ import com.codex.assistant.toolwindow.timeline.LiveTurnSnapshot
 import com.codex.assistant.toolwindow.timeline.TimelineNodeKind
 import com.codex.assistant.toolwindow.timeline.TimelineNodeOrigin
 import com.codex.assistant.toolwindow.timeline.TimelineNodeStatus
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.fileChooser.FileChooser
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
@@ -36,9 +34,7 @@ import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextArea
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Cursor
@@ -59,33 +55,26 @@ import java.time.format.DateTimeFormatter
 import java.util.Base64
 import javax.swing.AbstractAction
 import javax.swing.BorderFactory
-import javax.swing.DefaultListModel
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
-import javax.swing.ListSelectionModel
-import javax.swing.SwingConstants
 import javax.swing.Timer
 
-class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()) {
+class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
     private val chatService = project.getService(AgentChatService::class.java)
     private val approvalUiPolicy = ApprovalUiPolicy()
-    private val workspaceState = ToolWindowWorkspaceState()
 
-    private val sessionTitleLabel = JLabel("New Session")
-    private val sessionSubtitleLabel = JLabel("Task Console")
-    private val backButton = JButton("Back")
-    private val historyButton = JButton("History")
-    private val settingsButton = JButton("Settings")
+    private val sessionTitleLabel = JLabel("当前对话")
+    private val sessionSubtitleLabel = JLabel("Codex Chat")
     private val streamLabel = JLabel()
-    private val attachButton = JButton("Manage Context")
     private val sdkButton = JButton()
     private val modeChip = JButton()
     private val modelChip = JButton()
     private val usageLeftLabel = JLabel("--")
+    private val attachedFilesPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0))
     private val editorContextPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
     private val editorContextLabel = JLabel()
     private val editorContextCloseButton = JButton("\u00D7")
@@ -96,6 +85,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private val timelineBuilder = ConversationTimelineBuilder()
     private val timelinePanel = ConversationTimelinePanel(
         onCopyMessage = { copyMessageToClipboard(it) },
+        onRetryMessage = { content -> retryMessage(content) },
         onOpenFile = { openFileInEditor(it) },
         onRetryTool = { name, input -> retryTool(name, input) },
         onRetryCommand = { command, cwd -> retryCommand(command, cwd) },
@@ -104,29 +94,13 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private val consoleView = JPanel(BorderLayout())
     private val placeholderPanel = JPanel(BorderLayout())
     private val centerCards = JPanel(CardLayout())
-    private val workspaceCards = JPanel(CardLayout())
     private val runContextBar = JPanel(BorderLayout())
     private val composerContainer = JPanel(BorderLayout())
-    private val sessionHistoryView = SessionHistoryView(
-        onOpenSession = { openSessionFromWorkspace(it) },
-        onCreateSession = { createSessionFromWorkspace() },
-        onDeleteSession = { deleteSessionFromWorkspace(it) },
-    )
-    private val settingsWorkspaceView = ToolWindowSettingsView(
-        onSaved = {
-            setStatusMessage("Saved")
-            refreshHeaderState()
-        },
-    )
-    private val contextFilesView = ContextFilesView(
-        onAddFile = { chooseContextFile() },
-        onFilesChanged = { updateAttachedFiles(it) },
-    )
 
-    private val inputArea = JBTextArea()
+    private val inputArea = FileMentionInputArea(project)
     private val inputScroll = JBScrollPane(inputArea)
-    private val actionButton = JButton("Run")
-    private val newChatButton = JButton("New Session")
+    private val actionButton = JButton("发送")
+    private val newChatButton = JButton("新建会话")
 
     private val attachedFiles = linkedSetOf<String>()
     private var currentAssistantContentBuffer = StringBuilder()
@@ -176,20 +150,17 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         add(buildBottom(), BorderLayout.SOUTH)
 
         actionButton.addActionListener { onPrimaryAction() }
-        attachButton.addActionListener { showWorkspace(ToolWindowView.CONTEXT_FILES) }
         sdkButton.addActionListener { showSdkMenu(sdkButton) }
         modelChip.addActionListener { showModelMenu(modelChip) }
         newChatButton.addActionListener { startNewSession() }
-        settingsButton.addActionListener { showWorkspace(ToolWindowView.SETTINGS) }
-        historyButton.addActionListener { showWorkspace(ToolWindowView.SESSION_HISTORY) }
-        backButton.addActionListener { showWorkspace(ToolWindowView.CONSOLE) }
+        inputArea.onFileSelected { file ->
+            attachedFiles.add(file.path)
+            refreshChipLabels()
+        }
         installInputKeyBindings()
-        styleHeaderButton(backButton)
-        styleHeaderButton(historyButton)
-        styleSettingsButton(settingsButton)
         AssistantUiTheme.toolbarButton(newChatButton)
-        styleAttachButton(attachButton)
         styleStatusLabel(streamLabel)
+        styleAttachedFilesPanel(attachedFilesPanel)
         styleEditorContextPanel(editorContextPanel, editorContextLabel, editorContextCloseButton)
         styleSdkButton(sdkButton)
         styleChip(modeChip)
@@ -201,7 +172,6 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         refreshMessages()
         setRunningState(false)
         installEditorContextListener()
-        refreshHeaderState()
     }
 
     private fun buildHeader(): JComponent {
@@ -210,7 +180,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         root.background = AssistantUiTheme.CHROME_BG
         root.border = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(0, 0, 1, 0, AssistantUiTheme.BORDER_SUBTLE),
-            BorderFactory.createEmptyBorder(8, 10, 8, 10),
+            BorderFactory.createEmptyBorder(10, 12, 10, 12),
         )
 
         val titleStack = JPanel().apply {
@@ -219,21 +189,17 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
             AssistantUiTheme.title(sessionTitleLabel)
             AssistantUiTheme.subtitle(sessionSubtitleLabel)
             add(sessionTitleLabel)
-            add(javax.swing.Box.createVerticalStrut(1))
-            add(sessionSubtitleLabel)
         }
+        sessionSubtitleLabel.isVisible = false
 
-        val left = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+        val left = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false
-            add(backButton)
             add(titleStack)
         }
 
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
             isOpaque = false
-            add(historyButton)
             add(newChatButton)
-            add(settingsButton)
         }
 
         val topRow = JPanel(BorderLayout()).apply {
@@ -243,9 +209,9 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         }
 
         runContextBar.isOpaque = false
-        runContextBar.border = BorderFactory.createEmptyBorder(8, 0, 0, 0)
+        runContextBar.border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
 
-        val controlRow = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
+        val controlRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
             isOpaque = false
             add(sdkButton)
             add(modeChip)
@@ -278,12 +244,12 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         inner.border = BorderFactory.createEmptyBorder(72, 28, 0, 28)
         inner.isOpaque = false
 
-        val main = JLabel("Execution Workspace")
+        val main = JLabel("开始一个新任务")
         main.font = main.font.deriveFont(Font.BOLD, 20f)
         main.foreground = AssistantUiTheme.TEXT_PRIMARY
         main.alignmentX = 0f
 
-        val sub = JLabel("Run a task, inspect commands and file changes, and keep history, settings, and context inside the same plugin workspace.")
+        val sub = JLabel("在一个对话里完成提问、执行、改文件和查看结果。")
         sub.foreground = AssistantUiTheme.TEXT_MUTED
         sub.alignmentX = 0f
 
@@ -303,84 +269,74 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         consoleView.isOpaque = true
         consoleView.background = AssistantUiTheme.APP_BG
         consoleView.add(centerCards, BorderLayout.CENTER)
-
-        workspaceCards.isOpaque = true
-        workspaceCards.background = AssistantUiTheme.APP_BG
-        workspaceCards.add(consoleView, WORKSPACE_CONSOLE)
-        workspaceCards.add(sessionHistoryView, WORKSPACE_HISTORY)
-        workspaceCards.add(settingsWorkspaceView, WORKSPACE_SETTINGS)
-        workspaceCards.add(contextFilesView, WORKSPACE_CONTEXT)
-        return workspaceCards
+        return consoleView
     }
 
     private fun buildBottom(): JComponent {
         composerContainer.border = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(1, 0, 0, 0, AssistantUiTheme.BORDER_SUBTLE),
-            BorderFactory.createEmptyBorder(8, 10, 10, 10),
+            BorderFactory.createEmptyBorder(10, 12, 12, 12),
         )
         composerContainer.isOpaque = true
         composerContainer.background = AssistantUiTheme.CHROME_BG
 
-        val compose = JPanel(BorderLayout(8, 8))
+        val compose = JPanel(BorderLayout(0, 10))
         compose.background = AssistantUiTheme.CHROME_BG
         compose.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
-            BorderFactory.createEmptyBorder(8, 8, 8, 8),
+            BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
+            BorderFactory.createEmptyBorder(12, 12, 12, 12),
         )
 
-        val metaRow = JPanel(BorderLayout(8, 0))
-        metaRow.isOpaque = false
+        val metaStack = JPanel().apply {
+            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(attachedFilesPanel)
+            add(javax.swing.Box.createVerticalStrut(8))
+        }
 
-        val attachWrap = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0))
-        attachWrap.isOpaque = false
-        attachWrap.add(attachButton)
-        attachWrap.add(JLabel(" "))
-        attachWrap.add(editorContextPanel)
+        val metaRow = JPanel(BorderLayout(10, 0)).apply {
+            isOpaque = false
+        }
 
-        metaRow.add(attachWrap, BorderLayout.WEST)
+        metaRow.add(editorContextPanel, BorderLayout.WEST)
         AssistantUiTheme.meta(attachStatusLabel, AssistantUiTheme.TEXT_SECONDARY)
         metaRow.add(attachStatusLabel, BorderLayout.EAST)
+        metaStack.add(metaRow)
 
-        val inputRow = JPanel(BorderLayout(8, 0))
+        val inputRow = JPanel(BorderLayout())
         inputRow.isOpaque = false
-        inputArea.toolTipText = "Describe a task, ask for code changes, or explain a file. Enter runs, Shift+Enter adds a newline."
+        inputArea.toolTipText = "输入需求。Enter 发送，Shift+Enter 换行，@ 引入文件。"
         inputArea.lineWrap = true
         inputArea.wrapStyleWord = true
-        inputArea.rows = 4
+        inputArea.rows = 5
         inputArea.background = AssistantUiTheme.SURFACE_SUBTLE
         inputArea.foreground = AssistantUiTheme.TEXT_PRIMARY
         inputArea.caretColor = AssistantUiTheme.TEXT_PRIMARY
-        inputArea.border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
-        inputScroll.border = BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true)
+        inputArea.border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
+        inputScroll.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
+            BorderFactory.createEmptyBorder(0, 0, 0, 0),
+        )
         inputScroll.background = inputArea.background
-        inputScroll.preferredSize = Dimension(300, 104)
+        inputScroll.preferredSize = Dimension(300, 132)
 
-        val bottomRow = JPanel(BorderLayout(8, 0))
+        val bottomRow = JPanel(BorderLayout(10, 0))
         bottomRow.isOpaque = false
 
-        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0))
+        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0))
         actions.isOpaque = false
         actions.add(actionButton)
 
         inputRow.add(inputScroll, BorderLayout.CENTER)
+        compose.add(metaStack, BorderLayout.NORTH)
         bottomRow.add(streamLabel, BorderLayout.WEST)
         bottomRow.add(actions, BorderLayout.EAST)
 
-        compose.add(metaRow, BorderLayout.NORTH)
         compose.add(inputRow, BorderLayout.CENTER)
         compose.add(bottomRow, BorderLayout.SOUTH)
 
         composerContainer.add(compose, BorderLayout.CENTER)
         return composerContainer
-    }
-
-    private fun openContextDialog() {
-        val dialog = ContextFilesDialog(project, attachedFiles)
-        if (dialog.showAndGet()) {
-            attachedFiles.clear()
-            attachedFiles.addAll(dialog.attachedFiles())
-            refreshChipLabels()
-        }
     }
 
     private fun submitPrompt() {
@@ -524,11 +480,18 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         startAgentRun(retryPrompt)
     }
 
+    private fun retryMessage(content: String) {
+        if (isRunning) return
+        val prompt = content.trim()
+        if (prompt.isBlank()) return
+        startAgentRun(prompt)
+    }
+
     private fun copyMessageToClipboard(messageId: String) {
         if (messageId.isBlank()) return
         val message = chatService.messages.firstOrNull { it.id == messageId } ?: return
         CopyPasteManager.getInstance().setContents(StringSelection(message.content))
-        setStatusMessage("Copied")
+        setStatusMessage("已复制")
     }
 
     private fun openFileInEditor(path: String) {
@@ -550,12 +513,12 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private fun copyCommandToClipboard(command: String) {
         if (command.isBlank()) return
         CopyPasteManager.getInstance().setContents(StringSelection(command))
-        setStatusMessage("Command copied")
+        setStatusMessage("命令已复制")
     }
 
     private fun cancelRequest() {
         chatService.cancelCurrent()
-        finishTurn("Cancelled", persistIfNeeded = true)
+        finishTurn("已停止", persistIfNeeded = true)
     }
 
     private fun handleTimelineAction(action: TimelineAction) {
@@ -580,7 +543,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
             TimelineAction.FinishTurn -> {
                 turnFinalized = true
                 persistTimelineMessageIfNeeded()
-                finishTurn("Done", persistIfNeeded = true)
+                finishTurn("完成", persistIfNeeded = true)
             }
         }
     }
@@ -663,8 +626,8 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         }
 
         return when {
-            actions.any { it is TimelineAction.UpsertCommand } -> "Execution trace recorded."
-            actions.any { it is TimelineAction.UpsertTool } -> "Tool trace recorded."
+            actions.any { it is TimelineAction.UpsertCommand } -> "已记录命令执行。"
+            actions.any { it is TimelineAction.UpsertTool } -> "已记录工具执行。"
             else -> ""
         }
     }
@@ -675,95 +638,15 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         renderMessages(streamingText = null, forceAutoScroll = false)
         showMessagesCardIfNeeded()
         refreshNewButtonState()
-        if (workspaceState.currentView == ToolWindowView.SESSION_HISTORY) {
-            sessionHistoryView.updateSessions(chatService.listSessions(), chatService.getCurrentSessionId())
-        }
     }
 
     private fun refreshHeaderState() {
-        if (workspaceState.currentView == ToolWindowView.CONSOLE) {
-            sessionTitleLabel.text = chatService.currentSessionTitle()
-            sessionSubtitleLabel.text = if (chatService.isCurrentSessionEmpty()) {
-                "Task Console"
-            } else {
-                "Structured execution workspace"
-            }
+        sessionTitleLabel.text = chatService.currentSessionTitle()
+        sessionSubtitleLabel.text = if (chatService.isCurrentSessionEmpty()) {
+            "Codex Chat"
         } else {
-            sessionTitleLabel.text = workspaceState.currentTitle
-            sessionSubtitleLabel.text = "Inside Codex Assistant"
+            "当前对话"
         }
-        backButton.isVisible = workspaceState.showBackAction
-        runContextBar.isVisible = workspaceState.showRunContextBar
-        composerContainer.isVisible = workspaceState.showComposerDock
-        historyButton.isEnabled = workspaceState.currentView != ToolWindowView.SESSION_HISTORY
-        settingsButton.isEnabled = workspaceState.currentView != ToolWindowView.SETTINGS
-        attachButton.isEnabled = workspaceState.currentView == ToolWindowView.CONSOLE
-    }
-
-    private fun showWorkspace(view: ToolWindowView) {
-        when (view) {
-            ToolWindowView.CONSOLE -> workspaceState.navigateBack()
-            ToolWindowView.SESSION_HISTORY -> {
-                sessionHistoryView.updateSessions(chatService.listSessions(), chatService.getCurrentSessionId())
-                workspaceState.navigateTo(view)
-            }
-            ToolWindowView.SETTINGS -> {
-                settingsWorkspaceView.reload()
-                workspaceState.navigateTo(view)
-            }
-            ToolWindowView.CONTEXT_FILES -> {
-                contextFilesView.replaceFiles(attachedFiles)
-                workspaceState.navigateTo(view)
-            }
-        }
-        val layout = workspaceCards.layout as CardLayout
-        layout.show(
-            workspaceCards,
-            when (workspaceState.currentView) {
-                ToolWindowView.CONSOLE -> WORKSPACE_CONSOLE
-                ToolWindowView.SESSION_HISTORY -> WORKSPACE_HISTORY
-                ToolWindowView.SETTINGS -> WORKSPACE_SETTINGS
-                ToolWindowView.CONTEXT_FILES -> WORKSPACE_CONTEXT
-            },
-        )
-        refreshHeaderState()
-    }
-
-    private fun updateAttachedFiles(files: Set<String>) {
-        attachedFiles.clear()
-        attachedFiles.addAll(files)
-        refreshChipLabels()
-    }
-
-    private fun chooseContextFile(): String? {
-        val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor()
-        val file = FileChooser.chooseFile(descriptor, project, null) ?: return null
-        return file.path
-    }
-
-    private fun openSessionFromWorkspace(sessionId: String) {
-        if (!chatService.switchSession(sessionId)) {
-            return
-        }
-        resetConversationUi()
-        refreshMessages()
-        showWorkspace(ToolWindowView.CONSOLE)
-    }
-
-    private fun createSessionFromWorkspace() {
-        chatService.createSession()
-        resetConversationUi()
-        refreshMessages()
-        showWorkspace(ToolWindowView.CONSOLE)
-    }
-
-    private fun deleteSessionFromWorkspace(sessionId: String) {
-        if (!chatService.deleteSession(sessionId)) {
-            return
-        }
-        resetConversationUi()
-        refreshMessages()
-        sessionHistoryView.updateSessions(chatService.listSessions(), chatService.getCurrentSessionId())
     }
 
     private fun resetConversationUi() {
@@ -782,7 +665,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         loadingTimer.stop()
         previewRenderTimer.stop()
         streamLabel.icon = null
-        setStatusMessage("Ready")
+        setStatusMessage("就绪")
         setRunningState(false)
     }
 
@@ -847,65 +730,87 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private fun refreshChipLabels() {
         val sdkName = chatService.engineDescriptor(selectedEngineId)?.displayName ?: "Codex"
         sdkButton.text = "${ToolWindowUiText.selectionChipLabel(sdkName)} \u25BE"
-        sdkButton.toolTipText = "Switch provider"
+        sdkButton.toolTipText = "切换模型提供方"
         modelChip.text = "${ToolWindowUiText.selectionChipLabel(selectedModel)} \u25BE"
         modeChip.text = ToolWindowUiText.selectionChipLabel(approvalUiPolicy.chipLabel)
         modeChip.isEnabled = approvalUiPolicy.isInteractive
-        modeChip.toolTipText = "Approval flow will be redesigned later"
+        modeChip.toolTipText = "当前为默认执行模式"
         syncEditorContextIndicator()
         val editorContextVisible = editorContextPanel.isVisible
+        rebuildAttachedFileChips()
         attachStatusLabel.text = when {
-            attachedFiles.isNotEmpty() && editorContextVisible -> "${attachedFiles.size} attached · current file included"
-            attachedFiles.isNotEmpty() -> "${attachedFiles.size} file(s) attached"
-            editorContextVisible -> "Current file included"
-            else -> "Attach files or use the current editor context"
+            attachedFiles.isNotEmpty() && editorContextVisible -> "已附加 ${attachedFiles.size} 个文件 · 含当前文件"
+            attachedFiles.isNotEmpty() -> "已附加 ${attachedFiles.size} 个文件"
+            editorContextVisible -> "已带入当前文件"
+            else -> "使用 @引入文件 或当前编辑器上下文"
         }
-        contextFilesView.replaceFiles(attachedFiles)
+    }
+
+    private fun rebuildAttachedFileChips() {
+        attachedFilesPanel.removeAll()
+        attachedFilesPanel.isVisible = attachedFiles.isNotEmpty()
+        attachedFiles.forEach { path ->
+            val chip = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+                isOpaque = true
+                background = AssistantUiTheme.SURFACE_RAISED
+                border = BorderFactory.createCompoundBorder(
+                    BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
+                    BorderFactory.createEmptyBorder(4, 8, 4, 6),
+                )
+                add(JLabel(File(path).name).apply {
+                    foreground = AssistantUiTheme.TEXT_PRIMARY
+                    font = font.deriveFont(11f)
+                })
+                add(JButton("\u00D7").apply {
+                    isFocusable = false
+                    background = background
+                    foreground = AssistantUiTheme.TEXT_SECONDARY
+                    border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+                    toolTipText = "移除文件"
+                    addActionListener {
+                        attachedFiles.remove(path)
+                        refreshChipLabels()
+                    }
+                })
+            }
+            attachedFilesPanel.add(chip)
+        }
+        attachedFilesPanel.revalidate()
+        attachedFilesPanel.repaint()
     }
 
     private fun styleChip(button: JButton) {
         AssistantUiTheme.toolbarChip(button)
     }
 
-    private fun styleAttachButton(button: JButton) {
-        button.toolTipText = "Manage attached files inside the workspace"
-        AssistantUiTheme.toolbarChip(button)
-    }
-
-    private fun styleHeaderButton(button: JButton) {
-        AssistantUiTheme.toolbarButton(button)
-    }
-
-    private fun styleSettingsButton(button: JButton) {
-        button.horizontalAlignment = SwingConstants.CENTER
-        button.toolTipText = "Open workspace settings"
-        AssistantUiTheme.toolbarButton(button)
+    private fun styleAttachedFilesPanel(panel: JPanel) {
+        panel.isOpaque = false
     }
 
     private fun styleEditorContextPanel(panel: JPanel, label: JLabel, closeButton: JButton) {
         panel.isOpaque = true
-        panel.background = AssistantUiTheme.SURFACE_SUBTLE
+        panel.background = AssistantUiTheme.SURFACE_RAISED
         panel.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
-            BorderFactory.createEmptyBorder(2, 7, 2, 7),
+            BorderFactory.createEmptyBorder(3, 8, 3, 8),
         )
         label.foreground = AssistantUiTheme.TEXT_PRIMARY
         closeButton.isFocusable = false
         closeButton.border = BorderFactory.createEmptyBorder(0, 2, 0, 0)
         closeButton.background = panel.background
         closeButton.foreground = AssistantUiTheme.TEXT_SECONDARY
-        closeButton.toolTipText = "Remove current file context"
+        closeButton.toolTipText = "移除当前文件"
         panel.add(label)
         panel.add(closeButton)
     }
 
     private fun styleSdkButton(button: JButton) {
-        button.toolTipText = "Switch provider"
+        button.toolTipText = "切换模型提供方"
         AssistantUiTheme.toolbarChip(button)
     }
 
     private fun stylePrimaryActionButton(button: JButton) {
-        AssistantUiTheme.compactPrimaryButton(button)
+        AssistantUiTheme.primaryButton(button)
     }
 
     private fun styleStatusLabel(label: JLabel) {
@@ -916,12 +821,12 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
 
     private fun setRunningState(running: Boolean) {
         isRunning = running
-        actionButton.text = if (running) "Stop" else "Run"
-        actionButton.toolTipText = if (running) "Stop the active run" else "Run the task"
+        actionButton.text = if (running) "停止" else "发送"
+        actionButton.toolTipText = if (running) "停止当前执行" else "发送当前输入"
         if (running) {
             refreshRunningStatusLabel()
         } else if (streamLabel.text.isBlank()) {
-            setStatusMessage("Ready")
+            setStatusMessage("就绪")
         }
     }
 
@@ -930,7 +835,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         val elapsedMs = requestStartedAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it } ?: 0L
         streamLabel.icon = AnimatedIcon.Default()
         streamLabel.text = ToolWindowUiText.runningStatus(elapsedMs)
-        streamLabel.toolTipText = "Current run is still in progress"
+        streamLabel.toolTipText = "当前任务仍在执行中"
     }
 
     private fun setStatusMessage(message: String) {
@@ -2663,7 +2568,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     }
 
     private fun installEditorContextListener() {
-        project.messageBus.connect().subscribe(
+        project.messageBus.connect(this).subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
             object : FileEditorManagerListener {
                 override fun selectionChanged(event: FileEditorManagerEvent) {
@@ -2701,10 +2606,6 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     companion object {
         private const val CARD_PLACEHOLDER = "placeholder"
         private const val CARD_MESSAGES = "messages"
-        private const val WORKSPACE_CONSOLE = "workspace-console"
-        private const val WORKSPACE_HISTORY = "workspace-history"
-        private const val WORKSPACE_SETTINGS = "workspace-settings"
-        private const val WORKSPACE_CONTEXT = "workspace-context"
         private const val maxContextChars = 120_000
         private const val maxContextFileBytes = 200_000L
         private val mutationKeywords: Set<String> = setOf(
@@ -2813,7 +2714,6 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         chatService.clearMessages()
         resetConversationUi()
         refreshMessages()
-        showWorkspace(ToolWindowView.CONSOLE)
     }
 
     private fun startNewSession() {
@@ -2822,7 +2722,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         }
         val confirm = Messages.showYesNoDialog(
             project,
-            "Create a new session? Current session history will remain in Session History.",
+            "Create a new session? The current conversation will remain stored locally.",
             "New Session",
             "Create",
             "Cancel",
@@ -2835,38 +2735,10 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         resetConversationUi()
         refreshMessages()
         refreshNewButtonState()
-        showWorkspace(ToolWindowView.CONSOLE)
     }
 
     private fun refreshNewButtonState() {
         newChatButton.isEnabled = !chatService.isCurrentSessionEmpty()
-    }
-
-    private fun showSettingsMenu(anchor: JComponent) {
-        val menu = JPopupMenu()
-        menu.add(JMenuItem("Session History").apply {
-            addActionListener { openSessionHistoryDialog() }
-        })
-        menu.show(anchor, 0, anchor.height)
-    }
-
-    private fun openSessionHistoryDialog() {
-        val dialog = SessionHistoryDialog(
-            project = project,
-            sessions = chatService.listSessions(),
-            currentSessionId = chatService.getCurrentSessionId(),
-        )
-        if (!dialog.showAndGet()) {
-            return
-        }
-        dialog.deletedSessionIds().forEach { chatService.deleteSession(it) }
-        if (dialog.createNewRequested()) {
-            chatService.createSession()
-        } else {
-            dialog.selectedSessionId()?.let { chatService.switchSession(it) }
-        }
-        resetConversationUi()
-        refreshMessages()
     }
 
     private fun installInputKeyBindings() {
@@ -2880,146 +2752,10 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         })
         inputMap.put(javax.swing.KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.SHIFT_DOWN_MASK), "insert-break")
     }
-}
 
-private class SessionHistoryDialog(
-    private val project: Project,
-    sessions: List<AgentChatService.SessionSummary>,
-    currentSessionId: String,
-) : DialogWrapper(project) {
-    private data class Row(val id: String, val title: String, val subtitle: String) {
-        override fun toString(): String = "$title  ·  $subtitle"
-    }
-
-    private val model = DefaultListModel<Row>()
-    private val list = JBList(model)
-    private val deletedSessionIds = linkedSetOf<String>()
-    private var createNewRequested = false
-
-    init {
-        title = "Session History"
-        sessions.forEach { s ->
-            model.addElement(
-                Row(
-                    id = s.id,
-                    title = s.title,
-                    subtitle = "${s.messageCount} msg",
-                ),
-            )
-        }
-        val idx = (0 until model.size()).firstOrNull { model.get(it).id == currentSessionId } ?: 0
-        if (idx >= 0 && model.size() > 0) {
-            list.selectedIndex = idx
-        }
-        init()
-    }
-
-    fun selectedSessionId(): String? {
-        return list.selectedValue?.id
-    }
-
-    fun deletedSessionIds(): Set<String> = deletedSessionIds
-
-    fun createNewRequested(): Boolean = createNewRequested
-
-    override fun createCenterPanel(): JComponent {
-        val root = JPanel(BorderLayout(8, 8))
-        root.preferredSize = Dimension(560, 360)
-        root.border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
-
-        list.selectionMode = ListSelectionModel.SINGLE_SELECTION
-        val listPane = JBScrollPane(list)
-        listPane.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(JBColor(0x324861, 0x324861), 1, true),
-            BorderFactory.createEmptyBorder(4, 4, 4, 4),
-        )
-
-        val buttons = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
-        val newButton = JButton("New Session")
-        val deleteButton = JButton("Delete Selected")
-        deleteButton.foreground = JBColor(0xF29B9B, 0xF29B9B)
-        buttons.add(newButton)
-        buttons.add(deleteButton)
-
-        newButton.addActionListener {
-            createNewRequested = true
-            close(OK_EXIT_CODE)
-        }
-
-        deleteButton.addActionListener {
-            val row = list.selectedValue ?: return@addActionListener
-            deletedSessionIds.add(row.id)
-            val idx = list.selectedIndex
-            if (idx >= 0) {
-                model.remove(idx)
-            }
-            if (model.size() > 0) {
-                list.selectedIndex = minOf(idx, model.size() - 1)
-            }
-        }
-
-        root.add(listPane, BorderLayout.CENTER)
-        root.add(buttons, BorderLayout.SOUTH)
-        return root
-    }
-}
-
-private class ContextFilesDialog(
-    private val project: Project,
-    initialAttachedFiles: Set<String>,
-) : DialogWrapper(project) {
-    private val filesModel = DefaultListModel<String>()
-    private val filesList = JBList(filesModel)
-
-    init {
-        title = "Context Files"
-        initialAttachedFiles.forEach(filesModel::addElement)
-        init()
-    }
-
-    fun attachedFiles(): Set<String> = (0 until filesModel.size()).map { filesModel.get(it) }.toSet()
-
-    override fun createCenterPanel(): JComponent {
-        val root = JPanel(BorderLayout(8, 8))
-        root.preferredSize = Dimension(540, 360)
-        root.border = BorderFactory.createEmptyBorder(8, 8, 8, 8)
-
-        val actions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0))
-        val attach = JButton("Attach File")
-        val remove = JButton("Remove Selected")
-        val clear = JButton("Clear All")
-        actions.add(attach)
-        actions.add(remove)
-        actions.add(clear)
-
-        filesList.selectionMode = ListSelectionModel.SINGLE_SELECTION
-        val listPane = JBScrollPane(filesList)
-        listPane.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(JBColor(0x324861, 0x324861), 1, true),
-            BorderFactory.createEmptyBorder(4, 4, 4, 4),
-        )
-
-        attach.addActionListener {
-            val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor()
-            val file = FileChooser.chooseFile(descriptor, project, null) ?: return@addActionListener
-            if ((0 until filesModel.size()).none { filesModel[it] == file.path }) {
-                filesModel.addElement(file.path)
-            }
-        }
-
-        remove.addActionListener {
-            val idx = filesList.selectedIndex
-            if (idx >= 0) {
-                filesModel.remove(idx)
-            }
-        }
-
-        clear.addActionListener {
-            filesModel.clear()
-        }
-
-        root.add(listPane, BorderLayout.CENTER)
-        root.add(actions, BorderLayout.SOUTH)
-        return root
+    override fun dispose() {
+        previewRenderTimer.stop()
+        loadingTimer.stop()
+        chatService.cancelCurrent()
     }
 }

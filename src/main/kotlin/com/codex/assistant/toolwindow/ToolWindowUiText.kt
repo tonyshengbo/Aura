@@ -3,6 +3,9 @@ package com.codex.assistant.toolwindow
 import kotlin.math.floor
 
 object ToolWindowUiText {
+    const val PRIMARY_TOOL_WINDOW_ID = "Codex Chat"
+    const val COMPOSER_HINT = "@引入文件，#唤起智能体，↑输入提示词，Enter发送"
+
     fun selectionChipLabel(label: String): String {
         val normalized = label.trim()
         return normalized.substringAfter(':', normalized).trim()
@@ -26,11 +29,11 @@ object ToolWindowUiText {
     }
 
     fun runningStatus(elapsedMs: Long): String {
-        return "Loading · ${formatDuration(elapsedMs.coerceAtLeast(0L))}"
+        return "执行中 · ${formatDuration(elapsedMs.coerceAtLeast(0L))}"
     }
 
     fun finishedStatus(label: String, durationMs: Long?): String {
-        val normalized = label.trim().ifBlank { "Done" }
+        val normalized = label.trim().ifBlank { "完成" }
         val duration = durationMs?.takeIf { it >= 0L } ?: return normalized
         return "$normalized · ${formatDuration(duration)}"
     }
