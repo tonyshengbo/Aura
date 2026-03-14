@@ -861,6 +861,50 @@ class ConversationTimelinePanelTest {
     }
 
     @Test
+    fun `expanded command details do not render running subtitle row`() {
+        val panel = ConversationTimelinePanel(
+            onCopyMessage = {},
+            onOpenFile = {},
+            onRetryTool = { _, _ -> },
+            onRetryCommand = { _, _ -> },
+            onCopyCommand = {},
+        )
+
+        panel.updateTurns(
+            turns = listOf(
+                TimelineTurnViewModel(
+                    id = "turn-command-subtitle-clean",
+                    userMessage = null,
+                    nodes = listOf(
+                        TimelineNodeViewModel(
+                            id = "cmd-subtitle-clean",
+                            kind = TimelineNodeKind.COMMAND_STEP,
+                            title = "Command",
+                            body = "using-superpowers skill content",
+                            status = TimelineNodeStatus.RUNNING,
+                            expanded = true,
+                            command = "/bin/zsh -lc \"cat /tmp/SKILL.md\"",
+                            cwd = "/tmp",
+                            exitCode = 0,
+                        ),
+                    ),
+                    isRunning = false,
+                    footerStatus = TimelineNodeStatus.SUCCESS,
+                    statusText = "Done",
+                ),
+            ),
+            forceAutoScroll = false,
+        )
+
+        panel.setSize(560, 760)
+        layoutHierarchy(panel)
+
+        val labels = collectLabels(findNodeCard(panel, "cmd-subtitle-clean"))
+        assertFalse(labels.any { it.contains("进行中") })
+        assertFalse(labels.any { it.contains("已完成") })
+    }
+
+    @Test
     fun `web search without call suffix still uses dedicated retrieval category`() {
         val panel = ConversationTimelinePanel(
             onCopyMessage = {},

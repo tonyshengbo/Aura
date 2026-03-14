@@ -3,6 +3,7 @@ package com.codex.assistant.provider
 import com.codex.assistant.model.AgentRequest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class CodexInvocationSpecTest {
     private val spec = CodexInvocationSpec()
@@ -67,5 +68,24 @@ class CodexInvocationSpecTest {
             ),
             command,
         )
+    }
+
+    @Test
+    fun `adds reasoning effort when configured`() {
+        val command = spec.buildCommand(
+            executablePath = "codex",
+            request = AgentRequest(
+                engineId = "codex",
+                model = "gpt-5.4",
+                reasoningEffort = "xhigh",
+                prompt = "Deeper reasoning",
+                contextFiles = emptyList(),
+                workingDirectory = ".",
+            ),
+            prompt = "Deeper reasoning",
+        )
+
+        assertTrue(command.contains("-c"))
+        assertTrue(command.contains("model_reasoning_effort=\"xhigh\""))
     }
 }

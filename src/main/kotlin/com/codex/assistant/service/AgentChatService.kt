@@ -189,6 +189,7 @@ class AgentChatService private constructor(
     fun runAgent(
         engineId: String,
         model: String,
+        reasoningEffort: String? = null,
         prompt: String,
         contextFiles: List<ContextFile>,
         onAction: (TimelineAction) -> Unit,
@@ -200,6 +201,7 @@ class AgentChatService private constructor(
             engineId = engineId,
             action = AgentAction.CHAT,
             model = resolvedModel,
+            reasoningEffort = reasoningEffort?.trim()?.takeIf { it.isNotBlank() },
             prompt = prompt,
             contextFiles = contextFiles,
             workingDirectory = workingDirectoryProvider(),

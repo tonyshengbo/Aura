@@ -23,6 +23,7 @@ data class AgentRequest(
     val engineId: String,
     val action: AgentAction = AgentAction.CHAT,
     val model: String? = null,
+    val reasoningEffort: String? = null,
     val prompt: String,
     val contextFiles: List<ContextFile>,
     val workingDirectory: String,

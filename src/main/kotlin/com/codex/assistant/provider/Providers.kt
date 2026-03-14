@@ -28,6 +28,13 @@ internal class CodexInvocationSpec : CliInvocationSpec {
                 command += "-m"
                 command += it
             }
+        request.reasoningEffort
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let {
+                command += "-c"
+                command += "model_reasoning_effort=\"$it\""
+            }
         command += "--skip-git-repo-check"
         command += "--dangerously-bypass-approvals-and-sandbox"
         command += "--json"

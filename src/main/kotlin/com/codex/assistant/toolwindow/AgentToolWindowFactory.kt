@@ -6,6 +6,7 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
+import com.intellij.openapi.wm.ex.ToolWindowEx
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.content.ContentFactory
@@ -15,7 +16,7 @@ import javax.swing.JPanel
 class AgentToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val panel = try {
-            AgentToolWindowPanel(project)
+            AgentToolWindowPanel(project, toolWindow as? ToolWindowEx)
         } catch (t: Throwable) {
             LOG.error("Failed to create Codex Chat panel", t)
             buildFallbackPanel(t)

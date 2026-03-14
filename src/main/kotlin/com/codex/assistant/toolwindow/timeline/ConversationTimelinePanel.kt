@@ -314,15 +314,8 @@ class ConversationTimelinePanel(
 
     private fun nodeSubtitle(node: TimelineNodeViewModel): String {
         val parts = mutableListOf<String>()
-        node.timestamp?.let { parts += formatClockTime(it) }
         if (node.exitCode != null) {
             parts += "退出码 ${node.exitCode}"
-        }
-        parts += when (node.status) {
-            TimelineNodeStatus.RUNNING -> "进行中"
-            TimelineNodeStatus.SUCCESS -> "已完成"
-            TimelineNodeStatus.FAILED -> "失败"
-            TimelineNodeStatus.SKIPPED -> "已跳过"
         }
         return parts.joinToString(" · ")
     }
@@ -454,13 +447,15 @@ class ConversationTimelinePanel(
             isOpaque = false
             border = BorderFactory.createEmptyBorder(10, 0, 0, 0)
         }
-
-        bodyPanel.add(JLabel(nodeSubtitle(node)).apply {
-            foreground = Colors.TEXT_MUTED
-            font = font.deriveFont(10.5f)
-            alignmentX = LEFT_ALIGNMENT
-        })
-        bodyPanel.add(Box.createVerticalStrut(6))
+        val subtitle = nodeSubtitle(node)
+        if (subtitle.isNotBlank()) {
+            bodyPanel.add(JLabel(subtitle).apply {
+                foreground = Colors.TEXT_MUTED
+                font = font.deriveFont(10.5f)
+                alignmentX = LEFT_ALIGNMENT
+            })
+            bodyPanel.add(Box.createVerticalStrut(6))
+        }
 
         when (node.kind) {
             TimelineNodeKind.TOOL_STEP -> {

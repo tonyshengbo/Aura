@@ -27,7 +27,7 @@ import com.intellij.openapi.fileEditor.FileEditorManagerEvent
 import com.intellij.openapi.fileEditor.FileEditorManagerListener
 import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.wm.ex.ToolWindowEx
 import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
@@ -41,9 +41,13 @@ import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.Insets
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.geom.AffineTransform
 import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.net.URLDecoder
@@ -58,29 +62,52 @@ import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
 import javax.swing.JLabel
-import javax.swing.JMenuItem
 import javax.swing.JPanel
 import javax.swing.JPopupMenu
+import javax.swing.JScrollPane
 import javax.swing.Timer
+import javax.swing.UIManager
+import javax.swing.event.PopupMenuEvent
+import javax.swing.event.PopupMenuListener
+import javax.swing.Icon
 
-class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
+class AgentToolWindowPanel(
+    private val project: Project,
+    private val toolWindowEx: ToolWindowEx? = null,
+) : JPanel(BorderLayout()), Disposable {
     private val chatService = project.getService(AgentChatService::class.java)
     private val approvalUiPolicy = ApprovalUiPolicy()
 
     private val sessionTitleLabel = JLabel("当前对话")
     private val sessionSubtitleLabel = JLabel("Codex Chat")
-    private val streamLabel = JLabel()
+    private val statusSpinnerLabel = JLabel()
+    private val statusTextLabel = JLabel()
+    private val statusSnackbar = JPanel(BorderLayout(10, 0))
     private val sdkButton = JButton()
+    private val sdkIconLabel = JLabel()
+    private val sdkTextLabel = JLabel()
+    private val sdkArrowLabel = JLabel()
     private val modeChip = JButton()
+    private val modeIconLabel = JLabel()
+    private val modeTextLabel = JLabel()
+    private val modeArrowLabel = JLabel()
     private val modelChip = JButton()
+    private val modelIconLabel = JLabel()
+    private val modelTextLabel = JLabel()
+    private val modelArrowLabel = JLabel()
+    private val reasoningChip = JButton()
+    private val reasoningIconLabel = JLabel()
+    private val reasoningTextLabel = JLabel()
+    private val reasoningArrowLabel = JLabel()
     private val usageLeftLabel = JLabel("--")
-    private val attachedFilesPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0))
+    private val attachedFilesPanel = JPanel()
     private val editorContextPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
     private val editorContextLabel = JLabel()
     private val editorContextCloseButton = JButton("\u00D7")
     private val attachStatusLabel = JLabel()
     private var selectedEngineId: String = chatService.defaultEngineId()
     private var selectedModel: String = CodexModelCatalog.defaultModel
+    private var selectedReasoningDepth: ReasoningDepth = ReasoningDepth.MEDIUM
 
     private val timelineBuilder = ConversationTimelineBuilder()
     private val timelinePanel = ConversationTimelinePanel(
@@ -96,11 +123,24 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private val centerCards = JPanel(CardLayout())
     private val runContextBar = JPanel(BorderLayout())
     private val composerContainer = JPanel(BorderLayout())
+    private val composePanel = JPanel(BorderLayout(0, 0))
+    private val contextStripPanel = JPanel(BorderLayout())
+    private val contextStripItems = JPanel()
+    private val contextStripScroll = JBScrollPane(contextStripItems, JScrollPane.VERTICAL_SCROLLBAR_NEVER, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED)
+    private val controlsLayout = FlowLayout(FlowLayout.LEFT, 4, 0)
+    private val controlsPanel = JPanel(controlsLayout)
+    private val controlsScroll = JBScrollPane(controlsPanel, JScrollPane.VERTICAL_SCROLLBAR_NEVER, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED)
+    private val actionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0))
+    private val bottomRowLayout = BorderLayout(8, 0)
+    private val bottomRowPanel = JPanel(bottomRowLayout)
+    private val inputAndControlsLayout = BorderLayout(0, 8)
+    private val inputAndControlsPanel = JPanel(inputAndControlsLayout)
 
     private val inputArea = FileMentionInputArea(project)
     private val inputScroll = JBScrollPane(inputArea)
     private val actionButton = JButton("发送")
     private val newChatButton = JButton("新建会话")
+    private val newWindowButton = JButton("新建窗口")
 
     private val attachedFiles = linkedSetOf<String>()
     private var currentAssistantContentBuffer = StringBuilder()
@@ -122,6 +162,8 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private var cachedMessageCount: Int = -1
     private var cachedLastMessageId: String = ""
     private var cachedToolDetailMode: Boolean = expandAllTools
+    private val openSessionTabs = linkedSetOf<String>()
+    private var activeSessionTabId: String = ""
     private val expandedToolMessageIds = linkedSetOf<String>()
     private val expandedThinkingMessageIds = linkedSetOf<String>()
     private val expandedCommandMessageIds = linkedSetOf<String>()
@@ -136,6 +178,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
             refreshRunningStatusLabel()
         }
     }
+    private var controlDensity: ControlDensity = ControlDensity.REGULAR
 
     init {
         val initialModels = availableModels(selectedEngineId)
@@ -145,33 +188,52 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         border = BorderFactory.createEmptyBorder()
         background = AssistantUiTheme.APP_BG
 
+        AssistantUiTheme.toolbarButton(newChatButton)
+        AssistantUiTheme.toolbarButton(newWindowButton)
+        styleAttachedFilesPanel(attachedFilesPanel)
+        styleEditorContextPanel(editorContextPanel, editorContextLabel, editorContextCloseButton)
+        configureChipButton(sdkButton, sdkIconLabel, sdkTextLabel, sdkArrowLabel)
+        configureChipButton(modeChip, modeIconLabel, modeTextLabel, modeArrowLabel)
+        configureChipButton(modelChip, modelIconLabel, modelTextLabel, modelArrowLabel)
+        configureChipButton(reasoningChip, reasoningIconLabel, reasoningTextLabel, reasoningArrowLabel)
+        styleSdkButton(sdkButton)
+        styleChip(modeChip)
+        styleChip(modelChip)
+        styleChip(reasoningChip)
+        stylePrimaryActionButton(actionButton)
+        styleStatusSnackbar()
+
         add(buildHeader(), BorderLayout.NORTH)
         add(buildCenter(), BorderLayout.CENTER)
         add(buildBottom(), BorderLayout.SOUTH)
 
         actionButton.addActionListener { onPrimaryAction() }
         sdkButton.addActionListener { showSdkMenu(sdkButton) }
+        modeChip.addActionListener { showModeMenu(modeChip) }
         modelChip.addActionListener { showModelMenu(modelChip) }
+        reasoningChip.addActionListener { showReasoningMenu(reasoningChip) }
         newChatButton.addActionListener { startNewSession() }
+        newWindowButton.addActionListener { startNewWindowTab() }
         inputArea.onFileSelected { file ->
             attachedFiles.add(file.path)
             refreshChipLabels()
         }
         installInputKeyBindings()
-        AssistantUiTheme.toolbarButton(newChatButton)
-        styleStatusLabel(streamLabel)
-        styleAttachedFilesPanel(attachedFilesPanel)
-        styleEditorContextPanel(editorContextPanel, editorContextLabel, editorContextCloseButton)
-        styleSdkButton(sdkButton)
-        styleChip(modeChip)
-        styleChip(modelChip)
-        stylePrimaryActionButton(actionButton)
         editorContextCloseButton.addActionListener { dismissCurrentEditorContext() }
         refreshChipLabels()
+        initializeSessionTabs()
 
         refreshMessages()
         setRunningState(false)
         installEditorContextListener()
+        updateResponsiveLayout(force = true)
+        revalidate()
+        repaint()
+        ApplicationManager.getApplication().invokeLater {
+            updateResponsiveLayout(force = true)
+            revalidate()
+            repaint()
+        }
     }
 
     private fun buildHeader(): JComponent {
@@ -200,6 +262,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         val right = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
             isOpaque = false
             add(newChatButton)
+            add(newWindowButton)
         }
 
         val topRow = JPanel(BorderLayout()).apply {
@@ -209,16 +272,9 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         }
 
         runContextBar.isOpaque = false
-        runContextBar.border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
-
-        val controlRow = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
-            isOpaque = false
-            add(sdkButton)
-            add(modeChip)
-            add(modelChip)
-        }
+        runContextBar.border = BorderFactory.createEmptyBorder(6, 0, 0, 0)
         AssistantUiTheme.meta(usageLeftLabel, AssistantUiTheme.TEXT_SECONDARY)
-        val rightStatus = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
+        val leftStatus = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
             isOpaque = false
             add(usageLeftLabel)
         }
@@ -229,8 +285,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
             add(topRow)
             add(runContextBar)
         }
-        runContextBar.add(controlRow, BorderLayout.WEST)
-        runContextBar.add(rightStatus, BorderLayout.EAST)
+        runContextBar.add(leftStatus, BorderLayout.WEST)
 
         root.add(stack, BorderLayout.CENTER)
         return root
@@ -241,7 +296,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         placeholderContainer.background = AssistantUiTheme.APP_BG
         val inner = JPanel()
         inner.layout = javax.swing.BoxLayout(inner, javax.swing.BoxLayout.Y_AXIS)
-        inner.border = BorderFactory.createEmptyBorder(72, 28, 0, 28)
+        inner.border = BorderFactory.createEmptyBorder(72, 0, 0, 0)
         inner.isOpaque = false
 
         val main = JLabel("开始一个新任务")
@@ -275,36 +330,38 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     private fun buildBottom(): JComponent {
         composerContainer.border = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(1, 0, 0, 0, AssistantUiTheme.BORDER_SUBTLE),
-            BorderFactory.createEmptyBorder(10, 12, 12, 12),
+            BorderFactory.createEmptyBorder(8, 8, 10, 8),
         )
         composerContainer.isOpaque = true
         composerContainer.background = AssistantUiTheme.CHROME_BG
 
-        val compose = JPanel(BorderLayout(0, 10))
-        compose.background = AssistantUiTheme.CHROME_BG
-        compose.border = BorderFactory.createCompoundBorder(
+        composePanel.background = AssistantUiTheme.SURFACE
+        composePanel.border = BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
-            BorderFactory.createEmptyBorder(12, 12, 12, 12),
+            BorderFactory.createEmptyBorder(),
         )
-
-        val metaStack = JPanel().apply {
-            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
-            isOpaque = false
-            add(attachedFilesPanel)
-            add(javax.swing.Box.createVerticalStrut(8))
-        }
-
-        val metaRow = JPanel(BorderLayout(10, 0)).apply {
-            isOpaque = false
-        }
-
-        metaRow.add(editorContextPanel, BorderLayout.WEST)
-        AssistantUiTheme.meta(attachStatusLabel, AssistantUiTheme.TEXT_SECONDARY)
-        metaRow.add(attachStatusLabel, BorderLayout.EAST)
-        metaStack.add(metaRow)
+        contextStripPanel.isOpaque = true
+        contextStripPanel.background = AssistantUiTheme.CHROME_RAISED
+        contextStripPanel.border = BorderFactory.createEmptyBorder()
+        contextStripPanel.preferredSize = Dimension(10, 40)
+        contextStripPanel.minimumSize = Dimension(10, 40)
+        contextStripPanel.maximumSize = Dimension(Int.MAX_VALUE, 40)
+        contextStripItems.isOpaque = false
+        contextStripItems.layout = javax.swing.BoxLayout(contextStripItems, javax.swing.BoxLayout.X_AXIS)
+        contextStripItems.removeAll()
+        contextStripItems.add(attachedFilesPanel)
+        contextStripItems.add(editorContextPanel)
+        contextStripItems.add(javax.swing.Box.createHorizontalGlue())
+        contextStripScroll.border = BorderFactory.createEmptyBorder()
+        contextStripScroll.isOpaque = false
+        contextStripScroll.viewport.isOpaque = false
+        contextStripScroll.horizontalScrollBar.unitIncrement = 20
+        contextStripPanel.removeAll()
+        contextStripPanel.add(contextStripScroll, BorderLayout.CENTER)
 
         val inputRow = JPanel(BorderLayout())
-        inputRow.isOpaque = false
+        inputRow.isOpaque = true
+        inputRow.background = AssistantUiTheme.SURFACE_SUBTLE
         inputArea.toolTipText = "输入需求。Enter 发送，Shift+Enter 换行，@ 引入文件。"
         inputArea.lineWrap = true
         inputArea.wrapStyleWord = true
@@ -312,30 +369,65 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         inputArea.background = AssistantUiTheme.SURFACE_SUBTLE
         inputArea.foreground = AssistantUiTheme.TEXT_PRIMARY
         inputArea.caretColor = AssistantUiTheme.TEXT_PRIMARY
-        inputArea.border = BorderFactory.createEmptyBorder(12, 12, 12, 12)
-        inputScroll.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
-            BorderFactory.createEmptyBorder(0, 0, 0, 0),
-        )
+        inputArea.border = BorderFactory.createEmptyBorder()
+        inputArea.font = inputArea.font.deriveFont((inputArea.font.size2D - COMPOSER_FONT_SHRINK_PT - 1f).coerceAtLeast(10f))
+        inputScroll.border = BorderFactory.createEmptyBorder()
         inputScroll.background = inputArea.background
-        inputScroll.preferredSize = Dimension(300, 132)
+        inputScroll.preferredSize = Dimension(300, 116)
+        inputScroll.minimumSize = Dimension(0, 96)
 
-        val bottomRow = JPanel(BorderLayout(10, 0))
-        bottomRow.isOpaque = false
+        bottomRowPanel.isOpaque = true
+        bottomRowPanel.background = AssistantUiTheme.CHROME_BG
+        bottomRowPanel.border = BorderFactory.createEmptyBorder()
 
-        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0))
-        actions.isOpaque = false
-        actions.add(actionButton)
+        controlsPanel.isOpaque = false
+        controlsPanel.removeAll()
+        controlsPanel.add(sdkButton)
+        controlsPanel.add(modeChip)
+        controlsPanel.add(modelChip)
+        controlsPanel.add(reasoningChip)
+        controlsScroll.border = BorderFactory.createEmptyBorder()
+        controlsScroll.isOpaque = false
+        controlsScroll.viewport.isOpaque = false
+        controlsScroll.horizontalScrollBar.unitIncrement = 20
+
+        actionsPanel.isOpaque = false
+        actionsPanel.removeAll()
+        actionsPanel.add(actionButton)
 
         inputRow.add(inputScroll, BorderLayout.CENTER)
-        compose.add(metaStack, BorderLayout.NORTH)
-        bottomRow.add(streamLabel, BorderLayout.WEST)
-        bottomRow.add(actions, BorderLayout.EAST)
+        inputRow.minimumSize = Dimension(0, 96)
+        inputRow.preferredSize = Dimension(1, 116)
+        inputAndControlsPanel.isOpaque = true
+        inputAndControlsPanel.background = AssistantUiTheme.SURFACE_SUBTLE
+        inputAndControlsPanel.removeAll()
+        inputAndControlsPanel.add(inputRow, BorderLayout.CENTER)
+        inputAndControlsPanel.add(bottomRowPanel, BorderLayout.SOUTH)
+        inputAndControlsPanel.minimumSize = Dimension(0, 132)
+        inputAndControlsPanel.preferredSize = Dimension(10, 152)
+        val centerStack = JPanel(BorderLayout()).apply {
+            isOpaque = false
+        }
+        centerStack.add(statusSnackbar, BorderLayout.NORTH)
+        centerStack.add(inputAndControlsPanel, BorderLayout.CENTER)
+        composePanel.add(contextStripPanel, BorderLayout.NORTH)
+        composePanel.add(centerStack, BorderLayout.CENTER)
+        composePanel.minimumSize = Dimension(0, 170)
+        composePanel.preferredSize = Dimension(10, 192)
+        bottomRowPanel.add(controlsScroll, BorderLayout.CENTER)
+        bottomRowPanel.add(actionsPanel, BorderLayout.EAST)
+        bottomRowPanel.preferredSize = Dimension(10, 48)
+        bottomRowPanel.minimumSize = Dimension(0, 40)
 
-        compose.add(inputRow, BorderLayout.CENTER)
-        compose.add(bottomRow, BorderLayout.SOUTH)
-
-        composerContainer.add(compose, BorderLayout.CENTER)
+        composerContainer.add(composePanel, BorderLayout.CENTER)
+        composerContainer.preferredSize = Dimension(10, 206)
+        composerContainer.minimumSize = Dimension(10, 182)
+        composePanel.minimumSize = Dimension(0, 166)
+        composerContainer.addComponentListener(object : ComponentAdapter() {
+            override fun componentResized(e: ComponentEvent?) {
+                updateResponsiveLayout()
+            }
+        })
         return composerContainer
     }
 
@@ -376,6 +468,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         chatService.runAgent(
             engineId = selectedEngineId,
             model = selectedModel,
+            reasoningEffort = selectedReasoningDepth.effort,
             prompt = userPrompt,
             contextFiles = collectContextFiles(),
         ) { action ->
@@ -647,6 +740,93 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         } else {
             "当前对话"
         }
+        refreshSessionTabs()
+    }
+
+    private fun initializeSessionTabs() {
+        activeSessionTabId = chatService.getCurrentSessionId()
+        if (activeSessionTabId.isNotBlank()) {
+            openSessionTabs += activeSessionTabId
+        }
+        refreshSessionTabs()
+    }
+
+    private fun refreshSessionTabs() {
+        val sessionsById = chatService.listSessions().associateBy { it.id }
+        openSessionTabs.removeIf { !sessionsById.containsKey(it) }
+        if (openSessionTabs.isEmpty()) {
+            val currentId = chatService.getCurrentSessionId()
+            if (currentId.isNotBlank()) {
+                openSessionTabs += currentId
+            }
+        }
+        activeSessionTabId = chatService.getCurrentSessionId()
+        syncToolWindowHeaderTabs(sessionsById.values.toList())
+    }
+
+    private fun syncToolWindowHeaderTabs(sessions: List<AgentChatService.SessionSummary>) {
+        val toolWindowEx = toolWindowEx ?: return
+        val tabs = ToolWindowHeaderTabsModel.buildTabs(
+            openSessionIds = openSessionTabs.toList(),
+            activeSessionId = activeSessionTabId,
+            sessions = sessions,
+        )
+        val actions = tabs.map { tab ->
+            ToolWindowHeaderTabAction(
+                tab = tab,
+                onSelect = { sessionId -> switchToSession(sessionId) },
+                onClose = { sessionId -> closeSessionTab(sessionId) },
+            )
+        }
+        toolWindowEx.setTabActions(*actions.toTypedArray())
+    }
+
+    private fun openSessionTab(sessionId: String) {
+        if (openSessionTabs.size >= MAX_OPEN_TABS && !openSessionTabs.contains(sessionId)) {
+            setStatusMessage("最多可打开 $MAX_OPEN_TABS 个标签")
+            return
+        }
+        openSessionTabs += sessionId
+        switchToSession(sessionId)
+    }
+
+    private fun switchToSession(sessionId: String) {
+        if (sessionId == activeSessionTabId) return
+        if (isRunning) {
+            setStatusMessage("任务执行中，暂不支持切换标签")
+            return
+        }
+        if (chatService.switchSession(sessionId)) {
+            activeSessionTabId = sessionId
+            resetConversationUi()
+            refreshMessages()
+        }
+    }
+
+    private fun closeSessionTab(sessionId: String) {
+        if (openSessionTabs.size <= 1) {
+            setStatusMessage("至少保留一个标签")
+            return
+        }
+        if (sessionId == activeSessionTabId && isRunning) {
+            setStatusMessage("请先停止当前任务再关闭标签")
+            return
+        }
+        val ordered = openSessionTabs.toList()
+        val index = ordered.indexOf(sessionId)
+        if (index < 0) return
+        openSessionTabs.remove(sessionId)
+        if (sessionId == activeSessionTabId) {
+            val nextSessionId = openSessionTabs.elementAtOrNull(index.coerceAtMost(openSessionTabs.size - 1))
+                ?: openSessionTabs.lastOrNull()
+            if (nextSessionId != null && chatService.switchSession(nextSessionId)) {
+                activeSessionTabId = nextSessionId
+                resetConversationUi()
+                refreshMessages()
+                return
+            }
+        }
+        refreshSessionTabs()
     }
 
     private fun resetConversationUi() {
@@ -664,8 +844,7 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         requestStartedAtMs = 0L
         loadingTimer.stop()
         previewRenderTimer.stop()
-        streamLabel.icon = null
-        setStatusMessage("就绪")
+        hideStatusSnackbar()
         setRunningState(false)
     }
 
@@ -729,43 +908,51 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
 
     private fun refreshChipLabels() {
         val sdkName = chatService.engineDescriptor(selectedEngineId)?.displayName ?: "Codex"
-        sdkButton.text = "${ToolWindowUiText.selectionChipLabel(sdkName)} \u25BE"
+        sdkIconLabel.icon = actionIcon(engineIconFor(selectedEngineId, sdkName))
+        sdkTextLabel.text = ToolWindowUiText.selectionChipLabel(sdkName)
+        setChipExpanded(sdkButton, expanded = false)
         sdkButton.toolTipText = "切换模型提供方"
-        modelChip.text = "${ToolWindowUiText.selectionChipLabel(selectedModel)} \u25BE"
-        modeChip.text = ToolWindowUiText.selectionChipLabel(approvalUiPolicy.chipLabel)
-        modeChip.isEnabled = approvalUiPolicy.isInteractive
+        modelIconLabel.icon = actionIcon(modelIconFor(selectedModel))
+        modelTextLabel.text = ToolWindowUiText.selectionChipLabel(selectedModel)
+        setChipExpanded(modelChip, expanded = false)
+        modeIconLabel.icon = actionIcon(ToolWindowIcons.autoMode)
+        modeTextLabel.text = "自动"
+        modeChip.isEnabled = true
+        setChipExpanded(modeChip, expanded = false)
         modeChip.toolTipText = "当前为默认执行模式"
+        reasoningChip.isEnabled = true
+        reasoningIconLabel.icon = actionIcon(reasoningIconFor(selectedReasoningDepth))
+        reasoningTextLabel.text = selectedReasoningDepth.label
+        setChipExpanded(reasoningChip, expanded = false)
+        reasoningChip.toolTipText = "设置推理深度"
         syncEditorContextIndicator()
-        val editorContextVisible = editorContextPanel.isVisible
         rebuildAttachedFileChips()
-        attachStatusLabel.text = when {
-            attachedFiles.isNotEmpty() && editorContextVisible -> "已附加 ${attachedFiles.size} 个文件 · 含当前文件"
-            attachedFiles.isNotEmpty() -> "已附加 ${attachedFiles.size} 个文件"
-            editorContextVisible -> "已带入当前文件"
-            else -> "使用 @引入文件 或当前编辑器上下文"
-        }
     }
 
     private fun rebuildAttachedFileChips() {
         attachedFilesPanel.removeAll()
         attachedFilesPanel.isVisible = attachedFiles.isNotEmpty()
-        attachedFiles.forEach { path ->
+        attachedFiles.forEachIndexed { index, path ->
             val chip = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
                 isOpaque = true
-                background = AssistantUiTheme.SURFACE_RAISED
+                background = AssistantUiTheme.SURFACE
                 border = BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
+                    BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
                     BorderFactory.createEmptyBorder(4, 8, 4, 6),
                 )
+                add(JLabel(UIManager.getIcon("Tree.leafIcon")).apply {
+                    border = BorderFactory.createEmptyBorder(0, 0, 0, 2)
+                })
                 add(JLabel(File(path).name).apply {
                     foreground = AssistantUiTheme.TEXT_PRIMARY
-                    font = font.deriveFont(11f)
+                    font = font.deriveFont(Font.BOLD, 10.5f)
                 })
                 add(JButton("\u00D7").apply {
                     isFocusable = false
-                    background = background
+                    isOpaque = false
+                    isContentAreaFilled = false
                     foreground = AssistantUiTheme.TEXT_SECONDARY
-                    border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+                    border = BorderFactory.createEmptyBorder(0, 4, 0, 0)
                     toolTipText = "移除文件"
                     addActionListener {
                         attachedFiles.remove(path)
@@ -774,75 +961,317 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
                 })
             }
             attachedFilesPanel.add(chip)
+            if (index != attachedFiles.size - 1) {
+                attachedFilesPanel.add(javax.swing.Box.createHorizontalStrut(6))
+            }
         }
         attachedFilesPanel.revalidate()
         attachedFilesPanel.repaint()
     }
 
+    private fun configureChipButton(
+        button: JButton,
+        iconLabel: JLabel,
+        textLabel: JLabel,
+        arrowLabel: JLabel,
+    ) {
+        button.layout = BorderLayout(6, 0)
+        button.text = ""
+        button.icon = null
+        button.removeAll()
+
+        iconLabel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+        iconLabel.horizontalAlignment = JLabel.CENTER
+        iconLabel.preferredSize = Dimension(14, 14)
+        iconLabel.minimumSize = Dimension(14, 14)
+        iconLabel.maximumSize = Dimension(14, 14)
+        textLabel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+        arrowLabel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+        arrowLabel.horizontalAlignment = JLabel.CENTER
+        arrowLabel.preferredSize = Dimension(20, 20)
+        arrowLabel.minimumSize = Dimension(20, 20)
+        arrowLabel.maximumSize = Dimension(20, 20)
+        textLabel.foreground = AssistantUiTheme.TEXT_PRIMARY
+        arrowLabel.foreground = AssistantUiTheme.TEXT_SECONDARY
+        textLabel.horizontalAlignment = JLabel.LEFT
+        arrowLabel.horizontalAlignment = JLabel.RIGHT
+
+        button.add(iconLabel, BorderLayout.WEST)
+        button.add(textLabel, BorderLayout.CENTER)
+        button.add(arrowLabel, BorderLayout.EAST)
+        setChipExpanded(button, expanded = false)
+        updateChipContentVisibility(button)
+    }
+
+    private fun setChipExpanded(button: JButton, expanded: Boolean) {
+        val arrow = actionArrowIcon(if (expanded) ToolWindowIcons.arrowUp else ToolWindowIcons.arrowDown)
+        when (button) {
+            sdkButton -> sdkArrowLabel.icon = arrow
+            modeChip -> modeArrowLabel.icon = arrow
+            modelChip -> modelArrowLabel.icon = arrow
+            reasoningChip -> reasoningArrowLabel.icon = arrow
+        }
+    }
+
+    private fun updateChipContentVisibility(button: JButton) {
+        val iconOnly = controlDensity == ControlDensity.ICON_ONLY
+        when (button) {
+            sdkButton -> {
+                sdkTextLabel.isVisible = !iconOnly
+                sdkArrowLabel.isVisible = !iconOnly
+            }
+            modeChip -> {
+                modeTextLabel.isVisible = !iconOnly
+                modeArrowLabel.isVisible = !iconOnly
+            }
+            modelChip -> {
+                modelTextLabel.isVisible = !iconOnly
+                modelArrowLabel.isVisible = !iconOnly
+            }
+            reasoningChip -> {
+                reasoningTextLabel.isVisible = !iconOnly
+                reasoningArrowLabel.isVisible = !iconOnly
+            }
+        }
+    }
+
     private fun styleChip(button: JButton) {
-        AssistantUiTheme.toolbarChip(button)
+        styleSelectorButton(button)
+        val targetSize = when (controlDensity) {
+            ControlDensity.REGULAR -> 10.5f
+            ControlDensity.COMPACT -> 9.5f
+            ControlDensity.ICON_ONLY -> 9.5f
+        }
+        button.font = button.font.deriveFont(targetSize)
+        val chipFont = button.font
+        when (button) {
+            modeChip -> {
+                modeTextLabel.font = chipFont
+                modeArrowLabel.font = chipFont
+            }
+            modelChip -> {
+                modelTextLabel.font = chipFont
+                modelArrowLabel.font = chipFont
+            }
+            reasoningChip -> {
+                reasoningTextLabel.font = chipFont
+                reasoningArrowLabel.font = chipFont
+            }
+        }
     }
 
     private fun styleAttachedFilesPanel(panel: JPanel) {
         panel.isOpaque = false
+        panel.layout = javax.swing.BoxLayout(panel, javax.swing.BoxLayout.X_AXIS)
+        panel.border = BorderFactory.createEmptyBorder(0, 0, 0, 6)
     }
 
     private fun styleEditorContextPanel(panel: JPanel, label: JLabel, closeButton: JButton) {
         panel.isOpaque = true
-        panel.background = AssistantUiTheme.SURFACE_RAISED
-        panel.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
-            BorderFactory.createEmptyBorder(3, 8, 3, 8),
-        )
+        panel.background = AssistantUiTheme.SURFACE
+        panel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+        panel.layout = FlowLayout(FlowLayout.LEFT, 6, 0)
+        val chip = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
+            isOpaque = true
+            background = AssistantUiTheme.SURFACE
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
+                BorderFactory.createEmptyBorder(4, 8, 4, 6),
+            )
+        }
+        val iconLabel = JLabel(UIManager.getIcon("Tree.leafIcon")).apply {
+            border = BorderFactory.createEmptyBorder(0, 0, 0, 2)
+        }
         label.foreground = AssistantUiTheme.TEXT_PRIMARY
+        label.font = label.font.deriveFont(Font.BOLD, 10.5f)
         closeButton.isFocusable = false
-        closeButton.border = BorderFactory.createEmptyBorder(0, 2, 0, 0)
-        closeButton.background = panel.background
+        closeButton.isOpaque = false
+        closeButton.isContentAreaFilled = false
+        closeButton.border = BorderFactory.createEmptyBorder(0, 4, 0, 0)
         closeButton.foreground = AssistantUiTheme.TEXT_SECONDARY
         closeButton.toolTipText = "移除当前文件"
-        panel.add(label)
-        panel.add(closeButton)
+        chip.add(iconLabel)
+        chip.add(label)
+        chip.add(closeButton)
+        panel.removeAll()
+        panel.add(chip)
     }
 
     private fun styleSdkButton(button: JButton) {
         button.toolTipText = "切换模型提供方"
-        AssistantUiTheme.toolbarChip(button)
+        styleSelectorButton(button)
+        val targetSize = when (controlDensity) {
+            ControlDensity.REGULAR -> 10.5f
+            ControlDensity.COMPACT -> 9.5f
+            ControlDensity.ICON_ONLY -> 9.5f
+        }
+        button.font = button.font.deriveFont(targetSize)
+        sdkTextLabel.font = button.font
+        sdkArrowLabel.font = button.font
+    }
+
+    private fun styleSelectorButton(button: JButton) {
+        button.isFocusable = false
+        button.isOpaque = false
+        button.isContentAreaFilled = false
+        button.margin = Insets(0, 0, 0, 0)
+        button.border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
     }
 
     private fun stylePrimaryActionButton(button: JButton) {
         AssistantUiTheme.primaryButton(button)
+        button.text = ""
+        button.icon = ToolWindowIcons.send
+        button.preferredSize = Dimension(34, 34)
+        button.minimumSize = Dimension(34, 34)
+        button.maximumSize = Dimension(34, 34)
+        button.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(AssistantUiTheme.ACCENT, 1, true),
+            BorderFactory.createEmptyBorder(6, 6, 6, 6),
+        )
     }
 
-    private fun styleStatusLabel(label: JLabel) {
-        label.foreground = AssistantUiTheme.TEXT_SECONDARY
-        label.font = label.font.deriveFont(11.5f)
-        label.iconTextGap = 6
+    private fun styleStatusSnackbar() {
+        statusSnackbar.isOpaque = true
+        statusSnackbar.background = AssistantUiTheme.SURFACE_RAISED
+        statusSnackbar.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
+            BorderFactory.createEmptyBorder(8, 10, 8, 10),
+        )
+        statusSpinnerLabel.isOpaque = false
+        statusSpinnerLabel.preferredSize = Dimension(16, 16)
+        statusSpinnerLabel.minimumSize = Dimension(16, 16)
+        statusSpinnerLabel.maximumSize = Dimension(16, 16)
+
+        statusTextLabel.isOpaque = false
+        statusTextLabel.foreground = AssistantUiTheme.TEXT_SECONDARY
+        statusTextLabel.font = statusTextLabel.font.deriveFont((11.5f - COMPOSER_FONT_SHRINK_PT).coerceAtLeast(9.5f))
+        statusTextLabel.border = BorderFactory.createEmptyBorder(0, 2, 0, 0)
+        statusSnackbar.add(statusSpinnerLabel, BorderLayout.WEST)
+        statusSnackbar.add(statusTextLabel, BorderLayout.CENTER)
+        hideStatusSnackbar()
     }
 
     private fun setRunningState(running: Boolean) {
         isRunning = running
-        actionButton.text = if (running) "停止" else "发送"
+        actionButton.text = ""
+        actionButton.icon = if (running) ToolWindowIcons.stop else ToolWindowIcons.send
         actionButton.toolTipText = if (running) "停止当前执行" else "发送当前输入"
         if (running) {
             refreshRunningStatusLabel()
-        } else if (streamLabel.text.isBlank()) {
-            setStatusMessage("就绪")
+        } else {
+            hideStatusSnackbar()
         }
+    }
+
+    private fun modelIconFor(model: String): javax.swing.Icon {
+        val normalized = model.trim().lowercase()
+        return if (normalized.contains("gpt")) ToolWindowIcons.gpt else ToolWindowIcons.codex
+    }
+
+    private fun actionIcon(icon: Icon): Icon = ResizedIcon(icon, 14, 14)
+
+    private fun actionArrowIcon(icon: Icon): Icon = ResizedIcon(icon, 13, 13)
+
+    private fun reasoningIconFor(depth: ReasoningDepth): javax.swing.Icon = when (depth) {
+        ReasoningDepth.LOW -> ToolWindowIcons.reasoningLow
+        ReasoningDepth.MEDIUM -> ToolWindowIcons.reasoningMedium
+        ReasoningDepth.HIGH -> ToolWindowIcons.reasoningHigh
+        ReasoningDepth.MAX -> ToolWindowIcons.reasoningMax
+    }
+
+    private fun engineIconFor(engineId: String, displayName: String): javax.swing.Icon {
+        val normalized = "$engineId $displayName".trim().lowercase()
+        return if (normalized.contains("gpt") || normalized.contains("openai")) ToolWindowIcons.gpt else ToolWindowIcons.codex
     }
 
     private fun refreshRunningStatusLabel() {
         if (!isRunning) return
         val elapsedMs = requestStartedAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it } ?: 0L
-        streamLabel.icon = AnimatedIcon.Default()
-        streamLabel.text = ToolWindowUiText.runningStatus(elapsedMs)
-        streamLabel.toolTipText = "当前任务仍在执行中"
+        showStatusSnackbar(ToolWindowUiText.runningStatus(elapsedMs), loading = true)
     }
 
     private fun setStatusMessage(message: String) {
-        streamLabel.icon = null
-        streamLabel.text = message
-        streamLabel.toolTipText = message
+        updateStatusSnackbar(message, loading = false)
     }
+
+    private fun showStatusSnackbar(message: String, loading: Boolean) {
+        updateStatusSnackbar(message, loading)
+        statusSnackbar.isVisible = true
+    }
+
+    private fun updateStatusSnackbar(message: String, loading: Boolean) {
+        statusTextLabel.text = message
+        statusTextLabel.toolTipText = message
+        statusSpinnerLabel.icon = if (loading) AnimatedIcon.Default() else null
+    }
+
+    private fun hideStatusSnackbar() {
+        statusSpinnerLabel.icon = null
+        statusTextLabel.text = ""
+        statusTextLabel.toolTipText = null
+        statusSnackbar.isVisible = false
+    }
+
+    private fun updateResponsiveLayout(force: Boolean = false) {
+        val width = composerContainer.width.takeIf { it > 0 } ?: COMPOSER_REGULAR_MIN_WIDTH
+        val nextDensity = resolveControlDensity(width)
+        if (!force && nextDensity == controlDensity && composePanel.isDisplayable) {
+            return
+        }
+        controlDensity = nextDensity
+
+        val (outerPad, _, rowGap, chipGap, chipHeight) = when (controlDensity) {
+            ControlDensity.REGULAR -> LayoutTuning(8, 8, 8, 8, 28)
+            ControlDensity.COMPACT -> LayoutTuning(6, 6, 6, 6, 26)
+            ControlDensity.ICON_ONLY -> LayoutTuning(6, 6, 6, 5, 26)
+        }
+        val composerHeight = when (controlDensity) {
+            ControlDensity.REGULAR -> 198
+            ControlDensity.COMPACT -> 188
+            ControlDensity.ICON_ONLY -> 182
+        }
+
+        composerContainer.preferredSize = Dimension(10, composerHeight)
+        composerContainer.minimumSize = Dimension(10, (composerHeight - 20).coerceAtLeast(164))
+        composePanel.preferredSize = Dimension(10, composerHeight - outerPad * 2)
+        composePanel.minimumSize = Dimension(10, (composerHeight - outerPad * 2 - 18).coerceAtLeast(146))
+        controlsLayout.hgap = chipGap
+        inputAndControlsLayout.vgap = rowGap
+        bottomRowLayout.hgap = rowGap
+        bottomRowPanel.preferredSize = Dimension(10, chipHeight + 4)
+        bottomRowPanel.minimumSize = Dimension(10, chipHeight + 2)
+
+        inputArea.rows = 5
+        inputArea.font = inputArea.font.deriveFont(10.5f)
+        inputScroll.preferredSize = Dimension(300, 116)
+        inputScroll.minimumSize = Dimension(10, 92)
+        inputAndControlsPanel.preferredSize = Dimension(10, 150)
+        inputAndControlsPanel.minimumSize = Dimension(10, 128)
+
+        styleSdkButton(sdkButton)
+        styleChip(modeChip)
+        styleChip(modelChip)
+        styleChip(reasoningChip)
+        listOf(sdkButton, modeChip, modelChip, reasoningChip).forEach { button ->
+            updateChipContentVisibility(button)
+            button.setPreferredSize(null)
+            val naturalWidth = button.preferredSize.width
+            val preferredWidth = if (controlDensity == ControlDensity.ICON_ONLY) {
+                30
+            } else {
+                naturalWidth
+            }
+            button.preferredSize = Dimension(preferredWidth, chipHeight)
+            button.minimumSize = Dimension(preferredWidth, chipHeight)
+            button.maximumSize = Dimension(preferredWidth, chipHeight)
+            button.revalidate()
+        }
+        revalidate()
+        repaint()
+    }
+
+    private fun resolveControlDensity(width: Int): ControlDensity = densityForWidth(width)
 
     private fun onPrimaryAction() {
         if (isRunning) {
@@ -853,97 +1282,106 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     }
 
     private fun showSdkMenu(anchor: JComponent) {
-        val menu = JPopupMenu()
-        chatService.availableEngines().forEach { descriptor ->
-            menu.add(JMenuItem(descriptor.displayName).apply {
-                addActionListener {
+        val chip = anchor as? JButton ?: return
+        val items = chatService.availableEngines().map { descriptor ->
+            UnifiedMenuItem(
+                icon = engineIconFor(descriptor.id, descriptor.displayName),
+                title = descriptor.displayName,
+                selected = descriptor.id == selectedEngineId,
+                onSelect = {
                     selectedEngineId = descriptor.id
                     val models = availableModels(selectedEngineId)
                     if (!models.contains(selectedModel)) {
                         selectedModel = models.firstOrNull() ?: CodexModelCatalog.defaultModel
                     }
                     refreshChipLabels()
-                }
-            })
-        }
-        menu.show(anchor, 0, anchor.height)
-    }
-
-    private fun showModelMenu(anchor: JComponent) {
-        val menu = JPopupMenu().apply {
-            isOpaque = true
-            background = JBColor(0x161C24, 0x161C24)
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(JBColor(0x26384F, 0x26384F), 1, true),
-                BorderFactory.createEmptyBorder(4, 4, 4, 4),
-            )
-        }
-        availableModels(selectedEngineId).forEach { model ->
-            val option = CodexModelCatalog.option(model)
-            menu.add(
-                createModelMenuItem(
-                    model = model,
-                    description = option?.description ?: "可用模型",
-                    isSelected = model == selectedModel,
-                ) {
-                    selectedModel = model
-                    refreshChipLabels()
-                    menu.isVisible = false
                 },
             )
         }
-        menu.show(anchor, 0, anchor.height)
+        showUnifiedChipMenu(chip, items)
+    }
+
+    private fun showModeMenu(anchor: JComponent) {
+        val chip = anchor as? JButton ?: return
+        val items = listOf(
+            UnifiedMenuItem(
+                icon = ToolWindowIcons.autoMode,
+                title = "自动",
+                selected = true,
+                onSelect = {
+                    refreshChipLabels()
+                },
+            ),
+        )
+        showUnifiedChipMenu(chip, items)
+    }
+
+    private fun showModelMenu(anchor: JComponent) {
+        val chip = anchor as? JButton ?: return
+        val items = availableModels(selectedEngineId).map { model ->
+            UnifiedMenuItem(
+                icon = modelIconFor(model),
+                title = model,
+                selected = model == selectedModel,
+                onSelect = {
+                    selectedModel = model
+                    refreshChipLabels()
+                },
+            )
+        }
+        showUnifiedChipMenu(chip, items)
+    }
+
+    private fun showReasoningMenu(anchor: JComponent) {
+        val chip = anchor as? JButton ?: return
+        val items = ReasoningDepth.entries.map { depth ->
+            UnifiedMenuItem(
+                icon = reasoningIconFor(depth),
+                title = depth.label,
+                selected = depth == selectedReasoningDepth,
+                onSelect = {
+                    selectedReasoningDepth = depth
+                    refreshChipLabels()
+                },
+            )
+        }
+        showUnifiedChipMenu(chip, items)
     }
 
     private fun availableModels(engineId: String): List<String> {
         return chatService.engineDescriptor(engineId)?.models?.takeIf { it.isNotEmpty() } ?: listOf(CodexModelCatalog.defaultModel)
     }
 
-    private fun createModelMenuItem(
-        model: String,
-        description: String,
-        isSelected: Boolean,
+    private fun createUnifiedMenuItem(
+        item: UnifiedMenuItem,
+        itemWidth: Int,
         onSelect: () -> Unit,
     ): JComponent {
         val normalBackground = JBColor(0x161C24, 0x161C24)
         val hoverBackground = JBColor(0x1D2631, 0x1D2631)
         val selectedBackground = JBColor(0x154E7D, 0x154E7D)
         val normalTitle = JBColor(0xE3ECF8, 0xE3ECF8)
-        val normalDescription = JBColor(0x7F93AD, 0x7F93AD)
         val selectedTitle = JBColor(0xF4F8FF, 0xF4F8FF)
-        val selectedDescription = JBColor(0xC5D8EE, 0xC5D8EE)
 
-        val iconLabel = JLabel("\u25C9").apply {
-            foreground = if (isSelected) selectedTitle else JBColor(0xA8BDD6, 0xA8BDD6)
+        val iconLabel = JLabel().apply {
+            icon = item.icon
             border = BorderFactory.createEmptyBorder(0, 0, 0, 8)
-            font = font.deriveFont(13f)
         }
-        val titleLabel = JLabel(model).apply {
-            foreground = if (isSelected) selectedTitle else normalTitle
-            font = font.deriveFont(Font.BOLD, 14f)
-        }
-        val descriptionLabel = JLabel(description).apply {
-            foreground = if (isSelected) selectedDescription else normalDescription
-            font = font.deriveFont(11f)
-        }
-
-        val textPanel = JPanel().apply {
-            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
-            isOpaque = false
-            add(titleLabel)
-            add(descriptionLabel)
+        val titleLabel = JLabel(item.title).apply {
+            foreground = if (item.selected) selectedTitle else normalTitle
+            font = font.deriveFont(Font.BOLD, 12f)
         }
 
         lateinit var container: JPanel
         val mouseListener = object : MouseAdapter() {
             override fun mouseEntered(e: MouseEvent?) {
-                if (!isSelected) {
+                if (!item.selected) {
                     container.background = hoverBackground
                 }
             }
 
             override fun mouseExited(e: MouseEvent?) {
-                if (!isSelected) {
+                if (!item.selected) {
                     container.background = normalBackground
                 }
             }
@@ -955,27 +1393,66 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
 
         container = JPanel(BorderLayout()).apply {
             isOpaque = true
-            background = if (isSelected) selectedBackground else normalBackground
+            background = if (item.selected) selectedBackground else normalBackground
             cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             border = BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(
-                    if (isSelected) JBColor(0x317DBA, 0x317DBA) else JBColor(0x202B39, 0x202B39),
+                    if (item.selected) JBColor(0x317DBA, 0x317DBA) else JBColor(0x202B39, 0x202B39),
                     1,
                     true,
                 ),
                 BorderFactory.createEmptyBorder(8, 10, 8, 10),
             )
-            preferredSize = Dimension(248, 52)
-            maximumSize = Dimension(248, 52)
+            preferredSize = Dimension(itemWidth, 36)
+            maximumSize = Dimension(itemWidth, 36)
             add(iconLabel, BorderLayout.WEST)
-            add(textPanel, BorderLayout.CENTER)
+            add(titleLabel, BorderLayout.CENTER)
         }
 
-        listOf(container, iconLabel, titleLabel, descriptionLabel, textPanel).forEach {
+        listOf(container, iconLabel, titleLabel).forEach {
             it.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
             it.addMouseListener(mouseListener)
         }
         return container
+    }
+
+    private fun showUnifiedChipMenu(chip: JButton, items: List<UnifiedMenuItem>) {
+        val itemWidth = computeMenuItemWidth()
+        val menu = JPopupMenu().apply {
+            isOpaque = true
+            background = JBColor(0x161C24, 0x161C24)
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(JBColor(0x26384F, 0x26384F), 1, true),
+                BorderFactory.createEmptyBorder(4, 4, 4, 4),
+            )
+            addPopupMenuListener(object : PopupMenuListener {
+                override fun popupMenuWillBecomeVisible(e: PopupMenuEvent?) {
+                    setChipExpanded(chip, expanded = true)
+                }
+
+                override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent?) {
+                    setChipExpanded(chip, expanded = false)
+                }
+
+                override fun popupMenuCanceled(e: PopupMenuEvent?) {
+                    setChipExpanded(chip, expanded = false)
+                }
+            })
+        }
+        items.forEach { item ->
+            menu.add(
+                createUnifiedMenuItem(item, itemWidth) {
+                    item.onSelect()
+                    menu.isVisible = false
+                },
+            )
+        }
+        menu.show(chip, 0, chip.height)
+    }
+
+    private fun computeMenuItemWidth(): Int {
+        val available = composerContainer.width.takeIf { it > 0 } ?: DEFAULT_MENU_ITEM_WIDTH
+        return (available - 24).coerceIn(MIN_MENU_ITEM_WIDTH, DEFAULT_MENU_ITEM_WIDTH)
     }
 
     private fun currentCapabilities(): EngineCapabilities {
@@ -2603,9 +3080,72 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         return LocalFileSystem.getInstance().findFileByPath(absolute)
     }
 
+    private data class UnifiedMenuItem(
+        val icon: javax.swing.Icon,
+        val title: String,
+        val selected: Boolean,
+        val onSelect: () -> Unit,
+    )
+
+    private data class LayoutTuning(
+        val outerPadding: Int,
+        val innerPadding: Int,
+        val rowGap: Int,
+        val chipGap: Int,
+        val chipHeight: Int,
+    )
+
+    private class ResizedIcon(
+        private val delegate: Icon,
+        private val targetWidth: Int,
+        private val targetHeight: Int,
+    ) : Icon {
+        override fun getIconWidth(): Int = targetWidth
+
+        override fun getIconHeight(): Int = targetHeight
+
+        override fun paintIcon(c: java.awt.Component?, g: java.awt.Graphics?, x: Int, y: Int) {
+            if (g !is java.awt.Graphics2D) return
+            val sourceWidth = delegate.iconWidth.coerceAtLeast(1)
+            val sourceHeight = delegate.iconHeight.coerceAtLeast(1)
+            val tx = g.create() as java.awt.Graphics2D
+            tx.translate(x.toDouble(), y.toDouble())
+            tx.transform(
+                AffineTransform.getScaleInstance(
+                    targetWidth.toDouble() / sourceWidth.toDouble(),
+                    targetHeight.toDouble() / sourceHeight.toDouble(),
+                ),
+            )
+            delegate.paintIcon(c, tx, 0, 0)
+            tx.dispose()
+        }
+    }
+
+    internal enum class ControlDensity {
+        REGULAR,
+        COMPACT,
+        ICON_ONLY,
+    }
+
+    private enum class ReasoningDepth(
+        val label: String,
+        val effort: String,
+    ) {
+        LOW(label = "较少", effort = "low"),
+        MEDIUM(label = "中等", effort = "medium"),
+        HIGH(label = "较多", effort = "high"),
+        MAX(label = "最多", effort = "xhigh"),
+    }
+
     companion object {
         private const val CARD_PLACEHOLDER = "placeholder"
         private const val CARD_MESSAGES = "messages"
+        private const val COMPOSER_FONT_SHRINK_PT = 2f
+        internal const val COMPOSER_REGULAR_MIN_WIDTH = 760
+        internal const val COMPOSER_COMPACT_MIN_WIDTH = 600
+        private const val DEFAULT_MENU_ITEM_WIDTH = 248
+        private const val MIN_MENU_ITEM_WIDTH = 180
+        private const val MAX_OPEN_TABS = 10
         private const val maxContextChars = 120_000
         private const val maxContextFileBytes = 200_000L
         private val mutationKeywords: Set<String> = setOf(
@@ -2622,6 +3162,12 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
             "update",
         )
         private val timeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+
+        internal fun densityForWidth(width: Int): ControlDensity = when {
+            width >= COMPOSER_REGULAR_MIN_WIDTH -> ControlDensity.REGULAR
+            width >= COMPOSER_COMPACT_MIN_WIDTH -> ControlDensity.COMPACT
+            else -> ControlDensity.ICON_ONLY
+        }
     }
 
     private data class ToolTraceItem(
@@ -2717,28 +3263,44 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
     }
 
     private fun startNewSession() {
-        if (chatService.isCurrentSessionEmpty()) {
+        if (isRunning) {
+            setStatusMessage("请先停止当前任务再新建会话")
             return
         }
-        val confirm = Messages.showYesNoDialog(
-            project,
-            "Create a new session? The current conversation will remain stored locally.",
-            "New Session",
-            "Create",
-            "Cancel",
-            Messages.getQuestionIcon(),
-        )
-        if (confirm != Messages.YES) {
+        val id = chatService.createSession()
+        replaceActiveSessionTab(id)
+    }
+
+    private fun startNewWindowTab() {
+        if (isRunning) {
+            setStatusMessage("请先停止当前任务再新建窗口")
             return
         }
-        chatService.createSession()
+        val id = chatService.createSession()
+        openSessionTab(id)
+    }
+
+    private fun replaceActiveSessionTab(sessionId: String) {
+        val currentActive = activeSessionTabId
+        val ordered = openSessionTabs.toList().toMutableList()
+        val index = ordered.indexOf(currentActive)
+        if (index >= 0) {
+            ordered[index] = sessionId
+        } else if (ordered.isEmpty()) {
+            ordered += sessionId
+        } else {
+            ordered[ordered.lastIndex] = sessionId
+        }
+        openSessionTabs.clear()
+        openSessionTabs.addAll(ordered)
+        activeSessionTabId = sessionId
         resetConversationUi()
         refreshMessages()
-        refreshNewButtonState()
     }
 
     private fun refreshNewButtonState() {
-        newChatButton.isEnabled = !chatService.isCurrentSessionEmpty()
+        newChatButton.isEnabled = true
+        newWindowButton.isEnabled = true
     }
 
     private fun installInputKeyBindings() {
@@ -2757,5 +3319,6 @@ class AgentToolWindowPanel(private val project: Project) : JPanel(BorderLayout()
         previewRenderTimer.stop()
         loadingTimer.stop()
         chatService.cancelCurrent()
+        toolWindowEx?.setTabActions()
     }
 }
