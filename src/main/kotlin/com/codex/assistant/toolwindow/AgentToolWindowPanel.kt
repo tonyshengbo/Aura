@@ -35,16 +35,18 @@ import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.ui.AnimatedIcon
 import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBScrollPane
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
-import java.awt.Insets
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
-import java.awt.event.KeyEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.awt.geom.AffineTransform
@@ -57,7 +59,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Base64
-import javax.swing.AbstractAction
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -77,93 +78,181 @@ class AgentToolWindowPanel(
 ) : JPanel(BorderLayout()), Disposable {
     private val chatService = project.getService(AgentChatService::class.java)
     private val approvalUiPolicy = ApprovalUiPolicy()
+    private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val sessionTitleLabel = JLabel("当前对话")
-    private val sessionSubtitleLabel = JLabel("Codex Chat")
-    private val statusSpinnerLabel = JLabel()
-    private val statusTextLabel = JLabel()
-    private val statusSnackbar = JPanel(BorderLayout(10, 0))
-    private val sdkButton = JButton()
-    private val sdkIconLabel = JLabel()
-    private val sdkTextLabel = JLabel()
-    private val sdkArrowLabel = JLabel()
-    private val modeChip = JButton()
-    private val modeIconLabel = JLabel()
-    private val modeTextLabel = JLabel()
-    private val modeArrowLabel = JLabel()
-    private val modelChip = JButton()
-    private val modelIconLabel = JLabel()
-    private val modelTextLabel = JLabel()
-    private val modelArrowLabel = JLabel()
-    private val reasoningChip = JButton()
-    private val reasoningIconLabel = JLabel()
-    private val reasoningTextLabel = JLabel()
-    private val reasoningArrowLabel = JLabel()
-    private val usageLeftLabel = JLabel("--")
-    private val attachedFilesPanel = JPanel()
-    private val editorContextPanel = JPanel(FlowLayout(FlowLayout.LEFT, 4, 0))
-    private val editorContextLabel = JLabel()
-    private val editorContextCloseButton = JButton("\u00D7")
+    private val titleToolView = TitleToolView()
+    private val inputBoxView = InputBoxView(project)
+    private val titleToolViewModel = TitleToolViewModel(object : TitleToolPort {
+        override fun startNewSession() {
+            this@AgentToolWindowPanel.startNewSession()
+        }
+
+        override fun startNewWindow() {
+            this@AgentToolWindowPanel.startNewWindowTab()
+        }
+    })
+    private val inputBoxViewModel = InputBoxViewModel(object : InputBoxPort {
+        override fun primaryAction() {
+            this@AgentToolWindowPanel.onPrimaryAction()
+        }
+
+        override fun showSdkMenu(anchor: JButton) {
+            composerSettingsAction.showSdkMenu(anchor)
+        }
+
+        override fun showModeMenu(anchor: JButton) {
+            composerSettingsAction.showModeMenu(anchor)
+        }
+
+        override fun showModelMenu(anchor: JButton) {
+            composerSettingsAction.showModelMenu(anchor)
+        }
+
+        override fun showReasoningMenu(anchor: JButton) {
+            composerSettingsAction.showReasoningMenu(anchor)
+        }
+
+        override fun dismissEditorContext() {
+            this@AgentToolWindowPanel.dismissCurrentEditorContext()
+        }
+        override fun fileMentioned(path: String) {
+            attachedFiles.add(path)
+            refreshChipLabels()
+        }
+    })
+    private val messageBoxViewModel = MessageBoxViewModel(object : MessageBoxPort {
+        override fun retryTool(name: String, input: String) {
+            this@AgentToolWindowPanel.retryTool(name, input)
+        }
+
+        override fun retryMessage(content: String) {
+            this@AgentToolWindowPanel.retryMessage(content)
+        }
+
+        override fun copyMessage(messageId: String) {
+            this@AgentToolWindowPanel.copyMessageToClipboard(messageId)
+        }
+
+        override fun openFile(path: String) {
+            this@AgentToolWindowPanel.openFileInEditor(path)
+        }
+
+        override fun retryCommand(command: String, cwd: String) {
+            this@AgentToolWindowPanel.retryCommand(command, cwd)
+        }
+
+        override fun copyCommand(command: String) {
+            this@AgentToolWindowPanel.copyCommandToClipboard(command)
+        }
+    })
+    private val titleToolAction = TitleToolAction(titleToolView, titleToolViewModel)
+    private val inputBoxAction = InputBoxAction(inputBoxView, inputBoxViewModel)
+    private val messageBoxAction = MessageBoxAction(messageBoxViewModel)
+    private val composerSettingsViewModel = ComposerSettingsViewModel(
+        ComposerSettingsState(
+            selectedEngineId = chatService.defaultEngineId(),
+            selectedModel = CodexModelCatalog.defaultModel,
+            selectedReasoningDepth = ReasoningDepth.MEDIUM,
+        ),
+    )
+    private val composerSettingsAction = ComposerSettingsAction(
+        chatService = chatService,
+        viewModel = composerSettingsViewModel,
+        inputBoxView = inputBoxView,
+        actionIcon = { icon -> actionIcon(icon) },
+        actionArrowIcon = { icon -> actionArrowIcon(icon) },
+        menuWidthProvider = { computeMenuItemWidth() },
+        onSettingsChanged = { refreshChipLabels() },
+    )
+    private val sessionTabs = SessionTabCoordinator(
+        chatService = chatService,
+        toolWindowProvider = { toolWindowEx },
+        isRunning = { isRunning },
+        onStatus = { message -> setStatusMessage(message) },
+        onSessionActivated = {
+            resetConversationUi()
+            refreshMessages()
+        },
+    )
+    private val timelinePresenter = AgentTimelinePresenter()
+    private val diffProposalAction = DiffProposalAction(
+        supportsDiffProposal = { currentCapabilities().supportsDiffProposal },
+        resolveVirtualFile = { path -> resolveVirtualFile(path) },
+        shouldApplyDiffProposal = { approvalUiPolicy.shouldApplyDiffProposal() },
+        emitSystemMessage = { content ->
+            chatService.addMessage(ChatMessage(role = MessageRole.SYSTEM, content = content))
+        },
+        refreshMessages = { refreshMessages() },
+    )
+    private val newChatButton: JButton get() = titleToolView.newChatButton
+    private val newWindowButton: JButton get() = titleToolView.newWindowButton
+    private val sdkButton: JButton get() = inputBoxView.sdkButton
+    private val sdkIconLabel: JLabel get() = inputBoxView.sdkIconLabel
+    private val sdkTextLabel: JLabel get() = inputBoxView.sdkTextLabel
+    private val sdkArrowLabel: JLabel get() = inputBoxView.sdkArrowLabel
+    private val modeChip: JButton get() = inputBoxView.modeChip
+    private val modeIconLabel: JLabel get() = inputBoxView.modeIconLabel
+    private val modeTextLabel: JLabel get() = inputBoxView.modeTextLabel
+    private val modeArrowLabel: JLabel get() = inputBoxView.modeArrowLabel
+    private val modelChip: JButton get() = inputBoxView.modelChip
+    private val modelIconLabel: JLabel get() = inputBoxView.modelIconLabel
+    private val modelTextLabel: JLabel get() = inputBoxView.modelTextLabel
+    private val modelArrowLabel: JLabel get() = inputBoxView.modelArrowLabel
+    private val reasoningChip: JButton get() = inputBoxView.reasoningChip
+    private val reasoningIconLabel: JLabel get() = inputBoxView.reasoningIconLabel
+    private val reasoningTextLabel: JLabel get() = inputBoxView.reasoningTextLabel
+    private val reasoningArrowLabel: JLabel get() = inputBoxView.reasoningArrowLabel
+    private val editorContextPanel: JPanel get() = inputBoxView.editorContextPanel
+    private val editorContextLabel: JLabel get() = inputBoxView.editorContextLabel
+    private val editorContextCloseButton: JButton get() = inputBoxView.editorContextCloseButton
+    private val composerContainer: JPanel get() = inputBoxView.composerContainer
+    private val composePanel: JPanel get() = inputBoxView.composePanel
+    private val controlsLayout: FlowLayout get() = inputBoxView.controlsLayout
+    private val bottomRowLayout: BorderLayout get() = inputBoxView.bottomRowLayout
+    private val bottomRowPanel: JPanel get() = inputBoxView.bottomRowPanel
+    private val inputAndControlsLayout: BorderLayout get() = inputBoxView.inputAndControlsLayout
+    private val inputAndControlsPanel: JPanel get() = inputBoxView.inputAndControlsPanel
+    private val inputArea: FileMentionInputArea get() = inputBoxView.inputArea
+    private val inputScroll: JBScrollPane get() = inputBoxView.inputScroll
+    private val actionButton: JButton get() = inputBoxView.actionButton
     private val attachStatusLabel = JLabel()
-    private var selectedEngineId: String = chatService.defaultEngineId()
-    private var selectedModel: String = CodexModelCatalog.defaultModel
-    private var selectedReasoningDepth: ReasoningDepth = ReasoningDepth.MEDIUM
-
     private val timelineBuilder = ConversationTimelineBuilder()
     private val timelinePanel = ConversationTimelinePanel(
-        onCopyMessage = { copyMessageToClipboard(it) },
-        onRetryMessage = { content -> retryMessage(content) },
-        onOpenFile = { openFileInEditor(it) },
-        onRetryTool = { name, input -> retryTool(name, input) },
-        onRetryCommand = { command, cwd -> retryCommand(command, cwd) },
-        onCopyCommand = { copyCommandToClipboard(it) },
+        onCopyMessage = { messageBoxAction.onCopyMessage(it) },
+        onRetryMessage = { content -> messageBoxAction.onRetryMessage(content) },
+        onOpenFile = { messageBoxAction.onOpenFile(it) },
+        onRetryTool = { name, input -> messageBoxAction.onRetryTool(name, input) },
+        onRetryCommand = { command, cwd -> messageBoxAction.onRetryCommand(command, cwd) },
+        onCopyCommand = { messageBoxAction.onCopyCommand(it) },
     )
-    private val consoleView = JPanel(BorderLayout())
-    private val placeholderPanel = JPanel(BorderLayout())
-    private val centerCards = JPanel(CardLayout())
-    private val runContextBar = JPanel(BorderLayout())
-    private val composerContainer = JPanel(BorderLayout())
-    private val composePanel = JPanel(BorderLayout(0, 0))
-    private val contextStripPanel = JPanel(BorderLayout())
-    private val contextStripItems = JPanel()
-    private val contextStripScroll = JBScrollPane(contextStripItems, JScrollPane.VERTICAL_SCROLLBAR_NEVER, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED)
-    private val controlsLayout = FlowLayout(FlowLayout.LEFT, 4, 0)
-    private val controlsPanel = JPanel(controlsLayout)
-    private val controlsScroll = JBScrollPane(controlsPanel, JScrollPane.VERTICAL_SCROLLBAR_NEVER, JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED)
-    private val actionsPanel = JPanel(FlowLayout(FlowLayout.RIGHT, 0, 0))
-    private val bottomRowLayout = BorderLayout(8, 0)
-    private val bottomRowPanel = JPanel(bottomRowLayout)
-    private val inputAndControlsLayout = BorderLayout(0, 8)
-    private val inputAndControlsPanel = JPanel(inputAndControlsLayout)
-
-    private val inputArea = FileMentionInputArea(project)
-    private val inputScroll = JBScrollPane(inputArea)
-    private val actionButton = JButton("发送")
-    private val newChatButton = JButton("新建会话")
-    private val newWindowButton = JButton("新建窗口")
+    private val messageBoxView = MessageBoxView(timelinePanel)
+    private val toolWindowAction = AgentToolWindowAction(
+        titleToolAction = titleToolAction,
+        inputBoxAction = inputBoxAction,
+        titleToolViewModel = titleToolViewModel,
+        messageBoxViewModel = messageBoxViewModel,
+        inputBoxViewModel = inputBoxViewModel,
+        titleToolView = titleToolView,
+        messageBoxView = messageBoxView,
+        inputBoxView = inputBoxView,
+    )
 
     private val attachedFiles = linkedSetOf<String>()
     private var currentAssistantContentBuffer = StringBuilder()
     private var currentThinkingBuffer = StringBuilder()
-    private val currentTimelineActionsBuffer = mutableListOf<TimelineAction>()
+    private val turnState = AgentTurnState()
     private val currentToolEventsBuffer = mutableListOf<ToolTraceItem>()
     private val currentCommandEventsBuffer = mutableListOf<CommandTraceItem>()
     private val currentNarrativeEventsBuffer = mutableListOf<NarrativeTraceItem>()
     private var activeContentNarrativeId: String? = null
     private var currentFlowSequence: Int = 0
-    private var currentStatusText: String = ""
     private var isRunning = false
     private var dismissedEditorContextPath: String? = null
-    private var requestStartedAtMs: Long = 0L
     private var expandAllTools: Boolean = true
-    private var turnActive: Boolean = false
-    private var turnFinalized: Boolean = false
     private var cachedMessagesHtml: String = ""
     private var cachedMessageCount: Int = -1
     private var cachedLastMessageId: String = ""
     private var cachedToolDetailMode: Boolean = expandAllTools
-    private val openSessionTabs = linkedSetOf<String>()
-    private var activeSessionTabId: String = ""
     private val expandedToolMessageIds = linkedSetOf<String>()
     private val expandedThinkingMessageIds = linkedSetOf<String>()
     private val expandedCommandMessageIds = linkedSetOf<String>()
@@ -181,47 +270,29 @@ class AgentToolWindowPanel(
     private var controlDensity: ControlDensity = ControlDensity.REGULAR
 
     init {
-        val initialModels = availableModels(selectedEngineId)
-        if (selectedModel !in initialModels) {
-            selectedModel = initialModels.firstOrNull() ?: CodexModelCatalog.defaultModel
-        }
+        composerSettingsAction.initializeState()
         border = BorderFactory.createEmptyBorder()
         background = AssistantUiTheme.APP_BG
 
         AssistantUiTheme.toolbarButton(newChatButton)
         AssistantUiTheme.toolbarButton(newWindowButton)
-        styleAttachedFilesPanel(attachedFilesPanel)
-        styleEditorContextPanel(editorContextPanel, editorContextLabel, editorContextCloseButton)
-        configureChipButton(sdkButton, sdkIconLabel, sdkTextLabel, sdkArrowLabel)
-        configureChipButton(modeChip, modeIconLabel, modeTextLabel, modeArrowLabel)
-        configureChipButton(modelChip, modelIconLabel, modelTextLabel, modelArrowLabel)
-        configureChipButton(reasoningChip, reasoningIconLabel, reasoningTextLabel, reasoningArrowLabel)
-        styleSdkButton(sdkButton)
-        styleChip(modeChip)
-        styleChip(modelChip)
-        styleChip(reasoningChip)
-        stylePrimaryActionButton(actionButton)
-        styleStatusSnackbar()
+        inputBoxView.styleAttachedFilesPanel()
+        inputBoxView.styleEditorContextPanel()
+        inputBoxView.configureChipButton(sdkButton, sdkIconLabel, sdkTextLabel, sdkArrowLabel)
+        inputBoxView.configureChipButton(modeChip, modeIconLabel, modeTextLabel, modeArrowLabel)
+        inputBoxView.configureChipButton(modelChip, modelIconLabel, modelTextLabel, modelArrowLabel)
+        inputBoxView.configureChipButton(reasoningChip, reasoningIconLabel, reasoningTextLabel, reasoningArrowLabel)
+        composerSettingsAction.applyChipStyles(fontSize = 10.5f)
+        inputBoxView.stylePrimaryActionButton()
+        inputBoxView.styleStatusSnackbar(COMPOSER_FONT_SHRINK_PT)
 
         add(buildHeader(), BorderLayout.NORTH)
         add(buildCenter(), BorderLayout.CENTER)
         add(buildBottom(), BorderLayout.SOUTH)
 
-        actionButton.addActionListener { onPrimaryAction() }
-        sdkButton.addActionListener { showSdkMenu(sdkButton) }
-        modeChip.addActionListener { showModeMenu(modeChip) }
-        modelChip.addActionListener { showModelMenu(modelChip) }
-        reasoningChip.addActionListener { showReasoningMenu(reasoningChip) }
-        newChatButton.addActionListener { startNewSession() }
-        newWindowButton.addActionListener { startNewWindowTab() }
-        inputArea.onFileSelected { file ->
-            attachedFiles.add(file.path)
-            refreshChipLabels()
-        }
-        installInputKeyBindings()
-        editorContextCloseButton.addActionListener { dismissCurrentEditorContext() }
+        toolWindowAction.bind(uiScope)
         refreshChipLabels()
-        initializeSessionTabs()
+        sessionTabs.initialize()
 
         refreshMessages()
         setRunningState(false)
@@ -237,198 +308,17 @@ class AgentToolWindowPanel(
     }
 
     private fun buildHeader(): JComponent {
-        val root = JPanel(BorderLayout())
-        root.isOpaque = true
-        root.background = AssistantUiTheme.CHROME_BG
-        root.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(0, 0, 1, 0, AssistantUiTheme.BORDER_SUBTLE),
-            BorderFactory.createEmptyBorder(10, 12, 10, 12),
-        )
-
-        val titleStack = JPanel().apply {
-            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
-            isOpaque = false
-            AssistantUiTheme.title(sessionTitleLabel)
-            AssistantUiTheme.subtitle(sessionSubtitleLabel)
-            add(sessionTitleLabel)
-        }
-        sessionSubtitleLabel.isVisible = false
-
-        val left = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-            isOpaque = false
-            add(titleStack)
-        }
-
-        val right = JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-            isOpaque = false
-            add(newChatButton)
-            add(newWindowButton)
-        }
-
-        val topRow = JPanel(BorderLayout()).apply {
-            isOpaque = false
-            add(left, BorderLayout.WEST)
-            add(right, BorderLayout.EAST)
-        }
-
-        runContextBar.isOpaque = false
-        runContextBar.border = BorderFactory.createEmptyBorder(6, 0, 0, 0)
-        AssistantUiTheme.meta(usageLeftLabel, AssistantUiTheme.TEXT_SECONDARY)
-        val leftStatus = JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-            isOpaque = false
-            add(usageLeftLabel)
-        }
-
-        val stack = JPanel().apply {
-            layout = javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS)
-            isOpaque = false
-            add(topRow)
-            add(runContextBar)
-        }
-        runContextBar.add(leftStatus, BorderLayout.WEST)
-
-        root.add(stack, BorderLayout.CENTER)
-        return root
+        return titleToolView.root
     }
 
     private fun buildCenter(): JComponent {
-        val placeholderContainer = JPanel(BorderLayout())
-        placeholderContainer.background = AssistantUiTheme.APP_BG
-        val inner = JPanel()
-        inner.layout = javax.swing.BoxLayout(inner, javax.swing.BoxLayout.Y_AXIS)
-        inner.border = BorderFactory.createEmptyBorder(72, 0, 0, 0)
-        inner.isOpaque = false
-
-        val main = JLabel("开始一个新任务")
-        main.font = main.font.deriveFont(Font.BOLD, 20f)
-        main.foreground = AssistantUiTheme.TEXT_PRIMARY
-        main.alignmentX = 0f
-
-        val sub = JLabel("在一个对话里完成提问、执行、改文件和查看结果。")
-        sub.foreground = AssistantUiTheme.TEXT_MUTED
-        sub.alignmentX = 0f
-
-        inner.add(main)
-        inner.add(javax.swing.Box.createVerticalStrut(6))
-        inner.add(sub)
-
-        placeholderContainer.add(inner, BorderLayout.NORTH)
-        placeholderPanel.isOpaque = true
-        placeholderPanel.background = AssistantUiTheme.APP_BG
-        placeholderPanel.add(placeholderContainer, BorderLayout.CENTER)
-
-        centerCards.isOpaque = true
-        centerCards.background = AssistantUiTheme.APP_BG
-        centerCards.add(placeholderPanel, CARD_PLACEHOLDER)
-        centerCards.add(timelinePanel, CARD_MESSAGES)
-        consoleView.isOpaque = true
-        consoleView.background = AssistantUiTheme.APP_BG
-        consoleView.add(centerCards, BorderLayout.CENTER)
-        return consoleView
+        return messageBoxView.root
     }
 
     private fun buildBottom(): JComponent {
-        composerContainer.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createMatteBorder(1, 0, 0, 0, AssistantUiTheme.BORDER_SUBTLE),
-            BorderFactory.createEmptyBorder(8, 8, 10, 8),
-        )
-        composerContainer.isOpaque = true
-        composerContainer.background = AssistantUiTheme.CHROME_BG
-
-        composePanel.background = AssistantUiTheme.SURFACE
-        composePanel.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
-            BorderFactory.createEmptyBorder(),
-        )
-        contextStripPanel.isOpaque = true
-        contextStripPanel.background = AssistantUiTheme.CHROME_RAISED
-        contextStripPanel.border = BorderFactory.createEmptyBorder()
-        contextStripPanel.preferredSize = Dimension(10, 40)
-        contextStripPanel.minimumSize = Dimension(10, 40)
-        contextStripPanel.maximumSize = Dimension(Int.MAX_VALUE, 40)
-        contextStripItems.isOpaque = false
-        contextStripItems.layout = javax.swing.BoxLayout(contextStripItems, javax.swing.BoxLayout.X_AXIS)
-        contextStripItems.removeAll()
-        contextStripItems.add(attachedFilesPanel)
-        contextStripItems.add(editorContextPanel)
-        contextStripItems.add(javax.swing.Box.createHorizontalGlue())
-        contextStripScroll.border = BorderFactory.createEmptyBorder()
-        contextStripScroll.isOpaque = false
-        contextStripScroll.viewport.isOpaque = false
-        contextStripScroll.horizontalScrollBar.unitIncrement = 20
-        contextStripPanel.removeAll()
-        contextStripPanel.add(contextStripScroll, BorderLayout.CENTER)
-
-        val inputRow = JPanel(BorderLayout())
-        inputRow.isOpaque = true
-        inputRow.background = AssistantUiTheme.SURFACE_SUBTLE
-        inputArea.toolTipText = "输入需求。Enter 发送，Shift+Enter 换行，@ 引入文件。"
-        inputArea.lineWrap = true
-        inputArea.wrapStyleWord = true
-        inputArea.rows = 5
-        inputArea.background = AssistantUiTheme.SURFACE_SUBTLE
-        inputArea.foreground = AssistantUiTheme.TEXT_PRIMARY
-        inputArea.caretColor = AssistantUiTheme.TEXT_PRIMARY
-        inputArea.border = BorderFactory.createEmptyBorder()
-        inputArea.font = inputArea.font.deriveFont((inputArea.font.size2D - COMPOSER_FONT_SHRINK_PT - 1f).coerceAtLeast(10f))
-        inputScroll.border = BorderFactory.createEmptyBorder()
-        inputScroll.background = inputArea.background
-        inputScroll.preferredSize = Dimension(300, 116)
-        inputScroll.minimumSize = Dimension(0, 96)
-
-        bottomRowPanel.isOpaque = true
-        bottomRowPanel.background = AssistantUiTheme.CHROME_BG
-        bottomRowPanel.border = BorderFactory.createEmptyBorder()
-
-        controlsPanel.isOpaque = false
-        controlsPanel.removeAll()
-        controlsPanel.add(sdkButton)
-        controlsPanel.add(modeChip)
-        controlsPanel.add(modelChip)
-        controlsPanel.add(reasoningChip)
-        controlsScroll.border = BorderFactory.createEmptyBorder()
-        controlsScroll.isOpaque = false
-        controlsScroll.viewport.isOpaque = false
-        controlsScroll.horizontalScrollBar.unitIncrement = 20
-
-        actionsPanel.isOpaque = false
-        actionsPanel.removeAll()
-        actionsPanel.add(actionButton)
-
-        inputRow.add(inputScroll, BorderLayout.CENTER)
-        inputRow.minimumSize = Dimension(0, 96)
-        inputRow.preferredSize = Dimension(1, 116)
-        inputAndControlsPanel.isOpaque = true
-        inputAndControlsPanel.background = AssistantUiTheme.SURFACE_SUBTLE
-        inputAndControlsPanel.removeAll()
-        inputAndControlsPanel.add(inputRow, BorderLayout.CENTER)
-        inputAndControlsPanel.add(bottomRowPanel, BorderLayout.SOUTH)
-        inputAndControlsPanel.minimumSize = Dimension(0, 132)
-        inputAndControlsPanel.preferredSize = Dimension(10, 152)
-        val centerStack = JPanel(BorderLayout()).apply {
-            isOpaque = false
+        return inputBoxView.buildLayout(COMPOSER_FONT_SHRINK_PT) {
+            updateResponsiveLayout()
         }
-        centerStack.add(statusSnackbar, BorderLayout.NORTH)
-        centerStack.add(inputAndControlsPanel, BorderLayout.CENTER)
-        composePanel.add(contextStripPanel, BorderLayout.NORTH)
-        composePanel.add(centerStack, BorderLayout.CENTER)
-        composePanel.minimumSize = Dimension(0, 170)
-        composePanel.preferredSize = Dimension(10, 192)
-        bottomRowPanel.add(controlsScroll, BorderLayout.CENTER)
-        bottomRowPanel.add(actionsPanel, BorderLayout.EAST)
-        bottomRowPanel.preferredSize = Dimension(10, 48)
-        bottomRowPanel.minimumSize = Dimension(0, 40)
-
-        composerContainer.add(composePanel, BorderLayout.CENTER)
-        composerContainer.preferredSize = Dimension(10, 206)
-        composerContainer.minimumSize = Dimension(10, 182)
-        composePanel.minimumSize = Dimension(0, 166)
-        composerContainer.addComponentListener(object : ComponentAdapter() {
-            override fun componentResized(e: ComponentEvent?) {
-                updateResponsiveLayout()
-            }
-        })
-        return composerContainer
     }
 
     private fun submitPrompt() {
@@ -451,113 +341,25 @@ class AgentToolWindowPanel(
 
         currentAssistantContentBuffer = StringBuilder()
         currentThinkingBuffer = StringBuilder()
-        currentTimelineActionsBuffer.clear()
         currentToolEventsBuffer.clear()
         currentCommandEventsBuffer.clear()
         currentNarrativeEventsBuffer.clear()
         activeContentNarrativeId = null
         currentFlowSequence = 0
-        currentStatusText = ""
-        turnActive = true
-        turnFinalized = false
-        requestStartedAtMs = System.currentTimeMillis()
+        turnState.begin(System.currentTimeMillis())
         loadingTimer.start()
         setRunningState(true)
         refreshRunningStatusLabel()
 
         chatService.runAgent(
-            engineId = selectedEngineId,
-            model = selectedModel,
-            reasoningEffort = selectedReasoningDepth.effort,
+            engineId = composerSettingsAction.selectedEngineId(),
+            model = composerSettingsAction.selectedModel(),
+            reasoningEffort = composerSettingsAction.selectedReasoningEffort(),
             prompt = userPrompt,
             contextFiles = collectContextFiles(),
         ) { action ->
             ApplicationManager.getApplication().invokeLater {
                 handleTimelineAction(action)
-            }
-        }
-    }
-
-    private fun handleHyperlinkAction(description: String?) {
-        val raw = description ?: return
-        if (!raw.startsWith("action://")) return
-        val action = raw.substringAfter("action://").substringBefore("?")
-        val query = raw.substringAfter("?", "")
-        if (query.isBlank()) return
-        val params = query.split("&")
-            .mapNotNull {
-                val idx = it.indexOf('=')
-                if (idx <= 0) return@mapNotNull null
-                val key = it.substring(0, idx)
-                val value = URLDecoder.decode(it.substring(idx + 1), StandardCharsets.UTF_8)
-                key to value
-            }.toMap()
-        when (action) {
-            "retry-tool" -> {
-                val name = params["name"].orEmpty()
-                val input = params["input"].orEmpty()
-                retryTool(name, input)
-            }
-
-            "copy-message" -> {
-                val messageId = params["id"].orEmpty()
-                copyMessageToClipboard(messageId)
-            }
-
-            "toggle-tools" -> {
-                val messageId = params["id"].orEmpty()
-                if (messageId.isBlank()) return
-                if (!expandedToolMessageIds.add(messageId)) {
-                    expandedToolMessageIds.remove(messageId)
-                }
-                invalidateMessageHtmlCache()
-                refreshMessages()
-            }
-
-            "toggle-thinking" -> {
-                val messageId = params["id"].orEmpty()
-                if (messageId.isBlank()) return
-                if (!expandedThinkingMessageIds.add(messageId)) {
-                    expandedThinkingMessageIds.remove(messageId)
-                }
-                invalidateMessageHtmlCache()
-                refreshMessages()
-            }
-
-            "toggle-commands" -> {
-                val messageId = params["id"].orEmpty()
-                if (messageId.isBlank()) return
-                if (!expandedCommandMessageIds.add(messageId)) {
-                    expandedCommandMessageIds.remove(messageId)
-                }
-                invalidateMessageHtmlCache()
-                refreshMessages()
-            }
-
-            "toggle-turn" -> {
-                val turnId = params["id"].orEmpty()
-                if (turnId.isBlank()) return
-                if (!expandedTurnIds.add(turnId)) {
-                    expandedTurnIds.remove(turnId)
-                }
-                invalidateMessageHtmlCache()
-                refreshMessages()
-            }
-
-            "open-file" -> {
-                val path = params["path"].orEmpty()
-                openFileInEditor(path)
-            }
-
-            "retry-command" -> {
-                val command = params["command"].orEmpty()
-                val cwd = params["cwd"].orEmpty()
-                retryCommand(command, cwd)
-            }
-
-            "copy-command" -> {
-                val command = params["command"].orEmpty()
-                copyCommandToClipboard(command)
             }
         }
     }
@@ -615,10 +417,7 @@ class AgentToolWindowPanel(
     }
 
     private fun handleTimelineAction(action: TimelineAction) {
-        if (!turnActive && action !is TimelineAction.MarkTurnFailed) {
-            return
-        }
-        if (turnFinalized && action != TimelineAction.FinishTurn && action !is TimelineAction.MarkTurnFailed) {
+        if (!turnState.canHandle(action)) {
             return
         }
         when (action) {
@@ -629,57 +428,24 @@ class AgentToolWindowPanel(
             is TimelineAction.MarkTurnFailed,
             is TimelineAction.CommandProposalReceived,
             -> {
-                recordTimelineAction(action)
+                turnState.record(action)
+                renderPreviewBuffer()
             }
 
-            is TimelineAction.DiffProposalReceived -> handleDiffProposal(action)
+            is TimelineAction.DiffProposalReceived -> diffProposalAction.apply(action)
             TimelineAction.FinishTurn -> {
-                turnFinalized = true
-                persistTimelineMessageIfNeeded()
+                turnState.markFinalized()
+                persistTimelineMessageIfNeeded(turnState.snapshotActions())
                 finishTurn("完成", persistIfNeeded = true)
             }
         }
     }
 
-    private fun handleDiffProposal(action: TimelineAction.DiffProposalReceived) {
-        if (!currentCapabilities().supportsDiffProposal) {
-            return
-        }
-        val vFile = resolveVirtualFile(action.filePath)
-        if (vFile == null) {
-            chatService.addMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Diff target not found: ${action.filePath}"))
-            refreshMessages()
-            return
-        }
-
-        val document = FileDocumentManager.getInstance().getDocument(vFile)
-        if (document == null) {
-            chatService.addMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Cannot open target file: ${action.filePath}"))
-            refreshMessages()
-            return
-        }
-
-        if (approvalUiPolicy.shouldApplyDiffProposal()) {
-            ApplicationManager.getApplication().runWriteAction {
-                document.setText(action.newContent)
-                FileDocumentManager.getInstance().saveDocument(document)
-            }
-            chatService.addMessage(ChatMessage(role = MessageRole.SYSTEM, content = "Applied diff to ${vFile.path}"))
-            refreshMessages()
-        }
-    }
-
-    private fun recordTimelineAction(action: TimelineAction) {
-        currentTimelineActionsBuffer.add(action)
-        renderPreviewBuffer()
-    }
-
-    private fun persistTimelineMessageIfNeeded() {
-        val actions = currentTimelineActionsBuffer.toList()
+    private fun persistTimelineMessageIfNeeded(actions: List<TimelineAction>) {
         if (actions.isEmpty()) {
             return
         }
-        val assistantContent = buildAssistantContentFromTimelineActions(actions)
+        val assistantContent = timelinePresenter.buildAssistantContentFromTimelineActions(actions)
         val hasRenderableContent = assistantContent.isNotBlank() ||
             actions.any {
                 it is TimelineAction.UpsertTool ||
@@ -700,31 +466,6 @@ class AgentToolWindowPanel(
         refreshMessages()
     }
 
-    private fun buildAssistantContentFromTimelineActions(actions: List<TimelineAction>): String {
-        val narratives = actions
-            .filterIsInstance<TimelineAction.AppendNarrative>()
-            .sortedBy { it.sequence }
-            .map { it.text.trim() }
-            .filter { it.isNotBlank() }
-        if (narratives.isNotEmpty()) {
-            return narratives.joinToString("\n\n")
-        }
-
-        val failures = actions
-            .filterIsInstance<TimelineAction.MarkTurnFailed>()
-            .map { it.message.trim() }
-            .filter { it.isNotBlank() }
-        if (failures.isNotEmpty()) {
-            return failures.joinToString("\n\n")
-        }
-
-        return when {
-            actions.any { it is TimelineAction.UpsertCommand } -> "已记录命令执行。"
-            actions.any { it is TimelineAction.UpsertTool } -> "已记录工具执行。"
-            else -> ""
-        }
-    }
-
     private fun refreshMessages() {
         refreshHeaderState()
         refreshUsageSnapshotLabel()
@@ -734,99 +475,13 @@ class AgentToolWindowPanel(
     }
 
     private fun refreshHeaderState() {
-        sessionTitleLabel.text = chatService.currentSessionTitle()
-        sessionSubtitleLabel.text = if (chatService.isCurrentSessionEmpty()) {
-            "Codex Chat"
-        } else {
-            "当前对话"
-        }
-        refreshSessionTabs()
-    }
-
-    private fun initializeSessionTabs() {
-        activeSessionTabId = chatService.getCurrentSessionId()
-        if (activeSessionTabId.isNotBlank()) {
-            openSessionTabs += activeSessionTabId
-        }
-        refreshSessionTabs()
-    }
-
-    private fun refreshSessionTabs() {
-        val sessionsById = chatService.listSessions().associateBy { it.id }
-        openSessionTabs.removeIf { !sessionsById.containsKey(it) }
-        if (openSessionTabs.isEmpty()) {
-            val currentId = chatService.getCurrentSessionId()
-            if (currentId.isNotBlank()) {
-                openSessionTabs += currentId
-            }
-        }
-        activeSessionTabId = chatService.getCurrentSessionId()
-        syncToolWindowHeaderTabs(sessionsById.values.toList())
-    }
-
-    private fun syncToolWindowHeaderTabs(sessions: List<AgentChatService.SessionSummary>) {
-        val toolWindowEx = toolWindowEx ?: return
-        val tabs = ToolWindowHeaderTabsModel.buildTabs(
-            openSessionIds = openSessionTabs.toList(),
-            activeSessionId = activeSessionTabId,
-            sessions = sessions,
-        )
-        val actions = tabs.map { tab ->
-            ToolWindowHeaderTabAction(
-                tab = tab,
-                onSelect = { sessionId -> switchToSession(sessionId) },
-                onClose = { sessionId -> closeSessionTab(sessionId) },
+        titleToolViewModel.updateState {
+            it.copy(
+                title = chatService.currentSessionTitle(),
+                subtitle = if (chatService.isCurrentSessionEmpty()) "Codex Chat" else "当前对话",
             )
         }
-        toolWindowEx.setTabActions(*actions.toTypedArray())
-    }
-
-    private fun openSessionTab(sessionId: String) {
-        if (openSessionTabs.size >= MAX_OPEN_TABS && !openSessionTabs.contains(sessionId)) {
-            setStatusMessage("最多可打开 $MAX_OPEN_TABS 个标签")
-            return
-        }
-        openSessionTabs += sessionId
-        switchToSession(sessionId)
-    }
-
-    private fun switchToSession(sessionId: String) {
-        if (sessionId == activeSessionTabId) return
-        if (isRunning) {
-            setStatusMessage("任务执行中，暂不支持切换标签")
-            return
-        }
-        if (chatService.switchSession(sessionId)) {
-            activeSessionTabId = sessionId
-            resetConversationUi()
-            refreshMessages()
-        }
-    }
-
-    private fun closeSessionTab(sessionId: String) {
-        if (openSessionTabs.size <= 1) {
-            setStatusMessage("至少保留一个标签")
-            return
-        }
-        if (sessionId == activeSessionTabId && isRunning) {
-            setStatusMessage("请先停止当前任务再关闭标签")
-            return
-        }
-        val ordered = openSessionTabs.toList()
-        val index = ordered.indexOf(sessionId)
-        if (index < 0) return
-        openSessionTabs.remove(sessionId)
-        if (sessionId == activeSessionTabId) {
-            val nextSessionId = openSessionTabs.elementAtOrNull(index.coerceAtMost(openSessionTabs.size - 1))
-                ?: openSessionTabs.lastOrNull()
-            if (nextSessionId != null && chatService.switchSession(nextSessionId)) {
-                activeSessionTabId = nextSessionId
-                resetConversationUi()
-                refreshMessages()
-                return
-            }
-        }
-        refreshSessionTabs()
+        sessionTabs.refresh()
     }
 
     private fun resetConversationUi() {
@@ -840,8 +495,7 @@ class AgentToolWindowPanel(
         expandedToolMessageIds.clear()
         expandedThinkingMessageIds.clear()
         expandedCommandMessageIds.clear()
-        currentStatusText = ""
-        requestStartedAtMs = 0L
+        turnState.clear()
         loadingTimer.stop()
         previewRenderTimer.stop()
         hideStatusSnackbar()
@@ -850,8 +504,12 @@ class AgentToolWindowPanel(
 
     private fun refreshUsageSnapshotLabel() {
         val snapshot = chatService.currentUsageSnapshot()
-        usageLeftLabel.text = snapshot?.headerLabel() ?: "--"
-        usageLeftLabel.toolTipText = snapshot?.tooltipText()
+        titleToolViewModel.updateState {
+            it.copy(
+                usageLabel = snapshot?.headerLabel() ?: "--",
+                usageTooltip = snapshot?.tooltipText(),
+            )
+        }
     }
 
     private fun renderPreviewBuffer() {
@@ -885,7 +543,7 @@ class AgentToolWindowPanel(
 
     private fun showMessagesCardIfNeeded() {
         if (chatService.messages.isEmpty() &&
-            currentTimelineActionsBuffer.isEmpty() &&
+            !turnState.hasActions() &&
             currentAssistantContentBuffer.isBlank() &&
             currentThinkingBuffer.isBlank() &&
             currentToolEventsBuffer.isEmpty() &&
@@ -898,265 +556,30 @@ class AgentToolWindowPanel(
     }
 
     private fun showMessagesCard(forceMessages: Boolean) {
-        val layout = centerCards.layout as CardLayout
-        if (forceMessages) {
-            layout.show(centerCards, CARD_MESSAGES)
-        } else {
-            layout.show(centerCards, CARD_PLACEHOLDER)
-        }
+        messageBoxViewModel.setForceMessages(forceMessages)
     }
 
     private fun refreshChipLabels() {
-        val sdkName = chatService.engineDescriptor(selectedEngineId)?.displayName ?: "Codex"
-        sdkIconLabel.icon = actionIcon(engineIconFor(selectedEngineId, sdkName))
-        sdkTextLabel.text = ToolWindowUiText.selectionChipLabel(sdkName)
-        setChipExpanded(sdkButton, expanded = false)
-        sdkButton.toolTipText = "切换模型提供方"
-        modelIconLabel.icon = actionIcon(modelIconFor(selectedModel))
-        modelTextLabel.text = ToolWindowUiText.selectionChipLabel(selectedModel)
-        setChipExpanded(modelChip, expanded = false)
-        modeIconLabel.icon = actionIcon(ToolWindowIcons.autoMode)
-        modeTextLabel.text = "自动"
-        modeChip.isEnabled = true
-        setChipExpanded(modeChip, expanded = false)
-        modeChip.toolTipText = "当前为默认执行模式"
-        reasoningChip.isEnabled = true
-        reasoningIconLabel.icon = actionIcon(reasoningIconFor(selectedReasoningDepth))
-        reasoningTextLabel.text = selectedReasoningDepth.label
-        setChipExpanded(reasoningChip, expanded = false)
-        reasoningChip.toolTipText = "设置推理深度"
+        composerSettingsAction.syncChipLabels()
         syncEditorContextIndicator()
         rebuildAttachedFileChips()
     }
 
     private fun rebuildAttachedFileChips() {
-        attachedFilesPanel.removeAll()
-        attachedFilesPanel.isVisible = attachedFiles.isNotEmpty()
-        attachedFiles.forEachIndexed { index, path ->
-            val chip = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
-                isOpaque = true
-                background = AssistantUiTheme.SURFACE
-                border = BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
-                    BorderFactory.createEmptyBorder(4, 8, 4, 6),
-                )
-                add(JLabel(UIManager.getIcon("Tree.leafIcon")).apply {
-                    border = BorderFactory.createEmptyBorder(0, 0, 0, 2)
-                })
-                add(JLabel(File(path).name).apply {
-                    foreground = AssistantUiTheme.TEXT_PRIMARY
-                    font = font.deriveFont(Font.BOLD, 10.5f)
-                })
-                add(JButton("\u00D7").apply {
-                    isFocusable = false
-                    isOpaque = false
-                    isContentAreaFilled = false
-                    foreground = AssistantUiTheme.TEXT_SECONDARY
-                    border = BorderFactory.createEmptyBorder(0, 4, 0, 0)
-                    toolTipText = "移除文件"
-                    addActionListener {
-                        attachedFiles.remove(path)
-                        refreshChipLabels()
-                    }
-                })
-            }
-            attachedFilesPanel.add(chip)
-            if (index != attachedFiles.size - 1) {
-                attachedFilesPanel.add(javax.swing.Box.createHorizontalStrut(6))
-            }
-        }
-        attachedFilesPanel.revalidate()
-        attachedFilesPanel.repaint()
-    }
-
-    private fun configureChipButton(
-        button: JButton,
-        iconLabel: JLabel,
-        textLabel: JLabel,
-        arrowLabel: JLabel,
-    ) {
-        button.layout = BorderLayout(6, 0)
-        button.text = ""
-        button.icon = null
-        button.removeAll()
-
-        iconLabel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
-        iconLabel.horizontalAlignment = JLabel.CENTER
-        iconLabel.preferredSize = Dimension(14, 14)
-        iconLabel.minimumSize = Dimension(14, 14)
-        iconLabel.maximumSize = Dimension(14, 14)
-        textLabel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
-        arrowLabel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
-        arrowLabel.horizontalAlignment = JLabel.CENTER
-        arrowLabel.preferredSize = Dimension(20, 20)
-        arrowLabel.minimumSize = Dimension(20, 20)
-        arrowLabel.maximumSize = Dimension(20, 20)
-        textLabel.foreground = AssistantUiTheme.TEXT_PRIMARY
-        arrowLabel.foreground = AssistantUiTheme.TEXT_SECONDARY
-        textLabel.horizontalAlignment = JLabel.LEFT
-        arrowLabel.horizontalAlignment = JLabel.RIGHT
-
-        button.add(iconLabel, BorderLayout.WEST)
-        button.add(textLabel, BorderLayout.CENTER)
-        button.add(arrowLabel, BorderLayout.EAST)
-        setChipExpanded(button, expanded = false)
-        updateChipContentVisibility(button)
-    }
-
-    private fun setChipExpanded(button: JButton, expanded: Boolean) {
-        val arrow = actionArrowIcon(if (expanded) ToolWindowIcons.arrowUp else ToolWindowIcons.arrowDown)
-        when (button) {
-            sdkButton -> sdkArrowLabel.icon = arrow
-            modeChip -> modeArrowLabel.icon = arrow
-            modelChip -> modelArrowLabel.icon = arrow
-            reasoningChip -> reasoningArrowLabel.icon = arrow
+        inputBoxView.renderAttachedFiles(attachedFiles.toList()) { path ->
+            attachedFiles.remove(path)
+            refreshChipLabels()
         }
     }
 
-    private fun updateChipContentVisibility(button: JButton) {
+    private fun updateChipContentVisibility() {
         val iconOnly = controlDensity == ControlDensity.ICON_ONLY
-        when (button) {
-            sdkButton -> {
-                sdkTextLabel.isVisible = !iconOnly
-                sdkArrowLabel.isVisible = !iconOnly
-            }
-            modeChip -> {
-                modeTextLabel.isVisible = !iconOnly
-                modeArrowLabel.isVisible = !iconOnly
-            }
-            modelChip -> {
-                modelTextLabel.isVisible = !iconOnly
-                modelArrowLabel.isVisible = !iconOnly
-            }
-            reasoningChip -> {
-                reasoningTextLabel.isVisible = !iconOnly
-                reasoningArrowLabel.isVisible = !iconOnly
-            }
-        }
-    }
-
-    private fun styleChip(button: JButton) {
-        styleSelectorButton(button)
-        val targetSize = when (controlDensity) {
-            ControlDensity.REGULAR -> 10.5f
-            ControlDensity.COMPACT -> 9.5f
-            ControlDensity.ICON_ONLY -> 9.5f
-        }
-        button.font = button.font.deriveFont(targetSize)
-        val chipFont = button.font
-        when (button) {
-            modeChip -> {
-                modeTextLabel.font = chipFont
-                modeArrowLabel.font = chipFont
-            }
-            modelChip -> {
-                modelTextLabel.font = chipFont
-                modelArrowLabel.font = chipFont
-            }
-            reasoningChip -> {
-                reasoningTextLabel.font = chipFont
-                reasoningArrowLabel.font = chipFont
-            }
-        }
-    }
-
-    private fun styleAttachedFilesPanel(panel: JPanel) {
-        panel.isOpaque = false
-        panel.layout = javax.swing.BoxLayout(panel, javax.swing.BoxLayout.X_AXIS)
-        panel.border = BorderFactory.createEmptyBorder(0, 0, 0, 6)
-    }
-
-    private fun styleEditorContextPanel(panel: JPanel, label: JLabel, closeButton: JButton) {
-        panel.isOpaque = true
-        panel.background = AssistantUiTheme.SURFACE
-        panel.border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
-        panel.layout = FlowLayout(FlowLayout.LEFT, 6, 0)
-        val chip = JPanel(FlowLayout(FlowLayout.LEFT, 6, 0)).apply {
-            isOpaque = true
-            background = AssistantUiTheme.SURFACE
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(AssistantUiTheme.BORDER, 1, true),
-                BorderFactory.createEmptyBorder(4, 8, 4, 6),
-            )
-        }
-        val iconLabel = JLabel(UIManager.getIcon("Tree.leafIcon")).apply {
-            border = BorderFactory.createEmptyBorder(0, 0, 0, 2)
-        }
-        label.foreground = AssistantUiTheme.TEXT_PRIMARY
-        label.font = label.font.deriveFont(Font.BOLD, 10.5f)
-        closeButton.isFocusable = false
-        closeButton.isOpaque = false
-        closeButton.isContentAreaFilled = false
-        closeButton.border = BorderFactory.createEmptyBorder(0, 4, 0, 0)
-        closeButton.foreground = AssistantUiTheme.TEXT_SECONDARY
-        closeButton.toolTipText = "移除当前文件"
-        chip.add(iconLabel)
-        chip.add(label)
-        chip.add(closeButton)
-        panel.removeAll()
-        panel.add(chip)
-    }
-
-    private fun styleSdkButton(button: JButton) {
-        button.toolTipText = "切换模型提供方"
-        styleSelectorButton(button)
-        val targetSize = when (controlDensity) {
-            ControlDensity.REGULAR -> 10.5f
-            ControlDensity.COMPACT -> 9.5f
-            ControlDensity.ICON_ONLY -> 9.5f
-        }
-        button.font = button.font.deriveFont(targetSize)
-        sdkTextLabel.font = button.font
-        sdkArrowLabel.font = button.font
-    }
-
-    private fun styleSelectorButton(button: JButton) {
-        button.isFocusable = false
-        button.isOpaque = false
-        button.isContentAreaFilled = false
-        button.margin = Insets(0, 0, 0, 0)
-        button.border = BorderFactory.createEmptyBorder(2, 0, 2, 0)
-    }
-
-    private fun stylePrimaryActionButton(button: JButton) {
-        AssistantUiTheme.primaryButton(button)
-        button.text = ""
-        button.icon = ToolWindowIcons.send
-        button.preferredSize = Dimension(34, 34)
-        button.minimumSize = Dimension(34, 34)
-        button.maximumSize = Dimension(34, 34)
-        button.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(AssistantUiTheme.ACCENT, 1, true),
-            BorderFactory.createEmptyBorder(6, 6, 6, 6),
-        )
-    }
-
-    private fun styleStatusSnackbar() {
-        statusSnackbar.isOpaque = true
-        statusSnackbar.background = AssistantUiTheme.SURFACE_RAISED
-        statusSnackbar.border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(AssistantUiTheme.BORDER_SUBTLE, 1, true),
-            BorderFactory.createEmptyBorder(8, 10, 8, 10),
-        )
-        statusSpinnerLabel.isOpaque = false
-        statusSpinnerLabel.preferredSize = Dimension(16, 16)
-        statusSpinnerLabel.minimumSize = Dimension(16, 16)
-        statusSpinnerLabel.maximumSize = Dimension(16, 16)
-
-        statusTextLabel.isOpaque = false
-        statusTextLabel.foreground = AssistantUiTheme.TEXT_SECONDARY
-        statusTextLabel.font = statusTextLabel.font.deriveFont((11.5f - COMPOSER_FONT_SHRINK_PT).coerceAtLeast(9.5f))
-        statusTextLabel.border = BorderFactory.createEmptyBorder(0, 2, 0, 0)
-        statusSnackbar.add(statusSpinnerLabel, BorderLayout.WEST)
-        statusSnackbar.add(statusTextLabel, BorderLayout.CENTER)
-        hideStatusSnackbar()
+        inputBoxView.updateChipContentVisibility(iconOnly)
     }
 
     private fun setRunningState(running: Boolean) {
         isRunning = running
-        actionButton.text = ""
-        actionButton.icon = if (running) ToolWindowIcons.stop else ToolWindowIcons.send
-        actionButton.toolTipText = if (running) "停止当前执行" else "发送当前输入"
+        inputBoxViewModel.setRunning(running)
         if (running) {
             refreshRunningStatusLabel()
         } else {
@@ -1164,53 +587,34 @@ class AgentToolWindowPanel(
         }
     }
 
-    private fun modelIconFor(model: String): javax.swing.Icon {
-        val normalized = model.trim().lowercase()
-        return if (normalized.contains("gpt")) ToolWindowIcons.gpt else ToolWindowIcons.codex
-    }
-
     private fun actionIcon(icon: Icon): Icon = ResizedIcon(icon, 14, 14)
 
     private fun actionArrowIcon(icon: Icon): Icon = ResizedIcon(icon, 13, 13)
 
-    private fun reasoningIconFor(depth: ReasoningDepth): javax.swing.Icon = when (depth) {
-        ReasoningDepth.LOW -> ToolWindowIcons.reasoningLow
-        ReasoningDepth.MEDIUM -> ToolWindowIcons.reasoningMedium
-        ReasoningDepth.HIGH -> ToolWindowIcons.reasoningHigh
-        ReasoningDepth.MAX -> ToolWindowIcons.reasoningMax
-    }
-
-    private fun engineIconFor(engineId: String, displayName: String): javax.swing.Icon {
-        val normalized = "$engineId $displayName".trim().lowercase()
-        return if (normalized.contains("gpt") || normalized.contains("openai")) ToolWindowIcons.gpt else ToolWindowIcons.codex
-    }
-
     private fun refreshRunningStatusLabel() {
         if (!isRunning) return
-        val elapsedMs = requestStartedAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it } ?: 0L
+        val elapsedMs = turnState.startedAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it } ?: 0L
         showStatusSnackbar(ToolWindowUiText.runningStatus(elapsedMs), loading = true)
     }
 
     private fun setStatusMessage(message: String) {
+        turnState.setStatus(message)
         updateStatusSnackbar(message, loading = false)
     }
 
     private fun showStatusSnackbar(message: String, loading: Boolean) {
-        updateStatusSnackbar(message, loading)
-        statusSnackbar.isVisible = true
+        turnState.setStatus(message)
+        inputBoxViewModel.setStatus(message, loading)
     }
 
     private fun updateStatusSnackbar(message: String, loading: Boolean) {
-        statusTextLabel.text = message
-        statusTextLabel.toolTipText = message
-        statusSpinnerLabel.icon = if (loading) AnimatedIcon.Default() else null
+        turnState.setStatus(message)
+        inputBoxViewModel.setStatus(message, loading)
     }
 
     private fun hideStatusSnackbar() {
-        statusSpinnerLabel.icon = null
-        statusTextLabel.text = ""
-        statusTextLabel.toolTipText = null
-        statusSnackbar.isVisible = false
+        turnState.setStatus("")
+        inputBoxViewModel.clearStatus()
     }
 
     private fun updateResponsiveLayout(force: Boolean = false) {
@@ -1249,12 +653,14 @@ class AgentToolWindowPanel(
         inputAndControlsPanel.preferredSize = Dimension(10, 150)
         inputAndControlsPanel.minimumSize = Dimension(10, 128)
 
-        styleSdkButton(sdkButton)
-        styleChip(modeChip)
-        styleChip(modelChip)
-        styleChip(reasoningChip)
+        val chipFontSize = when (controlDensity) {
+            ControlDensity.REGULAR -> 10.5f
+            ControlDensity.COMPACT -> 9.5f
+            ControlDensity.ICON_ONLY -> 9.5f
+        }
+        composerSettingsAction.applyChipStyles(chipFontSize)
         listOf(sdkButton, modeChip, modelChip, reasoningChip).forEach { button ->
-            updateChipContentVisibility(button)
+            updateChipContentVisibility()
             button.setPreferredSize(null)
             val naturalWidth = button.preferredSize.width
             val preferredWidth = if (controlDensity == ControlDensity.ICON_ONLY) {
@@ -1281,896 +687,57 @@ class AgentToolWindowPanel(
         }
     }
 
-    private fun showSdkMenu(anchor: JComponent) {
-        val chip = anchor as? JButton ?: return
-        val items = chatService.availableEngines().map { descriptor ->
-            UnifiedMenuItem(
-                icon = engineIconFor(descriptor.id, descriptor.displayName),
-                title = descriptor.displayName,
-                selected = descriptor.id == selectedEngineId,
-                onSelect = {
-                    selectedEngineId = descriptor.id
-                    val models = availableModels(selectedEngineId)
-                    if (!models.contains(selectedModel)) {
-                        selectedModel = models.firstOrNull() ?: CodexModelCatalog.defaultModel
-                    }
-                    refreshChipLabels()
-                },
-            )
-        }
-        showUnifiedChipMenu(chip, items)
-    }
-
-    private fun showModeMenu(anchor: JComponent) {
-        val chip = anchor as? JButton ?: return
-        val items = listOf(
-            UnifiedMenuItem(
-                icon = ToolWindowIcons.autoMode,
-                title = "自动",
-                selected = true,
-                onSelect = {
-                    refreshChipLabels()
-                },
-            ),
-        )
-        showUnifiedChipMenu(chip, items)
-    }
-
-    private fun showModelMenu(anchor: JComponent) {
-        val chip = anchor as? JButton ?: return
-        val items = availableModels(selectedEngineId).map { model ->
-            UnifiedMenuItem(
-                icon = modelIconFor(model),
-                title = model,
-                selected = model == selectedModel,
-                onSelect = {
-                    selectedModel = model
-                    refreshChipLabels()
-                },
-            )
-        }
-        showUnifiedChipMenu(chip, items)
-    }
-
-    private fun showReasoningMenu(anchor: JComponent) {
-        val chip = anchor as? JButton ?: return
-        val items = ReasoningDepth.entries.map { depth ->
-            UnifiedMenuItem(
-                icon = reasoningIconFor(depth),
-                title = depth.label,
-                selected = depth == selectedReasoningDepth,
-                onSelect = {
-                    selectedReasoningDepth = depth
-                    refreshChipLabels()
-                },
-            )
-        }
-        showUnifiedChipMenu(chip, items)
-    }
-
-    private fun availableModels(engineId: String): List<String> {
-        return chatService.engineDescriptor(engineId)?.models?.takeIf { it.isNotEmpty() } ?: listOf(CodexModelCatalog.defaultModel)
-    }
-
-    private fun createUnifiedMenuItem(
-        item: UnifiedMenuItem,
-        itemWidth: Int,
-        onSelect: () -> Unit,
-    ): JComponent {
-        val normalBackground = JBColor(0x161C24, 0x161C24)
-        val hoverBackground = JBColor(0x1D2631, 0x1D2631)
-        val selectedBackground = JBColor(0x154E7D, 0x154E7D)
-        val normalTitle = JBColor(0xE3ECF8, 0xE3ECF8)
-        val selectedTitle = JBColor(0xF4F8FF, 0xF4F8FF)
-
-        val iconLabel = JLabel().apply {
-            icon = item.icon
-            border = BorderFactory.createEmptyBorder(0, 0, 0, 8)
-        }
-        val titleLabel = JLabel(item.title).apply {
-            foreground = if (item.selected) selectedTitle else normalTitle
-            font = font.deriveFont(Font.BOLD, 12f)
-        }
-
-        lateinit var container: JPanel
-        val mouseListener = object : MouseAdapter() {
-            override fun mouseEntered(e: MouseEvent?) {
-                if (!item.selected) {
-                    container.background = hoverBackground
-                }
-            }
-
-            override fun mouseExited(e: MouseEvent?) {
-                if (!item.selected) {
-                    container.background = normalBackground
-                }
-            }
-
-            override fun mousePressed(e: MouseEvent?) {
-                onSelect()
-            }
-        }
-
-        container = JPanel(BorderLayout()).apply {
-            isOpaque = true
-            background = if (item.selected) selectedBackground else normalBackground
-            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(
-                    if (item.selected) JBColor(0x317DBA, 0x317DBA) else JBColor(0x202B39, 0x202B39),
-                    1,
-                    true,
-                ),
-                BorderFactory.createEmptyBorder(8, 10, 8, 10),
-            )
-            preferredSize = Dimension(itemWidth, 36)
-            maximumSize = Dimension(itemWidth, 36)
-            add(iconLabel, BorderLayout.WEST)
-            add(titleLabel, BorderLayout.CENTER)
-        }
-
-        listOf(container, iconLabel, titleLabel).forEach {
-            it.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-            it.addMouseListener(mouseListener)
-        }
-        return container
-    }
-
-    private fun showUnifiedChipMenu(chip: JButton, items: List<UnifiedMenuItem>) {
-        val itemWidth = computeMenuItemWidth()
-        val menu = JPopupMenu().apply {
-            isOpaque = true
-            background = JBColor(0x161C24, 0x161C24)
-            border = BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(JBColor(0x26384F, 0x26384F), 1, true),
-                BorderFactory.createEmptyBorder(4, 4, 4, 4),
-            )
-            addPopupMenuListener(object : PopupMenuListener {
-                override fun popupMenuWillBecomeVisible(e: PopupMenuEvent?) {
-                    setChipExpanded(chip, expanded = true)
-                }
-
-                override fun popupMenuWillBecomeInvisible(e: PopupMenuEvent?) {
-                    setChipExpanded(chip, expanded = false)
-                }
-
-                override fun popupMenuCanceled(e: PopupMenuEvent?) {
-                    setChipExpanded(chip, expanded = false)
-                }
-            })
-        }
-        items.forEach { item ->
-            menu.add(
-                createUnifiedMenuItem(item, itemWidth) {
-                    item.onSelect()
-                    menu.isVisible = false
-                },
-            )
-        }
-        menu.show(chip, 0, chip.height)
-    }
-
     private fun computeMenuItemWidth(): Int {
         val available = composerContainer.width.takeIf { it > 0 } ?: DEFAULT_MENU_ITEM_WIDTH
         return (available - 24).coerceIn(MIN_MENU_ITEM_WIDTH, DEFAULT_MENU_ITEM_WIDTH)
     }
 
     private fun currentCapabilities(): EngineCapabilities {
-        return chatService.engineDescriptor(selectedEngineId)?.capabilities ?: EngineCapabilities(
-            supportsThinking = true,
-            supportsToolEvents = true,
-            supportsCommandProposal = false,
-            supportsDiffProposal = false,
-        )
-    }
-
-    private fun buildChatHtml(messages: List<ChatMessage>, streamingText: String?): String {
-        val items = renderMessageItems(messages)
-        val streaming = renderStreamingState(streamingText)
-
-        return """
-            <html>
-              <head>
-                <style>
-                  body { font-family: -apple-system, Segoe UI, sans-serif; background:#0C1118; color:#DFE7F2; margin:0; padding:12px 10px 14px 10px; }
-                  a { color:#8FBCFF; text-decoration:none; }
-                  a:hover { text-decoration:underline; }
-                  .meta { font-size:12px; color:#8E9AAF; margin-bottom:6px; }
-                  .card { border:1px solid #253244; border-radius:12px; background:#131A24; }
-                  .section-card { margin:8px 0 10px 0; border:1px solid #26384F; border-radius:10px; background:#101823; padding:9px 11px; }
-                  .section-title { font-size:11px; color:#9AB1CE; margin-bottom:7px; letter-spacing:.2px; }
-                  .step-line { position:relative; margin:0 0 8px 0; padding-left:18px; border-left:1px solid #2A3C56; }
-                  .step-dot { position:absolute; left:-4px; top:4px; display:inline-block; width:8px; height:8px; border-radius:50%; }
-                  .action-card { margin:8px 0; border:1px solid #2C3C52; background:#131C29; border-radius:10px; padding:10px 12px; }
-                  .btn-link { font-size:11px; color:#9DC1FF; border:1px solid #3A4D70; background:#1F2B3D; border-radius:8px; padding:2px 8px; text-decoration:none; margin-right:8px; }
-                  .turn-row { display:flex; align-items:stretch; gap:8px; margin:4px 0 10px 0; }
-                  .timeline-col { width:14px; position:relative; }
-                  .timeline-dot { width:8px; height:8px; border-radius:50%; margin:8px 0 0 2px; position:relative; z-index:2; }
-                  .timeline-line { position:absolute; left:5px; top:0; bottom:-8px; width:1px; background:#2A3B55; z-index:1; }
-                  .turn-main { flex:1; min-width:0; }
-                  .turn-summary { border:1px solid #2D3E56; background:#121B28; border-radius:10px; padding:10px 12px; }
-                  .turn-summary-title { display:flex; justify-content:space-between; align-items:center; color:#D9E4F4; font-size:13px; }
-                  .turn-summary-meta { margin-top:6px; font-size:12px; color:#AFC1D8; line-height:1.45; }
-                </style>
-              </head>
-              <body>
-                $items
-                $streaming
-              </body>
-            </html>
-        """.trimIndent()
-    }
-
-    private fun renderMessageItems(messages: List<ChatMessage>): String {
-        val lastMessageId = messages.lastOrNull()?.id.orEmpty()
-        val cacheValid = cachedMessageCount == messages.size &&
-            cachedLastMessageId == lastMessageId &&
-            cachedToolDetailMode == expandAllTools
-        if (cacheValid) {
-            return cachedMessagesHtml
-        }
-
-        val turns = buildTurnViewModels(messages)
-        cachedMessagesHtml = turns.mapIndexed { index, turn ->
-            renderTurnRow(turn, isLast = index == turns.lastIndex)
-        }.joinToString("")
-        cachedMessageCount = messages.size
-        cachedLastMessageId = lastMessageId
-        cachedToolDetailMode = expandAllTools
-        return cachedMessagesHtml
-    }
-
-    private fun buildTurnViewModels(messages: List<ChatMessage>): List<TurnViewModel> {
-        if (messages.isEmpty()) return emptyList()
-        val result = mutableListOf<TurnViewModel>()
-        var currentUser: ChatMessage? = null
-        var currentAssistant: ChatMessage? = null
-        val currentSystems = mutableListOf<ChatMessage>()
-        var currentTurnId = ""
-
-        fun flush() {
-            if (currentUser == null && currentAssistant == null && currentSystems.isEmpty()) return
-            val idSource = currentAssistant?.id ?: currentUser?.id ?: "turn-${result.size + 1}"
-            result.add(
-                TurnViewModel(
-                    id = "turn-$idSource",
-                    userMessage = currentUser,
-                    assistantMessage = currentAssistant,
-                    systemMessages = currentSystems.toList(),
-                ),
-            )
-            currentUser = null
-            currentAssistant = null
-            currentSystems.clear()
-            currentTurnId = ""
-        }
-
-        messages.forEach { msg ->
-            when (msg.role) {
-                MessageRole.USER -> {
-                    flush()
-                    currentUser = msg
-                    currentTurnId = "turn-${msg.id}"
-                }
-                MessageRole.ASSISTANT -> {
-                    if (currentUser == null && currentSystems.isNotEmpty() && currentAssistant == null) {
-                        currentAssistant = msg
-                    } else if (currentAssistant == null) {
-                        currentAssistant = msg
-                    } else {
-                        flush()
-                        currentAssistant = msg
-                        currentTurnId = "turn-${msg.id}"
-                    }
-                }
-                MessageRole.SYSTEM -> {
-                    if (currentUser == null && currentAssistant == null && currentTurnId.isBlank()) {
-                        currentTurnId = "turn-${msg.id}"
-                    }
-                    currentSystems.add(msg)
-                }
-            }
-        }
-        flush()
-        return result
-    }
-
-    private fun renderTurnRow(turn: TurnViewModel, isLast: Boolean): String {
-        val dotColor = when {
-            turn.systemMessages.any { it.content.contains("Error:", ignoreCase = true) || it.content.contains("失败") } -> "#E86D6D"
-            turn.assistantMessage != null -> "#71D37C"
-            else -> "#4D6D98"
-        }
-        val lineHtml = if (isLast) "" else """<div class="timeline-line"></div>"""
-        val userHtml = turn.userMessage?.let {
-            val t = Instant.ofEpochMilli(it.timestamp).atZone(ZoneId.systemDefault()).format(timeFormatter)
-            renderUserBubble(it, t)
-        }.orEmpty()
-        val assistantExpanded = expandedTurnIds.contains(turn.id)
-        val turnToggleHtml = if (turn.assistantMessage != null && assistantExpanded) {
-            val toggleHref = buildToggleTurnHref(turn.id)
-            """<div style="text-align:right; margin:2px 0 4px 0;"><a class="btn-link" href="$toggleHref">收起</a></div>"""
-        } else ""
-        val assistantHtml = turn.assistantMessage?.let { assistant ->
-            val expanded = expandedTurnIds.contains(turn.id)
-            if (expanded) {
-                val t = Instant.ofEpochMilli(assistant.timestamp).atZone(ZoneId.systemDefault()).format(timeFormatter)
-                renderAgentCard(assistant, t, showLegacyToggles = false)
-            } else {
-                renderCollapsedTurnCard(turn)
-            }
-        }.orEmpty()
-        val showSystems = expandedTurnIds.contains(turn.id) || turn.assistantMessage == null
-        val systemHtml = if (showSystems) {
-            turn.systemMessages.joinToString("") { msg ->
-                val t = Instant.ofEpochMilli(msg.timestamp).atZone(ZoneId.systemDefault()).format(timeFormatter)
-                renderSystemEventCard(msg, t)
-            }
-        } else ""
-
-        return """
-            <div class="turn-row">
-              <div class="timeline-col">
-                <div class="timeline-dot" style="background:$dotColor;"></div>
-                $lineHtml
-              </div>
-              <div class="turn-main">
-                $userHtml
-                $turnToggleHtml
-                $assistantHtml
-                $systemHtml
-              </div>
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderCollapsedTurnCard(turn: TurnViewModel): String {
-        val assistant = turn.assistantMessage ?: return ""
-        val sections = extractSections(assistant.content)
-        val response = sections["response"].orEmpty()
-        val tools = parseToolLines(sections["tools"].orEmpty())
-        val commands = parseCommandLines(sections["commands"].orEmpty())
-        val fallback = if (sections.isEmpty()) assistant.content else ""
-        val responseText = if (response.isNotBlank()) response else fallback
-        val effectiveTools = if (tools.isNotEmpty()) tools else inferToolLinesFromResponse(responseText)
-        val effectiveCommands = if (commands.isNotEmpty()) commands else inferCommandLinesFromResponse(responseText)
-        val changedFiles = extractChangedFiles(effectiveTools)
-
-        val plus = changedFiles.mapNotNull { it.delta.takeIf { d -> d.startsWith("+") }?.removePrefix("+")?.toIntOrNull() }.sum()
-        val minus = changedFiles.mapNotNull { it.delta.takeIf { d -> d.startsWith("-") }?.removePrefix("-")?.toIntOrNull() }.sum()
-        val title = when {
-            changedFiles.isNotEmpty() -> "编辑文件 (${changedFiles.size})"
-            effectiveCommands.isNotEmpty() -> "执行命令 (${effectiveCommands.size})"
-            else -> "任务结果"
-        }
-        val summary = responseText
-            .lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isNotBlank() }
-            ?.take(120)
-            ?: "已完成一次任务处理。"
-        val deltaText = buildString {
-            if (plus > 0) append(" +").append(plus)
-            if (minus > 0) {
-                if (isNotBlank()) append(" ")
-                append("-").append(minus)
-            }
-        }.ifBlank { " 无文件增减" }
-        val toggleHref = buildToggleTurnHref(turn.id)
-
-        return """
-            <div style="margin: 8px 0 14px 0;">
-              <div class="turn-summary">
-                <div class="turn-summary-title">
-                  <span>$title<span style="color:#8FA5C1; margin-left:8px;">$deltaText</span></span>
-                  <a class="btn-link" href="$toggleHref">展开</a>
-                </div>
-                <div class="turn-summary-meta">${escapeHtml(summary)}</div>
-              </div>
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderUserBubble(msg: ChatMessage, timeText: String): String {
-        val copyHref = buildCopyHref(msg.id)
-        return """
-            <div style="margin: 10px 0 12px 0; text-align:right;">
-              <div style="font-size:12px; color:#9EA8B8; margin-bottom:6px;">$timeText <a href="$copyHref" style="color:#9EA8B8; text-decoration:none; margin-left:6px;">⧉</a></div>
-              <div style="display:inline-block; max-width:80%; background:#2F68C5; color:#F2F7FF; border-radius:14px; padding:12px 14px; box-shadow:0 1px 0 rgba(0,0,0,.25);">
-                <div style="font-size:15px; line-height:1.45; text-align:left;">${renderStructuredContent(msg.content)}</div>
-              </div>
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderAgentCard(msg: ChatMessage, timeText: String, showLegacyToggles: Boolean = true): String {
-        val sections = extractSections(msg.content)
-        val response = sections["response"].orEmpty()
-        val thinking = sections["thinking"].orEmpty()
-        val tools = parseToolLines(sections["tools"].orEmpty())
-        val commands = parseCommandLines(sections["commands"].orEmpty())
-        val fallback = if (sections.isEmpty()) msg.content else ""
-        val responseText = if (response.isNotBlank()) response else fallback
-
-        val thinkingExpanded = expandedThinkingMessageIds.contains(msg.id)
-        val thinkingToggle = buildToggleHref("toggle-thinking", msg.id)
-        val toolsExpanded = expandAllTools || expandedToolMessageIds.contains(msg.id)
-        val toolsToggle = buildToggleHref("toggle-tools", msg.id)
-        val commandsExpanded = expandedCommandMessageIds.contains(msg.id)
-        val commandsToggle = buildToggleHref("toggle-commands", msg.id)
-
-        val actionBarHtml = if (!showLegacyToggles) "" else """
-            <div style="margin:0 0 8px 0; font-size:11px; color:#8FB6F4; line-height:1.4;">
-              <a href="$toolsToggle" style="color:#8FB6F4;">${if (toolsExpanded) "收起工具详情" else "展开工具详情"}</a>
-              <span style="color:#4E607A; margin:0 6px;">|</span>
-              <a href="$commandsToggle" style="color:#8FB6F4;">${if (commandsExpanded) "收起命令详情" else "展开命令详情"}</a>
-              <span style="color:#4E607A; margin:0 6px;">|</span>
-              <a href="$thinkingToggle" style="color:#8FB6F4;">${if (thinkingExpanded) "收起思考" else "展开思考"}</a>
-            </div>
-        """.trimIndent()
-
-        val effectiveTools = if (tools.isNotEmpty()) tools else inferToolLinesFromResponse(responseText)
-        val effectiveCommands = if (commands.isNotEmpty()) commands else inferCommandLinesFromResponse(responseText)
-        val toolRowItems = effectiveTools.mapIndexed { index, line ->
-            val meta = parseToolMeta(line)
-            FlowStepRow(
-                sequence = meta.sequence,
-                startedAtMs = meta.startedAtMs,
-                html = renderToolStepRow(index + 1, line, toolsExpanded),
-                order = index,
-            )
-        }
-        val commandRowItems = effectiveCommands.mapIndexed { index, line ->
-            val meta = parseCommandMeta(line)
-            FlowStepRow(
-                sequence = meta.sequence,
-                startedAtMs = meta.startedAtMs,
-                html = renderCommandStepRow(index + 1, line, commandsExpanded),
-                order = 1_000 + index,
-            )
-        }
-        val mergedRows = (toolRowItems + commandRowItems)
-            .sortedWith(
-                compareBy<FlowStepRow> { it.sequence ?: Int.MAX_VALUE }
-                    .thenBy { it.startedAtMs ?: Long.MAX_VALUE }
-                    .thenBy { it.order },
-            )
-            .joinToString("") { it.html }
-        val processHtml = if (mergedRows.isBlank()) "" else """
-            <div class="section-card">
-              <div class="section-title">执行流程</div>
-              $mergedRows
-            </div>
-        """.trimIndent()
-
-        val summaryHtml = if (responseText.isBlank()) "" else """
-            <div class="section-card">
-              <div class="section-title">结果摘要</div>
-              <div style="font-size:14px; color:#D8E1EE; line-height:1.5;">${renderStructuredContent(responseText)}</div>
-            </div>
-        """.trimIndent()
-
-        val changedFiles = extractChangedFiles(effectiveTools)
-        val changedFileCards = if (changedFiles.isEmpty()) "" else {
-            val cards = changedFiles.joinToString("") { file ->
-                val openHref = buildOpenFileHref(file.path)
-                val retryHref = buildRetryHref("edit_file", file.path)
-                val diffHref = toolsToggle
-                val delta = if (file.delta.isBlank()) "" else " ${escapeHtml(file.delta)}"
-                """
-                <div class="action-card">
-                  <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <div style="font-size:13px; color:#D8E3F3;">编辑文件 · <strong>${escapeHtml(file.name)}</strong>$delta</div>
-                    <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#71D37C;"></span>
-                  </div>
-                  <div style="margin-top:5px; font-size:11px; color:#8FA5C1;">${escapeHtml(file.path)}</div>
-                  <div style="margin-top:7px;">
-                    <a class="btn-link" href="$diffHref">Diff</a>
-                    <a class="btn-link" href="$retryHref">重试</a>
-                    <a class="btn-link" href="$openHref">打开文件</a>
-                  </div>
-                </div>
-                """.trimIndent()
-            }
-            """
-            <div class="section-card">
-              <div class="section-title">修改文件</div>
-              $cards
-            </div>
-            """.trimIndent()
-        }
-
-        val commandCards = if (effectiveCommands.isEmpty()) "" else {
-            val cards = effectiveCommands.mapIndexed { index, line ->
-                renderCommandCard(line, commandsExpanded, index)
-            }.joinToString("")
-            """
-            <div class="section-card">
-              <div class="section-title">命令执行</div>
-              $cards
-            </div>
-            """.trimIndent()
-        }
-
-        val thinkingHtml = if (thinking.isBlank()) {
-            ""
-        } else if (thinkingExpanded) {
-            """
-            <div class="section-card">
-              <div class="section-title">思考过程 <a href="$thinkingToggle" style="margin-left:6px; color:#8DAEDB;">收起</a></div>
-              <div style="font-size:12px; color:#D6DDE8; line-height:1.4;">${renderStructuredContent(thinking)}</div>
-            </div>
-            """.trimIndent()
-        } else {
-            """<div style="margin:6px 0 0 0; font-size:11px; color:#93A6BF;">思考过程已折叠 <a href="$thinkingToggle" style="margin-left:6px; color:#8DAEDB;">展开</a></div>"""
-        }
-
-        val copyHref = buildCopyHref(msg.id)
-
-        return """
-            <div style="margin: 8px 0 14px 0;">
-              <div style="font-size:12px; color:#9EA8B8; margin-bottom:6px;">${escapeHtml(msg.role.label())} $timeText <a href="$copyHref" style="color:#9EA8B8; text-decoration:none; margin-left:6px;">⧉</a></div>
-              <div style="max-width:94%; padding:10px 12px;" class="card">
-                $actionBarHtml
-                $processHtml
-                $summaryHtml
-                $changedFileCards
-                $commandCards
-                $thinkingHtml
-              </div>
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderToolStepRow(index: Int, toolLine: String, expanded: Boolean): String {
-        val meta = parseToolMeta(toolLine)
-        val statusLabel = when (meta.status) {
-            "done" -> "完成"
-            "failed" -> "失败"
-            else -> "执行中"
-        }
-        val dot = when (meta.status) {
-            "done" -> "#71D37C"
-            "failed" -> "#E86D6D"
-            else -> "#E2C06B"
-        }
-        val timing = buildString {
-            meta.startedAtMs?.let { append(formatClockTime(it)) }
-            meta.durationMs?.let {
-                if (isNotBlank()) append(" · ")
-                append(formatDuration(it))
-            }
-        }
-        val details = if (!expanded) "" else {
-            toolLine.split(" | ")
-                .filter { it.startsWith("in: ") || it.startsWith("out: ") }
-                .joinToString(" · ")
-        }
-        return """
-            <div class="step-line">
-              <span class="step-dot" style="background:$dot;"></span>
-              <div style="font-size:12px; color:#C8D6EA;">工具 $index · ${escapeHtml(meta.name)} · $statusLabel</div>
-              ${if (timing.isBlank()) "" else """<div style="font-size:10px; color:#8EA4C2; margin-top:2px;">$timing</div>"""}
-              ${if (details.isBlank()) "" else """<div style="font-size:11px; color:#9AAFC8; margin-top:3px;">${escapeHtml(details)}</div>"""}
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderCommandStepRow(index: Int, commandLine: String, expanded: Boolean): String {
-        val meta = parseCommandMeta(commandLine)
-        val status = meta.status.lowercase()
-        val statusLabel = when (status) {
-            "done" -> "已完成"
-            "failed" -> "失败"
-            "running" -> "执行中"
-            "skipped" -> "已跳过"
-            else -> "待确认"
-        }
-        val dot = when (status) {
-            "done" -> "#71D37C"
-            "failed" -> "#E86D6D"
-            "running" -> "#E2C06B"
-            "skipped" -> "#8E9AAF"
-            else -> "#B5C3D8"
-        }
-        val timing = buildString {
-            meta.startedAtMs?.let { append(formatClockTime(it)) }
-            meta.durationMs?.let {
-                if (isNotBlank()) append(" · ")
-                append(formatDuration(it))
-            }
-        }
-        val detailHtml = if (!expanded) {
-            ""
-        } else {
-            buildString {
-                if (meta.cwd.isNotBlank()) append("""<div style="font-size:11px; color:#9AAFC8; margin-top:3px;">目录: ${escapeHtml(meta.cwd)}</div>""")
-                meta.exitCode?.let { code ->
-                    val c = if (code == 0) "#71D37C" else "#E86D6D"
-                    append("""<div style="font-size:11px; color:$c; margin-top:3px;">exit code: $code</div>""")
-                }
-                if (meta.output.isNotBlank()) append("""<div style="font-size:11px; color:#9AAFC8; margin-top:3px;">输出: ${escapeHtml(meta.output)}</div>""")
-                if (meta.command.isNotBlank()) {
-                    val copyHref = buildCopyCommandHref(meta.command)
-                    val retryHref = buildRetryCommandHref(meta.command, meta.cwd)
-                    append("""<div style="margin-top:4px;"><a href="$copyHref" style="font-size:11px; color:#8FB6F4; margin-right:8px;">复制命令</a><a href="$retryHref" style="font-size:11px; color:#8FB6F4;">重试</a></div>""")
-                }
-            }
-        }
-        return """
-            <div class="step-line">
-              <span class="step-dot" style="background:$dot;"></span>
-              <div style="font-size:12px; color:#C8D6EA;">命令 $index · $statusLabel · ${escapeHtml(meta.command.ifBlank { "待确认命令" }.take(80))}</div>
-              ${if (timing.isBlank()) "" else """<div style="font-size:10px; color:#8EA4C2; margin-top:2px;">$timing</div>"""}
-              $detailHtml
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderSystemEventCard(msg: ChatMessage, timeText: String): String {
-        val copyHref = buildCopyHref(msg.id)
-        val (riskLabel, riskColor) = systemRiskTag(msg.content)
-        val riskChip = if (riskLabel.isBlank()) "" else {
-            """<span style="display:inline-block; margin-right:8px; font-size:11px; border-radius:999px; padding:1px 8px; color:$riskColor; border:1px solid $riskColor;">$riskLabel</span>"""
-        }
-        return """
-            <div style="margin: 8px 0 12px 0;">
-              <div class="meta">${riskChip}系统消息 $timeText <a href="$copyHref" style="color:#9EA8B8; text-decoration:none; margin-left:6px;">⧉</a></div>
-              <div style="max-width:94%; border:1px dashed #33465E; background:#0F151F; border-radius:10px; padding:8px 10px;">
-                <div style="font-size:12px; color:#AFC0D8; line-height:1.45;">${renderStructuredContent(msg.content)}</div>
-              </div>
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderToolSummaryBar(
-        toolLine: String,
-        toolsExpanded: Boolean,
-        toolsToggleHref: String,
-        canExpand: Boolean,
-        expandLabel: String,
-    ): String {
-        val parts = toolLine.split(" | ").map { it.trim() }
-        val status = parts.firstOrNull()?.lowercase().orEmpty()
-        val name = parts.getOrNull(2).orEmpty().ifBlank { "tool" }
-        val input = parts.firstOrNull { it.startsWith("in: ") }?.removePrefix("in: ").orEmpty()
-        val output = parts.firstOrNull { it.startsWith("out: ") }?.removePrefix("out: ").orEmpty()
-        val summaryLabel = toolSummaryLabel(name, input, output)
-        val isEdit = summaryLabel.contains("编辑")
-
-        val pathMatch = Regex("""([A-Za-z0-9_./-]+\.(kt|java|kts|xml|md|json|yaml|yml|js|ts|tsx|jsx|py|go|rs))""").find("$input $output")
-        val filePath = pathMatch?.groupValues?.get(1).orEmpty()
-        val fileName = filePath.let { if (it.isBlank()) "" else File(it).name }
-        val delta = Regex("""([+-]\d+)""").find(output)?.groupValues?.get(1).orEmpty()
-        val fileHtml = if (fileName.isBlank()) {
-            ""
-        } else {
-            val openHref = buildOpenFileHref(filePath)
-            """<a href="$openHref" style="color:#62A8FF; font-weight:600; margin-left:6px;">${escapeHtml(fileName)}</a>"""
-        }
-        val deltaHtml = if (delta.isBlank()) "" else """<span style="color:#7EDC8A; font-weight:600; margin-left:6px;">${escapeHtml(delta)}</span>"""
-        val diffChip = if (isEdit) {
-            """<span style="font-size:11px; color:#D6DDEA; border:1px solid #3A4351; background:#252B35; border-radius:6px; padding:2px 7px; margin-right:6px;">改动</span>"""
-        } else ""
-        val title = if (isEdit) "编辑文件" else summaryLabel
-        val expandLink = if (canExpand) {
-            val tone = if (toolsExpanded) "#AAC2E6" else "#8FB6F4"
-            """<a href="$toolsToggleHref" style="font-size:11px; color:$tone; margin-right:8px;">$expandLabel</a>"""
-        } else ""
-        val dotColor = when (status) {
-            "done" -> "#4FCC6A"
-            "failed" -> "#E86D6D"
-            else -> "#E2C06B"
-        }
-
-        return """
-            <div style="max-width:94%; border:1px solid #2A3140; border-radius:10px; background:#151922; padding:10px 12px; margin-bottom:8px;">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div style="color:#D6DEEC; font-size:13px;">✎ ${escapeHtml(title)}$fileHtml$deltaHtml</div>
-                <div>$expandLink$diffChip<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:$dotColor;"></span></div>
-              </div>
-            </div>
-        """.trimIndent()
-    }
-
-    private fun inferToolLineFromContent(text: String): String? {
-        if (text.isBlank()) return null
-        val filePatterns = listOf(
-            Regex("""修改文件\s*[:：]\s*([^\s`]+)""", RegexOption.IGNORE_CASE),
-            Regex("""(?:file|filepath|path)\s*[:：]\s*([^\s`]+)""", RegexOption.IGNORE_CASE),
-        )
-        val filePath = filePatterns.firstNotNullOfOrNull { it.find(text)?.groupValues?.getOrNull(1) } ?: return null
-        val normalizedPath = filePath.trim().trim('`', '"', '\'')
-        if (normalizedPath.isBlank()) return null
-        return "done | id:inferred | write | in: $normalizedPath | out: inferred"
-    }
-
-    private fun renderStreamingState(streamingText: String?): String {
-        if (!isRunning) return ""
-
-        val elapsedSeconds = elapsedSeconds()
-        val status = currentStatusText.ifBlank { "正在生成响应..." }
-        val spinnerFrames = arrayOf("◜", "◠", "◝", "◞", "◡", "◟")
-        val frame = spinnerFrames[elapsedSeconds % spinnerFrames.size]
-        val timerText = "已用 ${elapsedSeconds}s"
-        val liveFlowRows = buildList {
-            currentToolEventsBuffer.forEachIndexed { index, trace ->
-                val label = when {
-                    trace.failed -> "失败"
-                    trace.done -> "完成"
-                    else -> "执行中"
-                }
-                val dot = when {
-                    trace.failed -> "#E86D6D"
-                    trace.done -> "#71D37C"
-                    else -> "#E2C06B"
-                }
-                add(
-                    FlowStepRow(
-                        sequence = trace.sequence,
-                        startedAtMs = trace.startedAtMs.takeIf { it > 0L },
-                        html = """
-                            <div class="step-line" style="margin-bottom:6px;">
-                              <span class="step-dot" style="background:$dot;"></span>
-                              <div style="font-size:11px; color:#C7D6EA;">工具 ${index + 1} · ${escapeHtml(trace.name)} · $label</div>
-                            </div>
-                        """.trimIndent(),
-                        order = index,
-                    ),
-                )
-            }
-            currentCommandEventsBuffer.forEachIndexed { index, cmd ->
-                val label = when (cmd.status) {
-                    CommandStatus.DONE -> "已完成"
-                    CommandStatus.FAILED -> "失败"
-                    CommandStatus.RUNNING -> "执行中"
-                    CommandStatus.SKIPPED -> "已跳过"
-                    CommandStatus.PENDING -> "待确认"
-                }
-                val dot = when (cmd.status) {
-                    CommandStatus.DONE -> "#71D37C"
-                    CommandStatus.FAILED -> "#E86D6D"
-                    CommandStatus.RUNNING -> "#E2C06B"
-                    CommandStatus.SKIPPED -> "#8E9AAF"
-                    CommandStatus.PENDING -> "#B5C3D8"
-                }
-                add(
-                    FlowStepRow(
-                        sequence = cmd.sequence,
-                        startedAtMs = cmd.startedAtMs.takeIf { it > 0L },
-                        html = """
-                            <div class="step-line" style="margin-bottom:6px;">
-                              <span class="step-dot" style="background:$dot;"></span>
-                              <div style="font-size:11px; color:#C7D6EA;">命令 ${index + 1} · ${escapeHtml(cmd.command.ifBlank { "待确认命令" }.take(48))} · $label</div>
-                            </div>
-                        """.trimIndent(),
-                        order = 1_000 + index,
-                    ),
-                )
-            }
-        }.sortedWith(
-            compareBy<FlowStepRow> { it.sequence ?: Int.MAX_VALUE }
-                .thenBy { it.startedAtMs ?: Long.MAX_VALUE }
-                .thenBy { it.order },
-        )
-        val liveFlowHtml = if (liveFlowRows.isEmpty()) "" else """
-            <div class="section-card" style="margin-top:8px;">
-              <div class="section-title">执行流程（实时）</div>
-              ${liveFlowRows.joinToString("") { it.html }}
-            </div>
-        """.trimIndent()
-        val contentHtml = if (streamingText.isNullOrBlank()) "" else """
-            <div class="section-card" style="margin-top:8px;">
-              <div class="section-title">结果摘要（实时）</div>
-              ${renderStructuredContent(streamingText)}
-            </div>
-        """.trimIndent()
-
-        return """
-            <div style="margin: 10px 0 6px 0; border:1px solid #304057; border-radius:12px; background:#131A24; padding:10px 12px;">
-              <div style="font-size:11px; color:#8FA8C7; margin-bottom:6px;">处理中</div>
-              <table style="border-collapse:collapse; margin-bottom:6px;">
-                <tr>
-                  <td style="font-size:28px; color:#8D98AA; padding-right:8px; vertical-align:middle;">$frame</td>
-                  <td style="font-size:14px; color:#C9D2E0; vertical-align:middle;">
-                    ${escapeHtml(status)} <span style="color:#9FA9B9; margin-left:6px;">$timerText</span>
-                  </td>
-                </tr>
-              </table>
-              $liveFlowHtml
-              $contentHtml
-            </div>
-        """.trimIndent()
-    }
-
-    private fun buildStreamingPreviewMessage(): String {
-        val content = currentAssistantContentBuffer.toString().trim()
-        val thinking = currentThinkingBuffer.toString().trim()
-        return buildAssistantStructuredMessage(
-            content = content,
-            thinking = thinking,
-            tools = currentToolEventsBuffer,
-            commands = currentCommandEventsBuffer,
-            narratives = currentNarrativeEventsBuffer,
-            includeThinking = true,
-        )
+        return composerSettingsAction.currentCapabilities()
     }
 
     private fun buildLiveTurnSnapshot(): LiveTurnSnapshot? {
-        if (turnFinalized) {
-            return null
-        }
-        if (currentTimelineActionsBuffer.isNotEmpty()) {
-            return LiveTurnSnapshot(
-                statusText = currentStatusText,
-                actions = currentTimelineActionsBuffer.toList(),
-                isRunning = isRunning,
-                startedAtMs = requestStartedAtMs.takeIf { it > 0L },
-            )
-        }
-        val content = currentAssistantContentBuffer.toString().trim()
-        val thinking = currentThinkingBuffer.toString().trim()
-        val hasLiveContent = turnActive ||
-            currentStatusText.isNotBlank() ||
-            content.isNotBlank() ||
-            thinking.isNotBlank() ||
-            currentToolEventsBuffer.isNotEmpty() ||
-            currentCommandEventsBuffer.isNotEmpty()
-        if (!hasLiveContent) {
-            return null
-        }
-        return LiveTurnSnapshot(
-            statusText = currentStatusText,
-            assistantContent = content,
-            thinking = thinking,
-            notes = currentNarrativeEventsBuffer
-                .filter { it.body.isNotBlank() }
-                .map { trace ->
-                    LiveNarrativeTrace(
-                        id = trace.id,
-                        body = trace.body.trim(),
-                        sequence = trace.sequence,
-                        origin = trace.origin,
-                        kind = TimelineNodeKind.ASSISTANT_NOTE,
-                        timestamp = trace.startedAtMs.takeIf { it > 0L },
-                    )
-                },
+        return timelinePresenter.buildLiveTurnSnapshot(
+            turnState = turnState,
+            isRunning = isRunning,
+            assistantContent = currentAssistantContentBuffer.toString(),
+            thinkingContent = currentThinkingBuffer.toString(),
+            narratives = currentNarrativeEventsBuffer.map { trace ->
+                AgentTimelinePresenter.NarrativeTraceView(
+                    id = trace.id,
+                    sequence = trace.sequence,
+                    body = trace.body,
+                    origin = trace.origin,
+                    startedAtMs = trace.startedAtMs,
+                    source = trace.source.name,
+                )
+            },
             tools = currentToolEventsBuffer.map { trace ->
-                LiveToolTrace(
+                AgentTimelinePresenter.ToolTraceView(
                     id = trace.id,
                     name = trace.name,
+                    sequence = trace.sequence,
                     input = trace.input,
                     output = trace.output,
-                    status = when {
-                        trace.failed -> TimelineNodeStatus.FAILED
-                        trace.done -> TimelineNodeStatus.SUCCESS
-                        else -> TimelineNodeStatus.RUNNING
-                    },
-                    sequence = trace.sequence,
-                    startedAtMs = trace.startedAtMs.takeIf { it > 0L },
+                    done = trace.done,
+                    failed = trace.failed,
+                    startedAtMs = trace.startedAtMs,
+                    finishedAtMs = trace.finishedAtMs,
                 )
             },
             commands = currentCommandEventsBuffer.map { trace ->
-                LiveCommandTrace(
+                AgentTimelinePresenter.CommandTraceView(
                     id = trace.id,
+                    sequence = trace.sequence,
+                    status = trace.status.name,
                     command = trace.command,
                     cwd = trace.cwd,
-                    output = trace.output,
-                    status = when (trace.status) {
-                        CommandStatus.DONE -> TimelineNodeStatus.SUCCESS
-                        CommandStatus.FAILED -> TimelineNodeStatus.FAILED
-                        CommandStatus.SKIPPED -> TimelineNodeStatus.SKIPPED
-                        CommandStatus.PENDING,
-                        CommandStatus.RUNNING,
-                        -> TimelineNodeStatus.RUNNING
-                    },
-                    sequence = trace.sequence,
+                    startedAtMs = trace.startedAtMs,
+                    finishedAtMs = trace.finishedAtMs,
                     exitCode = trace.exitCode,
-                    startedAtMs = trace.startedAtMs.takeIf { it > 0L },
+                    output = trace.output,
                 )
             },
-            isRunning = isRunning,
-            startedAtMs = requestStartedAtMs.takeIf { it > 0L },
         )
     }
 
@@ -2182,53 +749,47 @@ class AgentToolWindowPanel(
         narratives: List<NarrativeTraceItem>,
         includeThinking: Boolean,
     ): String {
-        val sections = mutableListOf<String>()
-        if (includeThinking && thinking.isNotBlank()) {
-            sections.add("### Thinking\n$thinking")
-        }
-        if (content.isNotBlank()) {
-            sections.add("### Response\n$content")
-        }
-        val narrativeLines = serializeNarratives(narratives)
-        if (narrativeLines.isNotEmpty()) {
-            sections.add("### Narrative\n${narrativeLines.joinToString("\n") { "- $it" }}")
-        }
-        if (tools.isNotEmpty()) {
-            val toolLines = tools.joinToString("\n") { "- ${serializeToolTrace(it)}" }
-            sections.add("### Tools\n$toolLines")
-        }
-        if (commands.isNotEmpty()) {
-            val commandLines = commands.joinToString("\n") { "- ${serializeCommandTrace(it)}" }
-            sections.add("### Commands\n$commandLines")
-        }
-        return sections.joinToString("\n\n").trim()
-    }
-
-    private fun serializeNarratives(narratives: List<NarrativeTraceItem>): List<String> {
-        val cleaned = narratives
-            .map { it.copy(body = it.body.trim()) }
-            .filter { it.body.isNotBlank() }
-        if (cleaned.isEmpty()) return emptyList()
-        val lastContentIndex = cleaned.indexOfLast { it.source == NarrativeSource.CONTENT }
-        return cleaned.mapIndexed { index, trace ->
-            val kind = if (index == lastContentIndex) "result" else "note"
-            val body64 = Base64.getEncoder().encodeToString(trace.body.toByteArray(StandardCharsets.UTF_8))
-            buildString {
-                append(kind)
-                append(" | id:").append(trace.id)
-                append(" | seq:").append(trace.sequence)
-                append(" | origin:").append(
-                    when (trace.origin) {
-                        TimelineNodeOrigin.EVENT -> "event"
-                        TimelineNodeOrigin.INFERRED_RESPONSE -> "inferred_response"
-                    },
+        return timelinePresenter.buildAssistantStructuredMessage(
+            content = content,
+            thinking = thinking,
+            includeThinking = includeThinking,
+            narratives = narratives.map { trace ->
+                AgentTimelinePresenter.NarrativeTraceView(
+                    id = trace.id,
+                    sequence = trace.sequence,
+                    body = trace.body,
+                    origin = trace.origin,
+                    startedAtMs = trace.startedAtMs,
+                    source = trace.source.name,
                 )
-                if (trace.startedAtMs > 0L) {
-                    append(" | ts:").append(trace.startedAtMs)
-                }
-                append(" | body64:").append(body64)
-            }
-        }
+            },
+            tools = tools.map { trace ->
+                AgentTimelinePresenter.ToolTraceView(
+                    id = trace.id,
+                    name = trace.name,
+                    sequence = trace.sequence,
+                    input = trace.input,
+                    output = trace.output,
+                    done = trace.done,
+                    failed = trace.failed,
+                    startedAtMs = trace.startedAtMs,
+                    finishedAtMs = trace.finishedAtMs,
+                )
+            },
+            commands = commands.map { trace ->
+                AgentTimelinePresenter.CommandTraceView(
+                    id = trace.id,
+                    sequence = trace.sequence,
+                    status = trace.status.name,
+                    command = trace.command,
+                    cwd = trace.cwd,
+                    startedAtMs = trace.startedAtMs,
+                    finishedAtMs = trace.finishedAtMs,
+                    exitCode = trace.exitCode,
+                    output = trace.output,
+                )
+            },
+        )
     }
 
     private fun registerNarrativeContent(text: String) {
@@ -2282,364 +843,6 @@ class AgentToolWindowPanel(
         )
     }
 
-    private fun extractSections(content: String): Map<String, String> {
-        val pattern = Regex("(?m)^###\\s+(Thinking|Response|Tools|Commands)\\s*$")
-        val matches = pattern.findAll(content).toList()
-        if (matches.isEmpty()) return emptyMap()
-        val sections = linkedMapOf<String, String>()
-        matches.forEachIndexed { index, match ->
-            val name = match.groupValues[1].lowercase()
-            val start = match.range.last + 1
-            val end = if (index + 1 < matches.size) matches[index + 1].range.first else content.length
-            sections[name] = content.substring(start, end).trim()
-        }
-        return sections
-    }
-
-    private fun parseToolLines(text: String): List<String> {
-        return text.lines()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .map { if (it.startsWith("- ")) it.removePrefix("- ").trim() else it }
-    }
-
-    private fun parseCommandLines(text: String): List<String> {
-        return text.lines()
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-            .map { if (it.startsWith("- ")) it.removePrefix("- ").trim() else it }
-    }
-
-    private fun inferToolLinesFromResponse(text: String): List<String> {
-        if (text.isBlank()) return emptyList()
-        val rows = mutableListOf<String>()
-        val filePattern = Regex("""([A-Za-z0-9_./-]+\.(kt|kts|java|xml|md|json|yaml|yml|js|ts|tsx|jsx|py|go|rs))""")
-        filePattern.findAll(text).forEach { match ->
-            val path = match.groupValues[1]
-            if (rows.none { it.contains(path) }) {
-                rows.add("done | id:infer-tool-${rows.size + 1} | read_file | in: $path | out: inferred")
-            }
-        }
-        if (rows.isEmpty() && text.contains("修改文件")) {
-            rows.add("done | id:infer-tool-1 | edit_file | in: from response | out: inferred")
-        }
-        return rows
-    }
-
-    private fun inferCommandLinesFromResponse(text: String): List<String> {
-        if (text.isBlank()) return emptyList()
-        val lines = text.lines().map { it.trim() }
-        val rows = mutableListOf<String>()
-        lines.forEach { line ->
-            if (line.isBlank()) return@forEach
-            val looksLikeCmd = line.startsWith("$ ") ||
-                line.contains("/bin/zsh -lc") ||
-                line.contains("javac ") ||
-                line.contains("java ") ||
-                line.contains("gradle") ||
-                line.contains("find ") ||
-                line.contains("grep ") ||
-                line.contains("rg ")
-            if (looksLikeCmd) {
-                val command = line.removePrefix("$ ").trim()
-                rows.add("command | id:infer-cmd-${rows.size + 1} | status:done | cmd: $command | out: inferred")
-            }
-        }
-        return rows
-    }
-
-    private fun parseToolMeta(toolLine: String): ToolMeta {
-        val parts = toolLine.split(" | ").map { it.trim() }
-        val status = parts.firstOrNull()?.lowercase().orEmpty()
-        val name = parts.getOrNull(2).orEmpty().ifBlank { "tool" }
-        val sequence = parts.firstOrNull { it.startsWith("seq:") }
-            ?.removePrefix("seq:")
-            ?.trim()
-            ?.toIntOrNull()
-        val startedAtMs = parts.firstOrNull { it.startsWith("ts:") }
-            ?.removePrefix("ts:")
-            ?.trim()
-            ?.toLongOrNull()
-        val durationMs = parts.firstOrNull { it.startsWith("dur:") }
-            ?.removePrefix("dur:")
-            ?.trim()
-            ?.toLongOrNull()
-        return ToolMeta(
-            status = status,
-            name = name,
-            sequence = sequence,
-            startedAtMs = startedAtMs,
-            durationMs = durationMs,
-        )
-    }
-
-    private fun parseCommandMeta(commandLine: String): CommandMeta {
-        val parts = commandLine.split(" | ").map { it.trim() }
-        val id = parts.firstOrNull { it.startsWith("id:") }?.removePrefix("id:").orEmpty()
-        val status = parts.firstOrNull { it.startsWith("status:") }?.removePrefix("status:").orEmpty()
-        val sequence = parts.firstOrNull { it.startsWith("seq:") }?.removePrefix("seq:")?.trim()?.toIntOrNull()
-        val command = parts.firstOrNull { it.startsWith("cmd: ") }?.removePrefix("cmd: ").orEmpty()
-        val cwd = parts.firstOrNull { it.startsWith("cwd: ") }?.removePrefix("cwd: ").orEmpty()
-        val startedAtMs = parts.firstOrNull { it.startsWith("ts:") }?.removePrefix("ts:")?.trim()?.toLongOrNull()
-        val durationMs = parts.firstOrNull { it.startsWith("dur:") }?.removePrefix("dur:")?.trim()?.toLongOrNull()
-        val exitCode = parts.firstOrNull { it.startsWith("exit:") }?.removePrefix("exit:")?.trim()?.toIntOrNull()
-        val output = parts.firstOrNull { it.startsWith("out: ") }?.removePrefix("out: ").orEmpty()
-        return CommandMeta(
-            id = id,
-            status = status,
-            sequence = sequence,
-            command = command,
-            cwd = cwd,
-            startedAtMs = startedAtMs,
-            durationMs = durationMs,
-            exitCode = exitCode,
-            output = output,
-        )
-    }
-
-    private fun formatClockTime(epochMs: Long): String {
-        return Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault()).format(timeFormatter)
-    }
-
-    private fun formatDuration(durationMs: Long): String {
-        return ToolWindowUiText.formatDuration(durationMs)
-    }
-
-    private fun renderToolCard(toolLine: String, showDetails: Boolean, stepIndex: Int): String {
-        val parts = toolLine.split(" | ").map { it.trim() }
-        val status = parts.firstOrNull()?.lowercase().orEmpty()
-        val id = parts.getOrNull(1).orEmpty().removePrefix("id:")
-        val name = parts.getOrNull(2).orEmpty().ifBlank { "tool" }
-        val startedAtMs = parts.firstOrNull { it.startsWith("ts:") }?.removePrefix("ts:")?.trim()?.toLongOrNull()
-        val durationMs = parts.firstOrNull { it.startsWith("dur:") }?.removePrefix("dur:")?.trim()?.toLongOrNull()
-        val input = parts.firstOrNull { it.startsWith("in: ") }?.removePrefix("in: ").orEmpty()
-        val output = parts.firstOrNull { it.startsWith("out: ") }?.removePrefix("out: ").orEmpty()
-        val details = buildString {
-            if (input.isNotBlank()) append("输入: ").append(input)
-            if (output.isNotBlank()) {
-                if (isNotBlank()) append(" · ")
-                append("输出: ").append(output)
-            }
-        }.ifBlank { toolLine }
-        val escapedLine = escapeHtml(details)
-        val isFailure = status == "failed" || toolLine.contains("失败")
-        val isDone = status == "done" || toolLine.contains("完成")
-        val dotColor = when {
-            isFailure -> "#E86D6D"
-            isDone -> "#71D37C"
-            else -> "#E2C06B"
-        }
-        val showDiffBadge = details.contains("编辑") ||
-            details.contains("patch", ignoreCase = true) ||
-            details.contains("diff", ignoreCase = true) ||
-            details.contains("write", ignoreCase = true) ||
-            details.contains(".kt") || details.contains(".java")
-
-        val badge = if (showDiffBadge) {
-            """<span style="font-size:11px; color:#D6DDEA; border:1px solid #3A4351; background:#252B35; border-radius:8px; padding:2px 8px; margin-right:8px;">改动</span>"""
-        } else ""
-        val runningBadge = if (status == "running") {
-            """<span style="font-size:11px; color:#E7CF8A; border:1px solid #5A4B24; background:#2F2918; border-radius:8px; padding:2px 8px; margin-right:8px;">执行中</span>"""
-        } else ""
-        val summaryLabel = toolSummaryLabel(name, input, output)
-
-        val isShellTool = name.contains("bash", ignoreCase = true) ||
-            name.contains("shell", ignoreCase = true) ||
-            name.contains("command", ignoreCase = true) ||
-            input.startsWith("sh ") || input.startsWith("bash ")
-        val shellBlock = if (showDetails && isShellTool && input.isNotBlank()) {
-            """
-            <div style="margin-top:8px; padding:8px 10px; border-radius:8px; border:1px solid #394150; background:#171B22; font-family: Menlo, Consolas, monospace; font-size:12px; color:#DDE6F5;">$ ${escapeHtml(input)}</div>
-            """.trimIndent()
-        } else ""
-        val exitCodeMatch = Regex("""exit code[:\s]+\[?(-?\d+)\]?""", RegexOption.IGNORE_CASE).find(output)
-        val exitCodeHtml = if (showDetails && exitCodeMatch != null) {
-            val code = exitCodeMatch.groupValues[1]
-            val codeColor = if (code == "0") "#71D37C" else "#E86D6D"
-            """<div style="margin-top:6px; font-size:12px; color:$codeColor;">exit code: $code</div>"""
-        } else ""
-        val retryLink = if (isFailure && id.isNotBlank()) {
-            val href = buildRetryHref(name, input)
-            """<a href="$href" style="font-size:11px; color:#9DC1FF; border:1px solid #3A4D70; background:#1F2B3D; border-radius:8px; padding:2px 8px; text-decoration:none; margin-right:8px;">重试</a>"""
-        } else ""
-        val detailHtml = if (showDetails) {
-            """<div style="color:#97A3B8; font-size:12px;">$escapedLine</div>"""
-        } else {
-            """<div style="color:#97A3B8; font-size:12px;">${escapeHtml(name)} · ${if (isFailure) "失败" else if (isDone) "完成" else "执行中"}</div>"""
-        }
-        val timingLabel = buildString {
-            if (startedAtMs != null) {
-                append("开始 ").append(formatClockTime(startedAtMs))
-            }
-            if (durationMs != null) {
-                if (isNotBlank()) append(" · ")
-                append("耗时 ").append(formatDuration(durationMs))
-            }
-        }
-        val timingHtml = if (timingLabel.isBlank()) "" else {
-            """<div style="color:#8EA4C2; font-size:11px; margin-bottom:6px;">$timingLabel</div>"""
-        }
-
-        return """
-            <div style="margin:8px 0; border:1px solid #2A3140; background:#141821; border-radius:10px; padding:10px 12px;">
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                <div style="color:#D6DEEC; font-size:13px;">步骤 $stepIndex · ${renderInlineFormatting(summaryLabel)}</div>
-                <div>$retryLink$badge$runningBadge<span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:$dotColor;"></span></div>
-              </div>
-              $timingHtml
-              $detailHtml
-              $shellBlock
-              $exitCodeHtml
-            </div>
-        """.trimIndent()
-    }
-
-    private fun renderCommandCard(commandLine: String, showDetails: Boolean, index: Int): String {
-        val meta = parseCommandMeta(commandLine)
-        val statusLabel = when (meta.status.lowercase()) {
-            "running" -> "执行中"
-            "done" -> "已完成"
-            "failed" -> "失败"
-            "skipped" -> "已跳过"
-            else -> "待确认"
-        }
-        val dotColor = when (meta.status.lowercase()) {
-            "running" -> "#E2C06B"
-            "done" -> "#71D37C"
-            "failed" -> "#E86D6D"
-            "skipped" -> "#8E9AAF"
-            else -> "#B5C3D8"
-        }
-        val timingLabel = buildString {
-            meta.startedAtMs?.let { append("开始 ").append(formatClockTime(it)) }
-            meta.durationMs?.let {
-                if (isNotBlank()) append(" · ")
-                append("耗时 ").append(formatDuration(it))
-            }
-        }
-        val timingHtml = if (timingLabel.isBlank()) "" else """<div style="font-size:11px; color:#8EA4C2; margin-top:2px;">$timingLabel</div>"""
-        val retryHref = if (meta.command.isBlank()) "" else buildRetryCommandHref(meta.command, meta.cwd)
-        val copyHref = if (meta.command.isBlank()) "" else buildCopyCommandHref(meta.command)
-        val actionsHtml = if (!showDetails) {
-            ""
-        } else {
-            buildString {
-                if (retryHref.isNotBlank()) append("""<a class="btn-link" href="$retryHref">重试</a>""")
-                if (copyHref.isNotBlank()) append("""<a class="btn-link" href="$copyHref">复制命令</a>""")
-            }
-        }
-        val detailHtml = if (!showDetails) "" else {
-            val commandBlock = if (meta.command.isBlank()) "" else """
-                <div style="margin-top:8px; padding:8px 10px; border-radius:8px; border:1px solid #394150; background:#171B22; font-family: Menlo, Consolas, monospace; font-size:12px; color:#DDE6F5;">$ ${escapeHtml(meta.command)}</div>
-            """.trimIndent()
-            val cwdBlock = if (meta.cwd.isBlank()) "" else """<div style="font-size:11px; color:#94A7C1; margin-top:6px;">目录: ${escapeHtml(meta.cwd)}</div>"""
-            val exitBlock = if (meta.exitCode == null) "" else {
-                val codeColor = if (meta.exitCode == 0) "#71D37C" else "#E86D6D"
-                """<div style="font-size:11px; color:$codeColor; margin-top:6px;">exit code: ${meta.exitCode}</div>"""
-            }
-            val outputBlock = if (meta.output.isBlank()) "" else """<div style="font-size:12px; color:#A8B8CE; margin-top:6px;">输出: ${escapeHtml(meta.output)}</div>"""
-            "$commandBlock$cwdBlock$exitBlock$outputBlock"
-        }
-        return """
-            <div class="action-card">
-              <div style="display:flex; justify-content:space-between; align-items:center;">
-                <div style="color:#D6DEEC; font-size:13px;">命令 ${index + 1} · ${escapeHtml(statusLabel)}</div>
-                <div><span style="display:inline-block; width:9px; height:9px; border-radius:50%; background:$dotColor;"></span></div>
-              </div>
-              $timingHtml
-              <div style="font-size:12px; color:#B9C9DE; margin-top:6px;">${escapeHtml(meta.command.ifBlank { "（无命令文本）" })}</div>
-              <div style="margin-top:6px;">$actionsHtml</div>
-              $detailHtml
-            </div>
-        """.trimIndent()
-    }
-
-    private fun registerToolCall(event: AgentEvent.ToolCall) {
-        closeActiveContentNarrative()
-        val trace = findOrCreateToolTrace(event.callId, event.name)
-        trace.input = compactToolText(event.input)
-        trace.done = false
-        trace.failed = false
-        if (trace.startedAtMs == 0L) {
-            trace.startedAtMs = System.currentTimeMillis()
-        }
-        trace.finishedAtMs = 0L
-    }
-
-    private fun registerToolResult(event: AgentEvent.ToolResult) {
-        closeActiveContentNarrative()
-        val trace = findOrCreateToolTrace(event.callId, event.name)
-        if (!event.output.isNullOrBlank()) {
-            trace.output = compactToolText(event.output)
-        }
-        trace.done = true
-        trace.failed = event.isError
-        if (trace.startedAtMs == 0L) {
-            trace.startedAtMs = System.currentTimeMillis()
-        }
-        trace.finishedAtMs = System.currentTimeMillis()
-    }
-
-    private fun findOrCreateToolTrace(callId: String?, name: String): ToolTraceItem {
-        if (!callId.isNullOrBlank()) {
-            currentToolEventsBuffer.firstOrNull { it.id == callId }?.let { return it }
-        }
-        currentToolEventsBuffer.lastOrNull {
-            !it.done && it.name.equals(name, ignoreCase = true)
-        }?.let { return it }
-
-        val newTrace = ToolTraceItem(
-            id = callId ?: "tool-${currentToolEventsBuffer.size + 1}",
-            name = name,
-            sequence = nextFlowSequence(),
-        )
-        currentToolEventsBuffer.add(newTrace)
-        return newTrace
-    }
-
-    private fun serializeToolTrace(trace: ToolTraceItem): String {
-        val status = when {
-            trace.failed -> "failed"
-            trace.done -> "done"
-            else -> "running"
-        }
-        val parts = mutableListOf(status, "id:${trace.id}", trace.name)
-        parts.add("seq:${trace.sequence}")
-        if (trace.startedAtMs > 0L) {
-            parts.add("ts:${trace.startedAtMs}")
-        }
-        if (trace.finishedAtMs > 0L && trace.startedAtMs > 0L) {
-            parts.add("dur:${(trace.finishedAtMs - trace.startedAtMs).coerceAtLeast(0L)}")
-        }
-        if (trace.input.isNotBlank()) {
-            parts.add("in: ${trace.input}")
-        }
-        if (trace.output.isNotBlank()) {
-            parts.add("out: ${trace.output}")
-        }
-        return parts.joinToString(" | ")
-    }
-
-    private fun serializeCommandTrace(trace: CommandTraceItem): String {
-        val parts = mutableListOf("command", "id:${trace.id}", "status:${trace.status}")
-        parts.add("seq:${trace.sequence}")
-        parts.add("cmd: ${trace.command}")
-        if (trace.cwd.isNotBlank()) {
-            parts.add("cwd: ${trace.cwd}")
-        }
-        if (trace.startedAtMs > 0L) {
-            parts.add("ts:${trace.startedAtMs}")
-        }
-        if (trace.finishedAtMs > 0L && trace.startedAtMs > 0L) {
-            parts.add("dur:${(trace.finishedAtMs - trace.startedAtMs).coerceAtLeast(0L)}")
-        }
-        trace.exitCode?.let { parts.add("exit:$it") }
-        if (trace.output.isNotBlank()) {
-            parts.add("out: ${trace.output}")
-        }
-        return parts.joinToString(" | ")
-    }
-
     private fun nextFlowSequence(): Int {
         currentFlowSequence += 1
         return currentFlowSequence
@@ -2650,122 +853,10 @@ class AgentToolWindowPanel(
         return text.replace("\n", " ").replace(Regex("\\s+"), " ").trim().take(220)
     }
 
-    private fun buildRetryHref(name: String, input: String): String {
-        val n = URLEncoder.encode(name, StandardCharsets.UTF_8)
-        val i = URLEncoder.encode(input, StandardCharsets.UTF_8)
-        return "action://retry-tool?name=$n&input=$i"
-    }
-
-    private fun buildCopyHref(messageId: String): String {
-        val id = URLEncoder.encode(messageId, StandardCharsets.UTF_8)
-        return "action://copy-message?id=$id"
-    }
-
-    private fun buildToggleHref(action: String, messageId: String): String {
-        val id = URLEncoder.encode(messageId, StandardCharsets.UTF_8)
-        return "action://$action?id=$id"
-    }
-
-    private fun buildToggleTurnHref(turnId: String): String {
-        val id = URLEncoder.encode(turnId, StandardCharsets.UTF_8)
-        return "action://toggle-turn?id=$id"
-    }
-
-    private fun buildOpenFileHref(path: String): String {
-        val encoded = URLEncoder.encode(path, StandardCharsets.UTF_8)
-        return "action://open-file?path=$encoded"
-    }
-
-    private fun buildRetryCommandHref(command: String, cwd: String): String {
-        val c = URLEncoder.encode(command, StandardCharsets.UTF_8)
-        val d = URLEncoder.encode(cwd, StandardCharsets.UTF_8)
-        return "action://retry-command?command=$c&cwd=$d"
-    }
-
-    private fun buildCopyCommandHref(command: String): String {
-        val c = URLEncoder.encode(command, StandardCharsets.UTF_8)
-        return "action://copy-command?command=$c"
-    }
-
-    private fun extractChangedFiles(tools: List<String>): List<ChangedFileRef> {
-        if (tools.isEmpty()) return emptyList()
-        val found = linkedMapOf<String, ChangedFileRef>()
-        tools.forEach { line ->
-            val lowered = line.lowercase()
-            val likelyMutation = lowered.contains(" write ") ||
-                lowered.contains(" edit ") ||
-                lowered.contains(" patch ") ||
-                lowered.contains(" diff ") ||
-                lowered.contains(" apply ")
-            if (!likelyMutation) return@forEach
-            val path = extractFilePathFromToolLine(line) ?: return@forEach
-            val cleanPath = path.trim().trim('`', '"', '\'')
-            if (cleanPath.isBlank()) return@forEach
-            val delta = Regex("""([+-]\d+)""").find(line)?.groupValues?.get(1).orEmpty()
-            found[cleanPath] = ChangedFileRef(
-                path = cleanPath,
-                name = File(cleanPath).name.ifBlank { cleanPath },
-                delta = delta,
-            )
-        }
-        return found.values.toList()
-    }
-
-    private fun extractFilePathFromToolLine(toolLine: String): String? {
-        val pathPattern = Regex("""(?:in|out):\s*([^|]+?\.(?:kt|kts|java|xml|md|json|yaml|yml|js|ts|tsx|jsx|py|go|rs))""", RegexOption.IGNORE_CASE)
-        return pathPattern.find(toolLine)?.groupValues?.getOrNull(1)?.trim()
-    }
-
-    private fun systemRiskTag(content: String): Pair<String, String> {
-        val lowered = content.lowercase()
-        return when {
-            lowered.contains("rm ") || lowered.contains("delete") || lowered.contains("drop table") ->
-                "高风险操作" to "#E58A8A"
-            lowered.contains("command:") || lowered.contains("exit code") ->
-                "命令执行" to "#E2C06B"
-            lowered.contains("applied diff") || lowered.contains("diff") ->
-                "代码变更" to "#7FB2FF"
-            else -> "" to ""
-        }
-    }
-
-    private fun toolSummaryLabel(name: String, input: String, output: String): String {
-        val lowered = "$name $input $output".lowercase()
-        val isEdit = lowered.contains("edit") || lowered.contains("write") ||
-            lowered.contains("patch") || lowered.contains("diff") || lowered.contains("apply")
-        if (!isEdit) return name
-
-        val pathMatch = Regex("""([A-Za-z0-9_./-]+\.(kt|java|kts|xml|md|json|yaml|yml|js|ts|tsx|jsx|py|go|rs))""").find("$input $output")
-        val fileName = pathMatch?.groupValues?.get(1)?.let { File(it).name }
-        val delta = Regex("""([+-]\d+)""").find(output)?.groupValues?.get(1)
-        val suffix = listOfNotNull(fileName, delta).joinToString(" ")
-        return if (suffix.isBlank()) "编辑文件" else "编辑文件 $suffix"
-    }
-
-    private fun elapsedSeconds(): Int {
-        if (!isRunning || requestStartedAtMs <= 0L) return 0
-        return ((System.currentTimeMillis() - requestStartedAtMs) / 1000L).toInt()
-    }
-
-    private fun normalizeStatus(raw: String): String {
-        val value = raw.trim()
-        if (value.isBlank()) return "正在生成响应..."
-        return when {
-            value.contains("turn.started", ignoreCase = true) -> "正在生成响应..."
-            value.contains("thread.started", ignoreCase = true) -> "正在准备会话..."
-            value.contains("item.started", ignoreCase = true) -> "正在执行步骤..."
-            value.contains("turn.completed", ignoreCase = true) -> ""
-            value.contains("thread.completed", ignoreCase = true) -> ""
-            value.contains("item.completed", ignoreCase = true) -> ""
-            value.contains("reconnecting", ignoreCase = true) -> "连接中断，正在重试..."
-            else -> value
-        }
-    }
-
     private fun finishTurn(doneText: String, persistIfNeeded: Boolean) {
         val shouldRefreshFiles = hasLikelyFileMutationInTurn()
-        val totalDurationMs = requestStartedAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it }
-        if (persistIfNeeded && !turnFinalized) {
+        val totalDurationMs = turnState.startedAtMs.takeIf { it > 0L }?.let { System.currentTimeMillis() - it }
+        if (persistIfNeeded && !turnState.finalized) {
             closeActiveContentNarrative()
             val content = currentAssistantContentBuffer.toString().trim()
             val thinking = currentThinkingBuffer.toString().trim()
@@ -2783,19 +874,16 @@ class AgentToolWindowPanel(
             }
         }
 
-        turnActive = false
         loadingTimer.stop()
         previewRenderTimer.stop()
         currentAssistantContentBuffer = StringBuilder()
         currentThinkingBuffer = StringBuilder()
-        currentTimelineActionsBuffer.clear()
         currentToolEventsBuffer.clear()
         currentCommandEventsBuffer.clear()
         currentNarrativeEventsBuffer.clear()
         activeContentNarrativeId = null
         currentFlowSequence = 0
-        currentStatusText = ""
-        requestStartedAtMs = 0L
+        turnState.clear()
         setStatusMessage(ToolWindowUiText.finishedStatus(doneText, totalDurationMs))
         setRunningState(false)
         renderMessages(streamingText = null, forceAutoScroll = false)
@@ -2804,8 +892,8 @@ class AgentToolWindowPanel(
     }
 
     private fun hasLikelyFileMutationInTurn(): Boolean {
-        val merged = if (currentTimelineActionsBuffer.isNotEmpty()) {
-            currentTimelineActionsBuffer.joinToString(" ") { action ->
+        val merged = if (turnState.hasActions()) {
+            turnState.snapshotActions().joinToString(" ") { action ->
                 when (action) {
                     is TimelineAction.UpsertTool -> "${action.name} ${action.input} ${action.output}"
                     is TimelineAction.UpsertCommand -> "${action.command} ${action.output}"
@@ -2840,141 +928,6 @@ class AgentToolWindowPanel(
                 fileManager.reloadFromDisk(document)
             }
         }
-    }
-
-    private fun renderStructuredContent(text: String): String {
-        if (text.isBlank()) return ""
-        val lines = text.replace("\r\n", "\n").split('\n')
-        val html = StringBuilder()
-        val paragraphLines = mutableListOf<String>()
-        val listItems = mutableListOf<String>()
-        var listType: String? = null
-        var inCodeBlock = false
-        var codeLang = ""
-        val codeLines = mutableListOf<String>()
-
-        fun flushParagraph() {
-            if (paragraphLines.isEmpty()) return
-            val paragraph = paragraphLines.joinToString("<br/>") { renderInlineFormatting(it) }
-            html.append("""<div style="margin: 0 0 6px 0;">$paragraph</div>""")
-            paragraphLines.clear()
-        }
-
-        fun flushList() {
-            if (listType == null || listItems.isEmpty()) return
-            val listHtml = listItems.joinToString("") { "<li style=\"margin:2px 0;\">$it</li>" }
-            html.append("<$listType style=\"margin: 4px 0 8px 18px; padding: 0;\">$listHtml</$listType>")
-            listType = null
-            listItems.clear()
-        }
-
-        fun flushCode() {
-            if (!inCodeBlock) return
-            val label = if (codeLang.isBlank()) "" else """<div style="font-size:10px; color:#9FB0C5; margin-bottom:4px;">${escapeHtml(codeLang)}</div>"""
-            val code = escapeHtml(codeLines.joinToString("\n"))
-            html.append("""<div style="margin:6px 0; background:#1D2128; border:1px solid #3A4352; border-radius:8px; padding:8px;">$label<pre style="margin:0; white-space:pre-wrap; font-family: Menlo, Consolas, monospace; font-size:11px; color:#D9E2F1;">$code</pre></div>""")
-            inCodeBlock = false
-            codeLang = ""
-            codeLines.clear()
-        }
-
-        lines.forEach { rawLine ->
-            val line = rawLine.trimEnd()
-            val trimmed = line.trim()
-
-            if (trimmed.startsWith("```")) {
-                flushParagraph()
-                flushList()
-                if (inCodeBlock) {
-                    flushCode()
-                } else {
-                    inCodeBlock = true
-                    codeLang = trimmed.removePrefix("```").trim()
-                }
-                return@forEach
-            }
-
-            if (inCodeBlock) {
-                codeLines.add(line)
-                return@forEach
-            }
-
-            if (trimmed.isEmpty()) {
-                flushParagraph()
-                flushList()
-                return@forEach
-            }
-
-            val headingMatch = Regex("^(#{1,3})\\s+(.+)$").find(trimmed)
-            if (headingMatch != null) {
-                flushParagraph()
-                flushList()
-                val level = headingMatch.groupValues[1].length
-                val size = when (level) {
-                    1 -> "16px"
-                    2 -> "14px"
-                    else -> "13px"
-                }
-                html.append("""<div style="margin:8px 0 6px 0; font-weight:600; font-size:$size;">${renderInlineFormatting(headingMatch.groupValues[2])}</div>""")
-                return@forEach
-            }
-
-            if (trimmed.startsWith(">")) {
-                flushParagraph()
-                flushList()
-                val quote = trimmed.removePrefix(">").trim()
-                html.append("""<div style="margin:6px 0; border-left:3px solid #5D6C7F; padding:2px 0 2px 8px; color:#C9D3E2;">${renderInlineFormatting(quote)}</div>""")
-                return@forEach
-            }
-
-            val unordered = Regex("^[-*]\\s+(.+)$").find(trimmed)
-            if (unordered != null) {
-                flushParagraph()
-                if (listType != "ul") {
-                    flushList()
-                    listType = "ul"
-                }
-                listItems.add(renderInlineFormatting(unordered.groupValues[1]))
-                return@forEach
-            }
-
-            val ordered = Regex("^\\d+[.)]\\s+(.+)$").find(trimmed)
-            if (ordered != null) {
-                flushParagraph()
-                if (listType != "ol") {
-                    flushList()
-                    listType = "ol"
-                }
-                listItems.add(renderInlineFormatting(ordered.groupValues[1]))
-                return@forEach
-            }
-
-            flushList()
-            paragraphLines.add(line)
-        }
-
-        flushParagraph()
-        flushList()
-        flushCode()
-        return html.toString()
-    }
-
-    private fun renderInlineFormatting(text: String): String {
-        var html = escapeHtml(text)
-        html = html.replace(Regex("`([^`]+)`")) { match ->
-            "<code style=\"font-family: Menlo, Consolas, monospace; background:#1D2128; border:1px solid #3A4352; border-radius:4px; padding:1px 4px;\">${match.groupValues[1]}</code>"
-        }
-        html = html.replace(Regex("\\*\\*(.+?)\\*\\*")) { match ->
-            "<strong>${match.groupValues[1]}</strong>"
-        }
-        return html
-    }
-
-    private fun escapeHtml(text: String): String {
-        return text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
     }
 
     private fun collectContextFiles(): List<ContextFile> {
@@ -3080,13 +1033,6 @@ class AgentToolWindowPanel(
         return LocalFileSystem.getInstance().findFileByPath(absolute)
     }
 
-    private data class UnifiedMenuItem(
-        val icon: javax.swing.Icon,
-        val title: String,
-        val selected: Boolean,
-        val onSelect: () -> Unit,
-    )
-
     private data class LayoutTuning(
         val outerPadding: Int,
         val innerPadding: Int,
@@ -3127,7 +1073,7 @@ class AgentToolWindowPanel(
         ICON_ONLY,
     }
 
-    private enum class ReasoningDepth(
+    internal enum class ReasoningDepth(
         val label: String,
         val effort: String,
     ) {
@@ -3138,14 +1084,11 @@ class AgentToolWindowPanel(
     }
 
     companion object {
-        private const val CARD_PLACEHOLDER = "placeholder"
-        private const val CARD_MESSAGES = "messages"
         private const val COMPOSER_FONT_SHRINK_PT = 2f
         internal const val COMPOSER_REGULAR_MIN_WIDTH = 760
         internal const val COMPOSER_COMPACT_MIN_WIDTH = 600
         private const val DEFAULT_MENU_ITEM_WIDTH = 248
         private const val MIN_MENU_ITEM_WIDTH = 180
-        private const val MAX_OPEN_TABS = 10
         private const val maxContextChars = 120_000
         private const val maxContextFileBytes = 200_000L
         private val mutationKeywords: Set<String> = setOf(
@@ -3263,39 +1206,11 @@ class AgentToolWindowPanel(
     }
 
     private fun startNewSession() {
-        if (isRunning) {
-            setStatusMessage("请先停止当前任务再新建会话")
-            return
-        }
-        val id = chatService.createSession()
-        replaceActiveSessionTab(id)
+        sessionTabs.startNewSession()
     }
 
     private fun startNewWindowTab() {
-        if (isRunning) {
-            setStatusMessage("请先停止当前任务再新建窗口")
-            return
-        }
-        val id = chatService.createSession()
-        openSessionTab(id)
-    }
-
-    private fun replaceActiveSessionTab(sessionId: String) {
-        val currentActive = activeSessionTabId
-        val ordered = openSessionTabs.toList().toMutableList()
-        val index = ordered.indexOf(currentActive)
-        if (index >= 0) {
-            ordered[index] = sessionId
-        } else if (ordered.isEmpty()) {
-            ordered += sessionId
-        } else {
-            ordered[ordered.lastIndex] = sessionId
-        }
-        openSessionTabs.clear()
-        openSessionTabs.addAll(ordered)
-        activeSessionTabId = sessionId
-        resetConversationUi()
-        refreshMessages()
+        sessionTabs.startNewWindowTab()
     }
 
     private fun refreshNewButtonState() {
@@ -3303,21 +1218,10 @@ class AgentToolWindowPanel(
         newWindowButton.isEnabled = true
     }
 
-    private fun installInputKeyBindings() {
-        val inputMap = inputArea.getInputMap(WHEN_FOCUSED)
-        val actionMap = inputArea.actionMap
-        inputMap.put(javax.swing.KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "sendPrompt")
-        actionMap.put("sendPrompt", object : AbstractAction() {
-            override fun actionPerformed(e: java.awt.event.ActionEvent?) {
-                submitPrompt()
-            }
-        })
-        inputMap.put(javax.swing.KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, KeyEvent.SHIFT_DOWN_MASK), "insert-break")
-    }
-
     override fun dispose() {
         previewRenderTimer.stop()
         loadingTimer.stop()
+        uiScope.cancel()
         chatService.cancelCurrent()
         toolWindowEx?.setTabActions()
     }
