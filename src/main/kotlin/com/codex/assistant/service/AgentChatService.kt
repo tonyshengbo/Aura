@@ -11,6 +11,8 @@ import com.codex.assistant.model.TimelineAction
 import com.codex.assistant.provider.CodexProviderFactory
 import com.codex.assistant.provider.ProviderRegistry
 import com.codex.assistant.provider.EngineDescriptor
+import com.codex.assistant.protocol.EngineEventBridge
+import com.codex.assistant.protocol.UnifiedEvent
 import com.codex.assistant.settings.AgentSettingsService
 import com.codex.assistant.timeline.TimelineActionAssembler
 import com.intellij.execution.configurations.GeneralCommandLine
@@ -192,6 +194,7 @@ class AgentChatService private constructor(
         reasoningEffort: String? = null,
         prompt: String,
         contextFiles: List<ContextFile>,
+        onUnifiedEvent: (UnifiedEvent) -> Unit = {},
         onAction: (TimelineAction) -> Unit,
     ) {
         cancelCurrent()
@@ -231,6 +234,9 @@ class AgentChatService private constructor(
                 emitAction = onAction,
             )
             provider.stream(request).collect { event ->
+                EngineEventBridge.map(event)?.let { unified ->
+                    onUnifiedEvent(unified)
+                }
                 when (event) {
                     is EngineEvent.SessionReady -> {
                         if (engineId == CodexProviderFactory.ENGINE_ID) {

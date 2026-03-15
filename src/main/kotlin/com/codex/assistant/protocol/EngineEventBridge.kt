@@ -1,0 +1,79 @@
+package com.codex.assistant.protocol
+
+import com.codex.assistant.model.EngineEvent
+
+object EngineEventBridge {
+    fun map(event: EngineEvent): UnifiedEvent? {
+        return when (event) {
+            is EngineEvent.SessionReady -> UnifiedEvent.ThreadStarted(threadId = event.sessionId)
+            is EngineEvent.AssistantTextDelta -> UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "narrative-live",
+                    kind = ItemKind.NARRATIVE,
+                    status = ItemStatus.RUNNING,
+                    text = event.text,
+                ),
+            )
+            is EngineEvent.ThinkingDelta -> UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "thinking-live",
+                    kind = ItemKind.NARRATIVE,
+                    status = ItemStatus.RUNNING,
+                    text = event.text,
+                ),
+            )
+            is EngineEvent.ToolCallStarted -> UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = event.callId ?: "tool-${event.name}",
+                    kind = ItemKind.TOOL_CALL,
+                    status = ItemStatus.RUNNING,
+                    name = event.name,
+                    text = event.input,
+                ),
+            )
+            is EngineEvent.ToolCallFinished -> UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = event.callId ?: "tool-${event.name}",
+                    kind = ItemKind.TOOL_CALL,
+                    status = if (event.isError) ItemStatus.FAILED else ItemStatus.SUCCESS,
+                    name = event.name,
+                    text = event.output,
+                ),
+            )
+            is EngineEvent.CommandProposal -> UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "cmd-${event.command.hashCode()}-${event.cwd.hashCode()}",
+                    kind = ItemKind.COMMAND_EXEC,
+                    status = ItemStatus.RUNNING,
+                    command = event.command,
+                    cwd = event.cwd,
+                ),
+            )
+            is EngineEvent.DiffProposal -> UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "diff-${event.filePath.hashCode()}",
+                    kind = ItemKind.DIFF_APPLY,
+                    status = ItemStatus.RUNNING,
+                    filePath = event.filePath,
+                    text = event.newContent,
+                ),
+            )
+            is EngineEvent.TurnUsage -> UnifiedEvent.TurnCompleted(
+                turnId = "",
+                outcome = TurnOutcome.SUCCESS,
+                usage = TurnUsage(
+                    inputTokens = event.inputTokens,
+                    cachedInputTokens = event.cachedInputTokens,
+                    outputTokens = event.outputTokens,
+                ),
+            )
+            is EngineEvent.Error -> UnifiedEvent.Error(event.message)
+            is EngineEvent.Completed -> UnifiedEvent.TurnCompleted(
+                turnId = "",
+                outcome = if (event.exitCode == 0) TurnOutcome.SUCCESS else TurnOutcome.FAILED,
+                usage = null,
+            )
+            is EngineEvent.Status -> null
+        }
+    }
+}

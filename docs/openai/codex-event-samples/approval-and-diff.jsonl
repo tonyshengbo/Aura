@@ -1,0 +1,8 @@
+{"type":"turn.started","turn_id":"tu_2","thread_id":"th_123"}
+{"type":"item.started","item":{"id":"it_10","type":"approval_request","target_type":"command","payload":{"command":"./gradlew test","cwd":"."},"decision":"pending"}}
+{"type":"item.completed","item":{"id":"it_10","type":"approval_request","target_type":"command","payload":{"command":"./gradlew test","cwd":"."},"decision":"approved"}}
+{"type":"item.started","item":{"id":"it_11","type":"command_exec","command":"./gradlew test","cwd":"."}}
+{"type":"item.completed","item":{"id":"it_11","type":"command_exec","stdout":"BUILD SUCCESSFUL","stderr":"","exit_code":0}}
+{"type":"item.started","item":{"id":"it_12","type":"diff_apply","file_path":"src/main/kotlin/App.kt","patch":"@@ -1 +1 @@\n-old\n+new"}}
+{"type":"item.completed","item":{"id":"it_12","type":"diff_apply","status":"success"}}
+{"type":"turn.completed","turn_id":"tu_2","usage":{"input_tokens":980,"cached_input_tokens":210,"output_tokens":162}}

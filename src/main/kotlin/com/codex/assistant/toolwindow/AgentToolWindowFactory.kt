@@ -16,7 +16,7 @@ import javax.swing.JPanel
 class AgentToolWindowFactory : ToolWindowFactory, DumbAware {
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
         val panel = try {
-            AgentToolWindowPanel(project, toolWindow as? ToolWindowEx)
+            ComposeToolWindowPanel(project, toolWindow as? ToolWindowEx)
         } catch (t: Throwable) {
             LOG.error("Failed to create Codex Chat panel", t)
             buildFallbackPanel(t)

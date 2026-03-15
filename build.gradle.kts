@@ -2,6 +2,7 @@ plugins {
     id("java")
     id("org.jetbrains.kotlin.jvm") version "1.9.22"
     id("org.jetbrains.intellij.platform") version "2.10.2"
+    id("org.jetbrains.compose") version "1.6.11"
     kotlin("plugin.serialization") version "1.9.22"
 }
 
@@ -9,6 +10,7 @@ group = "com.codex.assistant"
 version = "1.0.0"
 
 repositories {
+    google()
     mavenCentral()
     intellijPlatform {
         defaultRepositories()
@@ -16,6 +18,7 @@ repositories {
 }
 
 dependencies {
+    implementation(compose.desktop.currentOs)
     implementation("com.atlassian.commonmark:commonmark:0.13.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")

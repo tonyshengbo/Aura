@@ -13,6 +13,13 @@
   - Codex 能力概览
   - Shell / File Search 官方工具能力
   - 面向本项目的 UI 分类映射建议
+- [codex-cli-reference.md](/Users/tonysheng/StudioProject/Codex-Assistant/docs/openai/codex-cli-reference.md)
+  - `codex exec --json` 非交互事件流
+  - `exec resume` 会话续跑语义
+  - `/plan` 与非交互 `plan_update` 的衔接建议
+- [codex-event-samples](/Users/tonysheng/StudioProject/Codex-Assistant/docs/openai/codex-event-samples)
+  - 代表性 JSONL 事件样例（thread/turn/item/error）
+  - 用于协议解析测试和回放测试
 
 ## 官方来源
 
@@ -24,6 +31,12 @@
   - https://platform.openai.com/docs/guides/tools-file-search/
 - Tools 总览
   - https://platform.openai.com/docs/guides/tools
+- Codex non-interactive (`exec --json`)
+  - https://developers.openai.com/codex/noninteractive
+- Codex CLI 参考（含 `exec resume`）
+  - https://developers.openai.com/codex/cli/reference
+- Codex Slash Commands（含 `/plan`）
+  - https://developers.openai.com/codex/cli/slash-commands
 
 ## 更新策略
 
