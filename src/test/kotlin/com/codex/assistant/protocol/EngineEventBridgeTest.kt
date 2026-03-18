@@ -4,12 +4,64 @@ import com.codex.assistant.model.EngineEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class EngineEventBridgeTest {
+    private val requestId = "request-123"
+
+    @Test
+    fun `maps turn started engine event to unified turn started`() {
+        val event = EngineEventBridge.map(
+            EngineEvent.TurnStarted(
+                turnId = "tu_live_1",
+                threadId = "th_live_1",
+            ),
+            requestId = requestId,
+        )
+
+        val started = assertIs<UnifiedEvent.TurnStarted>(event)
+        assertEquals("tu_live_1", started.turnId)
+        assertEquals("th_live_1", started.threadId)
+    }
+
+    @Test
+    fun `maps narrative item to unified narrative item`() {
+        val event = EngineEventBridge.map(
+            EngineEvent.NarrativeItem(
+                itemId = "msg_2",
+                text = "hello",
+                isUser = true,
+            ),
+            requestId = requestId,
+        )
+
+        val item = assertIs<UnifiedEvent.ItemUpdated>(event).item
+        assertEquals("request-123:msg_2", item.id)
+        assertEquals(ItemKind.NARRATIVE, item.kind)
+        assertEquals("hello", item.text)
+        assertEquals(ItemStatus.RUNNING, item.status)
+        assertTrue(item.name?.contains("user", ignoreCase = true) == true)
+    }
+
+    @Test
+    fun `maps assistant delta to a request scoped live narrative id`() {
+        val event = EngineEventBridge.map(
+            EngineEvent.AssistantTextDelta("partial"),
+            requestId = requestId,
+        )
+
+        val item = assertIs<UnifiedEvent.ItemUpdated>(event).item
+        assertEquals("request-123:assistant-live", item.id)
+        assertEquals(ItemKind.NARRATIVE, item.kind)
+        assertEquals("partial", item.text)
+        assertEquals(ItemStatus.RUNNING, item.status)
+    }
+
     @Test
     fun `maps command proposal to command exec item`() {
         val event = EngineEventBridge.map(
             EngineEvent.CommandProposal(command = "./gradlew test", cwd = "."),
+            requestId = requestId,
         )
 
         val item = assertIs<UnifiedEvent.ItemUpdated>(event).item
@@ -17,6 +69,7 @@ class EngineEventBridgeTest {
         assertEquals("./gradlew test", item.command)
         assertEquals(".", item.cwd)
         assertEquals(ItemStatus.RUNNING, item.status)
+        assertEquals("request-123:cmd:${"./gradlew test".hashCode()}:${".".hashCode()}", item.id)
     }
 
     @Test
@@ -27,6 +80,7 @@ class EngineEventBridgeTest {
                 cachedInputTokens = 40,
                 outputTokens = 20,
             ),
+            requestId = requestId,
         )
 
         val completed = assertIs<UnifiedEvent.TurnCompleted>(event)

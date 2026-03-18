@@ -1,5 +1,7 @@
 package com.codex.assistant.toolwindow
 
+import com.codex.assistant.i18n.CodexBundle
+import com.codex.assistant.toolwindow.shared.ToolWindowUiText
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -14,9 +16,9 @@ class ToolWindowUiTextTest {
 
     @Test
     fun `formats running composer state with localized message`() {
-        assertEquals("执行中 · 45s", ToolWindowUiText.runningStatus(45_000))
-        assertEquals("执行中 · 1m 12s", ToolWindowUiText.runningStatus(72_000))
-        assertEquals("执行中 · 1h 01m", ToolWindowUiText.runningStatus(3_660_000))
+        assertEquals(CodexBundle.message("toolwindow.running", "45s"), ToolWindowUiText.runningStatus(45_000))
+        assertEquals(CodexBundle.message("toolwindow.running", "1m 12s"), ToolWindowUiText.runningStatus(72_000))
+        assertEquals(CodexBundle.message("toolwindow.running", "1h 01m"), ToolWindowUiText.runningStatus(3_660_000))
     }
 
     @Test

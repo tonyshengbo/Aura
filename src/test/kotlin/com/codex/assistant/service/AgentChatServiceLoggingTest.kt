@@ -3,6 +3,7 @@ package com.codex.assistant.service
 import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.model.EngineEvent
 import com.codex.assistant.model.TimelineAction
+import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
@@ -48,6 +50,7 @@ class AgentChatServiceLoggingTest {
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
         val logs = mutableListOf<String>()
         val service = createServiceWithLogger(
+            dbPath = createTempDirectory("chat-service-logging").resolve("chat.db"),
             registry = registry,
             settings = settings,
             logSink = logs::add,
@@ -95,26 +98,18 @@ class AgentChatServiceLoggingTest {
     }
 
     private fun createServiceWithLogger(
+        dbPath: java.nio.file.Path,
         registry: ProviderRegistry,
         settings: AgentSettingsService,
         logSink: (String) -> Unit,
     ): AgentChatService {
-        val ctor = AgentChatService::class.java.declaredConstructors.firstOrNull { candidate ->
-            candidate.parameterTypes.size == 5 &&
-                candidate.parameterTypes[0] == ProjectSessionStore::class.java &&
-                candidate.parameterTypes[1] == ProviderRegistry::class.java &&
-                candidate.parameterTypes[2] == AgentSettingsService::class.java &&
-                candidate.parameterTypes[3].name == "kotlin.jvm.functions.Function0" &&
-                candidate.parameterTypes[4].name == "kotlin.jvm.functions.Function1"
-        } ?: error("Expected AgentChatService test constructor with diagnostic logger")
-        ctor.isAccessible = true
-        return ctor.newInstance(
-            ProjectSessionStore(),
+        return AgentChatService(
+            repository = SQLiteChatSessionRepository(dbPath),
             registry,
             settings,
             { "." },
             logSink,
-        ) as AgentChatService
+        )
     }
 
     private class RecordingProvider(

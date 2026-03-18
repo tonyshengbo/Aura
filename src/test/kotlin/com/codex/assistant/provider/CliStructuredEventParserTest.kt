@@ -10,6 +10,27 @@ import kotlin.test.assertTrue
 
 class CliStructuredEventParserTest {
     @Test
+    fun `parses slash-style turn started event`() {
+        val line = """{"type":"turn/started","turn_id":"tu_42","thread_id":"th_1"}"""
+
+        val event = CliStructuredEventParser.parseCodexLine(line)
+
+        val started = assertIs<EngineEvent.TurnStarted>(event)
+        assertEquals("tu_42", started.turnId)
+        assertEquals("th_1", started.threadId)
+    }
+
+    @Test
+    fun `parses turn started without turn id using fallback id`() {
+        val line = """{"type":"turn.started"}"""
+
+        val event = CliStructuredEventParser.parseCodexLine(line)
+
+        val started = assertIs<EngineEvent.TurnStarted>(event)
+        assertTrue(started.turnId.startsWith("turn-fallback-"))
+    }
+
+    @Test
     fun `parses codex thread started event as session ready`() {
         val line = """{"type":"thread.started","thread_id":"019ce1dc-0150-7c82-b666-00b68f3024ea"}"""
 
@@ -174,5 +195,35 @@ class CliStructuredEventParserTest {
         )
         val finishedTool = assertIs<EngineEvent.ToolCallFinished>(finished)
         assertEquals("mcp", finishedTool.name)
+    }
+
+    @Test
+    fun `parses user message item as narrative item event`() {
+        val line = """{"type":"item.started","item":{"id":"msg_1","type":"user_message","text":"请解释这个报错","status":"started"}}"""
+
+        val event = CliStructuredEventParser.parseCodexLine(line)
+
+        val narrative = assertIs<EngineEvent.NarrativeItem>(event)
+        assertEquals("msg_1", narrative.itemId)
+        assertEquals("请解释这个报错", narrative.text)
+        assertTrue(narrative.isUser)
+    }
+
+    @Test
+    fun `suppresses lifecycle json lines from unparsed fallback`() {
+        assertTrue(CliStructuredEventParser.shouldSuppressUnparsedLine("""{"type":"turn.started"}"""))
+        assertTrue(CliStructuredEventParser.shouldSuppressUnparsedLine("""{"type":"turn/started"}"""))
+        assertTrue(CliStructuredEventParser.shouldSuppressUnparsedLine("""{"type":"item.completed"}"""))
+    }
+
+    @Test
+    fun `does not suppress non lifecycle lines`() {
+        assertFalse(CliStructuredEventParser.shouldSuppressUnparsedLine("""{"type":"message.delta","text":"hello"}"""))
+        assertFalse(CliStructuredEventParser.shouldSuppressUnparsedLine("plain text line"))
+    }
+
+    @Test
+    fun `suppresses stdin prompt status line`() {
+        assertTrue(CliStructuredEventParser.shouldSuppressUnparsedLine("Reading prompt from stdin..."))
     }
 }

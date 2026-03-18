@@ -74,17 +74,3 @@ sealed class UnifiedEvent {
         val message: String,
     ) : UnifiedEvent()
 }
-
-data class TurnUiState(
-    val id: String,
-    val outcome: TurnOutcome = TurnOutcome.RUNNING,
-    val usage: TurnUsage? = null,
-    val items: List<UnifiedItem> = emptyList(),
-)
-
-data class ConversationUiState(
-    val threadId: String? = null,
-    val isRunning: Boolean = false,
-    val turns: List<TurnUiState> = emptyList(),
-    val latestError: String? = null,
-)

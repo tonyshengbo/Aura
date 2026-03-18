@@ -3,6 +3,7 @@ package com.codex.assistant.service
 import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.model.EngineEvent
 import com.codex.assistant.model.TimelineAction
+import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
@@ -14,17 +15,66 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class AgentChatServiceContinuationTest {
     @Test
-    fun `second turn reuses cli session id from the same session`() = runBlocking {
-        val provider = RecordingProvider(
-            sessionIds = ArrayDeque(listOf("thread_1", "thread_1")),
+    fun `second turn reuses persisted cli session id after service reload`() = runBlocking {
+        val dbPath = createTempDirectory("chat-service-continuation").resolve("chat.db")
+        val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
+        val firstProvider = RecordingProvider(sessionIds = ArrayDeque(listOf("thread_1")))
+        val firstService = AgentChatService(
+            repository = SQLiteChatSessionRepository(dbPath),
+            registry = registry(provider = firstProvider),
+            settings = settings,
         )
-        val registry = ProviderRegistry(
+        firstService.recordUserMessage(prompt = "First turn")
+
+        val firstFinished = CompletableDeferred<Unit>()
+        firstService.runAgent(
+            engineId = "codex",
+            model = "gpt-5.3-codex",
+            prompt = "First turn",
+            contextFiles = emptyList(),
+        ) { action ->
+            if (action == TimelineAction.FinishTurn) {
+                firstFinished.complete(Unit)
+            }
+        }
+        withTimeout(2_000) { firstFinished.await() }
+        firstService.dispose()
+
+        val secondProvider = RecordingProvider(sessionIds = ArrayDeque(listOf("thread_1")))
+        val secondService = AgentChatService(
+            repository = SQLiteChatSessionRepository(dbPath),
+            registry = registry(provider = secondProvider),
+            settings = settings,
+        )
+        val secondFinished = CompletableDeferred<Unit>()
+        secondService.runAgent(
+            engineId = "codex",
+            model = "gpt-5.3-codex",
+            prompt = "Second turn",
+            contextFiles = emptyList(),
+        ) { action ->
+            if (action == TimelineAction.FinishTurn) {
+                secondFinished.complete(Unit)
+            }
+        }
+        withTimeout(2_000) { secondFinished.await() }
+
+        assertEquals(1, firstProvider.requests.size)
+        assertNull(firstProvider.requests[0].cliSessionId)
+        assertEquals(1, secondProvider.requests.size)
+        assertEquals("thread_1", secondProvider.requests[0].cliSessionId)
+        secondService.dispose()
+    }
+
+    private fun registry(provider: AgentProvider): ProviderRegistry {
+        return ProviderRegistry(
             descriptors = listOf(
                 EngineDescriptor(
                     id = "codex",
@@ -46,43 +96,6 @@ class AgentChatServiceContinuationTest {
             ),
             defaultEngineId = "codex",
         )
-        val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
-        val service = AgentChatService(
-            sessionStore = ProjectSessionStore(),
-            registry = registry,
-            settings = settings,
-        )
-
-        val firstFinished = CompletableDeferred<Unit>()
-        service.runAgent(
-            engineId = "codex",
-            model = "gpt-5.3-codex",
-            prompt = "First turn",
-            contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                firstFinished.complete(Unit)
-            }
-        }
-        withTimeout(2_000) { firstFinished.await() }
-
-        val secondFinished = CompletableDeferred<Unit>()
-        service.runAgent(
-            engineId = "codex",
-            model = "gpt-5.3-codex",
-            prompt = "Second turn",
-            contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                secondFinished.complete(Unit)
-            }
-        }
-        withTimeout(2_000) { secondFinished.await() }
-
-        assertEquals(2, provider.requests.size)
-        assertNull(provider.requests[0].cliSessionId)
-        assertEquals("thread_1", provider.requests[1].cliSessionId)
-        service.dispose()
     }
 
     private class RecordingProvider(

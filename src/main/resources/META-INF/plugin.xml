@@ -1,11 +1,10 @@
 <idea-plugin>
     <id>com.codex.assistant</id>
-    <name>Codex Assistant</name>
+    <name>%plugin.name</name>
     <vendor email="support@example.com">Codex Assistant</vendor>
 
-    <description><![CDATA[
-        Unified IDE agent shell for local CLI engines.
-    ]]></description>
+    <resource-bundle>messages.CodexBundle</resource-bundle>
+    <description>%plugin.description</description>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
@@ -14,22 +13,17 @@
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow
                 id="Codex Chat"
-                factoryClass="com.codex.assistant.toolwindow.AgentToolWindowFactory"
+                factoryClass="com.codex.assistant.toolwindow.bootstrap.AgentToolWindowFactory"
                 anchor="right"
                 canCloseContents="false"/>
 
-        <applicationConfigurable
-                parentId="tools"
-                instance="com.codex.assistant.settings.AgentSettingsConfigurable"
-                id="com.codex.assistant.settings"
-                displayName="Codex Assistant"/>
     </extensions>
 
     <actions>
         <action id="com.codex.assistant.QuickOpen"
                 class="com.codex.assistant.actions.QuickOpenAction"
-                text="Open Codex Assistant"
-                description="Quick open Codex Assistant tool window">
+                text="%action.open.text"
+                description="%action.open.description">
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl K"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta K"/>
         </action>

@@ -1,5 +1,6 @@
 package com.codex.assistant.toolwindow
 
+import com.codex.assistant.toolwindow.shared.ApprovalUiPolicy
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

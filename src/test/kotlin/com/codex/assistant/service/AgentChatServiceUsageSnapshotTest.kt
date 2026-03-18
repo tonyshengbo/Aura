@@ -2,6 +2,7 @@ package com.codex.assistant.service
 
 import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.model.EngineEvent
+import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -20,9 +22,9 @@ import kotlin.test.assertNotNull
 class AgentChatServiceUsageSnapshotTest {
     @Test
     fun `stores latest completed turn usage snapshot in the current session`() = runBlocking {
-        val store = ProjectSessionStore()
+        val dbPath = createTempDirectory("chat-service-usage").resolve("chat.db")
         val provider = UsageReportingProvider()
-        val service = createService(store, provider)
+        val service = createService(dbPath, provider)
 
         val finished = CompletableDeferred<Unit>()
         service.runAgent(
@@ -45,15 +47,15 @@ class AgentChatServiceUsageSnapshotTest {
         assertEquals(3_202, snapshot.outputTokens)
         assertEquals("Est. 70% left", snapshot.headerLabel())
 
-        val persisted = store.readState()
-        val persistedSnapshot = assertNotNull(persisted.sessions.single().usageSnapshot)
+        val persistedRepository = SQLiteChatSessionRepository(dbPath)
+        val persistedSnapshot = assertNotNull(persistedRepository.loadActiveSession()?.usageSnapshot)
         assertEquals("gpt-5.3-codex", persistedSnapshot.model)
         assertEquals(400_000, persistedSnapshot.contextWindow)
         assertEquals(116_986, persistedSnapshot.inputTokens)
         assertEquals(93_440, persistedSnapshot.cachedInputTokens)
         assertEquals(3_202, persistedSnapshot.outputTokens)
 
-        val reloaded = createService(store, provider = UsageReportingProvider())
+        val reloaded = createService(dbPath, provider = UsageReportingProvider())
         val reloadedSnapshot = assertNotNull(reloaded.currentUsageSnapshot())
         assertEquals("Est. 70% left", reloadedSnapshot.headerLabel())
 
@@ -62,7 +64,7 @@ class AgentChatServiceUsageSnapshotTest {
     }
 
     private fun createService(
-        store: ProjectSessionStore,
+        dbPath: java.nio.file.Path,
         provider: AgentProvider,
     ): AgentChatService {
         val registry = ProviderRegistry(
@@ -89,7 +91,7 @@ class AgentChatServiceUsageSnapshotTest {
         )
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
         return AgentChatService(
-            sessionStore = store,
+            repository = SQLiteChatSessionRepository(dbPath),
             registry = registry,
             settings = settings,
         )

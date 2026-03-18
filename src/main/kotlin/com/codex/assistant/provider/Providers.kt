@@ -2,6 +2,7 @@ package com.codex.assistant.provider
 
 import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.settings.AgentSettingsService
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 private val codexCapabilities = EngineCapabilities(
@@ -12,7 +13,7 @@ private val codexCapabilities = EngineCapabilities(
 )
 
 internal class CodexInvocationSpec : CliInvocationSpec {
-    override fun buildCommand(executablePath: String, request: AgentRequest, prompt: String): List<String> {
+    override fun buildCommand(executablePath: String, request: AgentRequest): List<String> {
         val command = mutableListOf(
             executablePath,
             "exec",
@@ -41,7 +42,17 @@ internal class CodexInvocationSpec : CliInvocationSpec {
         if (sessionId.isNotBlank()) {
             command += sessionId
         }
-        command += prompt.trim()
+        request.imageAttachments.forEach { image ->
+            command += "--image"
+            command += image.path
+        }
+        request.fileAttachments
+            .mapNotNull { runCatching { Path.of(it.path).parent?.toString() }.getOrNull() }
+            .distinct()
+            .forEach { dir ->
+                command += "--add-dir"
+                command += dir
+            }
         return command
     }
 }
@@ -49,7 +60,9 @@ internal class CodexInvocationSpec : CliInvocationSpec {
 private class CodexEventParser : StructuredEventParser {
     override fun parse(line: String) = CliStructuredEventParser.parseCodexLine(line)
 
-    override fun shouldEmitUnparsedLine(line: String): Boolean = line.isNotBlank()
+    override fun shouldEmitUnparsedLine(line: String): Boolean {
+        return line.isNotBlank() && !CliStructuredEventParser.shouldSuppressUnparsedLine(line)
+    }
 }
 
 class CodexCliProvider(settings: AgentSettingsService) : CliAgentProvider(

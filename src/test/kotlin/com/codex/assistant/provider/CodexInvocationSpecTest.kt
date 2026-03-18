@@ -20,7 +20,6 @@ class CodexInvocationSpecTest {
                 workingDirectory = ".",
                 cliSessionId = null,
             ),
-            prompt = "Hello",
         )
 
         assertEquals(
@@ -32,7 +31,6 @@ class CodexInvocationSpecTest {
                 "--skip-git-repo-check",
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--json",
-                "Hello",
             ),
             command,
         )
@@ -50,7 +48,6 @@ class CodexInvocationSpecTest {
                 workingDirectory = ".",
                 cliSessionId = "thread_1",
             ),
-            prompt = "Follow up",
         )
 
         assertEquals(
@@ -64,7 +61,6 @@ class CodexInvocationSpecTest {
                 "--dangerously-bypass-approvals-and-sandbox",
                 "--json",
                 "thread_1",
-                "Follow up",
             ),
             command,
         )
@@ -82,7 +78,6 @@ class CodexInvocationSpecTest {
                 contextFiles = emptyList(),
                 workingDirectory = ".",
             ),
-            prompt = "Deeper reasoning",
         )
 
         assertTrue(command.contains("-c"))

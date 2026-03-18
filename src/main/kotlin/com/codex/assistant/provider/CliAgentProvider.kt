@@ -36,11 +36,11 @@ abstract class CliAgentProvider(
         }
 
         val prompt = buildPrompt(request)
-        val command = invocationSpec.buildCommand(binary, request, prompt)
+        val command = invocationSpec.buildCommand(binary, request)
         logSummary(
             "request.started requestId=${request.requestId} mode=${requestMode(request)} " +
                 "cliSessionId=${request.cliSessionId ?: "<none>"} model=${request.model ?: "<auto>"} " +
-                "cwd=${request.workingDirectory} command=${commandSummary(command)}",
+                "cwd=${request.workingDirectory} promptDelivery=stdin command=${commandSummary(command)}",
         )
 
         val process = try {
@@ -57,6 +57,23 @@ abstract class CliAgentProvider(
         }
 
         running[request.requestId] = process
+        val writePromptResult = runCatching {
+            process.outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                writer.write(prompt)
+                writer.newLine()
+                writer.flush()
+            }
+        }
+        if (writePromptResult.isFailure) {
+            val cause = writePromptResult.exceptionOrNull()
+            running.remove(request.requestId)
+            process.destroyForcibly()
+            logSummary("request.failed requestId=${request.requestId} message=stdin_write_failed:${cause?.message}")
+            trySend(EngineEvent.Error("Failed to send prompt to $displayName CLI: ${cause?.message}"))
+            trySend(EngineEvent.Completed(exitCode = 1))
+            close()
+            return@callbackFlow
+        }
 
         launch(Dispatchers.IO) {
             val proposalAccumulator = ProposalAccumulator(request.workingDirectory)
@@ -66,26 +83,12 @@ abstract class CliAgentProvider(
                     val parsed = eventParser.parse(line)
                     if (parsed != null) {
                         when (parsed) {
-                            is EngineEvent.SessionReady -> {
-                                logSummary(
-                                    "session.ready requestId=${request.requestId} cliSessionId=${parsed.sessionId}",
-                                )
-                            }
-
-                            is EngineEvent.Error -> {
-                                logSummary(
-                                    "event.error requestId=${request.requestId} message=${parsed.message}",
-                                )
-                            }
-
-                            else -> Unit
-                        }
-                        when (parsed) {
                             is EngineEvent.CommandProposal, is EngineEvent.DiffProposal -> {
                                 if (proposalAccumulator.acceptStructured(parsed)) {
                                     trySend(parsed)
                                 }
                             }
+
                             else -> trySend(parsed)
                         }
                     } else if (eventParser.shouldEmitUnparsedLine(line)) {
@@ -118,21 +121,57 @@ abstract class CliAgentProvider(
         val actionPrefix = when (request.action) {
             AgentAction.CHAT -> ""
         }
-
-        val contextBlock = if (request.contextFiles.isEmpty()) {
+        var contextBlock = if (request.contextFiles.isEmpty()) {
             ""
         } else {
             request.contextFiles.joinToString("\n\n") { file ->
                 "FILE: ${file.path}\n${file.content}"
             }
         }
+        if (request.systemInstructions.isNotEmpty()) {
+            contextBlock = buildString {
+                if (contextBlock.isNotBlank()) {
+                    append(contextBlock)
+                    append("\n\n")
+                }
+                append("##Agent Role and Instructions\n")
+                append(request.systemInstructions)
+            }
+        }
+        val fileBlock = if (request.fileAttachments.isEmpty()) {
+            ""
+        } else {
+            request.fileAttachments.joinToString("\n") { file ->
+                "- ${file.path}"
+            }
+        }
+        val imageBlock = if (request.imageAttachments.isEmpty()) {
+            ""
+        } else {
+            request.imageAttachments.joinToString("\n") { image ->
+                "- ${image.path}"
+            }
+        }
 
         val prompt = buildString {
             append(actionPrefix)
-            append(request.prompt)
+            if (request.prompt.isNotBlank()) {
+                if (isNotEmpty()) {
+                    append("\n\n")
+                }
+                append(request.prompt)
+            }
             if (contextBlock.isNotBlank()) {
                 append("\n\nContext files:\n")
                 append(contextBlock)
+            }
+            if (imageBlock.isNotBlank()) {
+                append("\n\nAttached images:\n")
+                append(imageBlock)
+            }
+            if (fileBlock.isNotBlank()) {
+                append("\n\nAttached non-text files (read by path):\n")
+                append(fileBlock)
             }
         }
 

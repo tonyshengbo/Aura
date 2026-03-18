@@ -18,6 +18,18 @@ data class ContextFile(
     val content: String,
 )
 
+data class ImageAttachment(
+    val path: String,
+    val name: String,
+    val mimeType: String = "image/png",
+)
+
+data class FileAttachment(
+    val path: String,
+    val name: String,
+    val mimeType: String = "application/octet-stream",
+)
+
 data class AgentRequest(
     val requestId: String = UUID.randomUUID().toString(),
     val engineId: String,
@@ -25,7 +37,10 @@ data class AgentRequest(
     val model: String? = null,
     val reasoningEffort: String? = null,
     val prompt: String,
+    val systemInstructions: List<String> = emptyList(),
     val contextFiles: List<ContextFile>,
+    val imageAttachments: List<ImageAttachment> = emptyList(),
+    val fileAttachments: List<FileAttachment> = emptyList(),
     val workingDirectory: String,
     val cliSessionId: String? = null,
 )
@@ -64,7 +79,6 @@ data class ChatMessage(
     val role: MessageRole,
     val content: String,
     val timestamp: Long = Instant.now().toEpochMilli(),
-    val timelineActionsPayload: String = "",
 )
 
 data class TurnUsageSnapshot(
@@ -123,7 +137,18 @@ fun MessageRole.label(): String = when (this) {
 }
 
 sealed class EngineEvent {
+    data class TurnStarted(
+        val turnId: String,
+        val threadId: String? = null,
+    ) : EngineEvent()
     data class AssistantTextDelta(val text: String) : EngineEvent()
+    data class NarrativeItem(
+        val itemId: String,
+        val text: String,
+        val isUser: Boolean = false,
+        val isThinking: Boolean = false,
+        val completed: Boolean = false,
+    ) : EngineEvent()
     data class ThinkingDelta(val text: String) : EngineEvent()
     data class SessionReady(val sessionId: String) : EngineEvent()
     data class TurnUsage(

@@ -8,9 +8,11 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.atomic.AtomicLong
 
 internal object CliStructuredEventParser {
     private val json = Json { ignoreUnknownKeys = true }
+    private val fallbackTurnCounter = AtomicLong(0)
 
     fun parseCodexLine(line: String): EngineEvent? {
         val trimmed = line.trim()
@@ -34,6 +36,17 @@ internal object CliStructuredEventParser {
         return parseByType(obj)
     }
 
+    internal fun shouldSuppressUnparsedLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return false
+        if (shouldSuppressPlainStatusLine(trimmed)) return true
+        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return false
+        val obj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull() ?: return false
+        val normalizedType = normalizeType(obj.string("type").orEmpty())
+        if (normalizedType.isBlank()) return false
+        return isLifecycleType(normalizedType)
+    }
+
     private fun parseByType(obj: JsonObject): EngineEvent? {
         val type = obj.string("type").orEmpty()
         if (type.isBlank()) {
@@ -41,7 +54,7 @@ internal object CliStructuredEventParser {
             return fallbackText?.let { EngineEvent.AssistantTextDelta(it) }
         }
 
-        val normalizedType = type.lowercase()
+        val normalizedType = normalizeType(type)
         val item = obj.objectValue("item")
         if (item != null) {
             parseItemEvent(item, normalizedType)?.let { return it }
@@ -59,6 +72,14 @@ internal object CliStructuredEventParser {
             obj.string("session_id")
                 ?.takeIf { it.isNotBlank() }
                 ?.let { return EngineEvent.SessionReady(it) }
+        }
+        if (normalizedType == "turn.started") {
+            val turnId = obj.string("turn_id")?.takeIf { it.isNotBlank() }
+                ?: "turn-fallback-${fallbackTurnCounter.incrementAndGet()}"
+            return EngineEvent.TurnStarted(
+                turnId = turnId,
+                threadId = obj.string("thread_id"),
+            )
         }
         if (normalizedType.contains("turn.failed")) {
             val error = obj.objectValue("error")?.string("message") ?: obj.string("message") ?: findText(obj)
@@ -131,14 +152,28 @@ internal object CliStructuredEventParser {
 
         if (itemType == "reasoning" || itemType.contains("thinking")) {
             val text = item.string("text") ?: findText(item)
-            return text?.takeIf { it.isNotBlank() }?.let { EngineEvent.ThinkingDelta(it) }
+            return text?.takeIf { it.isNotBlank() }?.let {
+                EngineEvent.NarrativeItem(
+                    itemId = item.string("id") ?: "thinking-${it.hashCode()}",
+                    text = it,
+                    isThinking = true,
+                    completed = eventType.contains("completed"),
+                )
+            }
         }
 
-        if (itemType == "agent_message" || itemType == "message" || itemType.contains("output_text")) {
+        if (itemType.contains("message") || itemType.contains("output_text")) {
             val text = item.string("text")
                 ?: item.objectValue("message")?.string("text")
                 ?: findText(item)
-            return text?.takeIf { it.isNotBlank() }?.let { EngineEvent.AssistantTextDelta(it) }
+            return text?.takeIf { it.isNotBlank() }?.let {
+                EngineEvent.NarrativeItem(
+                    itemId = item.string("id") ?: "msg-${it.hashCode()}",
+                    text = it,
+                    isUser = itemType.contains("user"),
+                    completed = eventType.contains("completed"),
+                )
+            }
         }
 
         if (isToolItemType(itemType)) {
@@ -172,6 +207,21 @@ internal object CliStructuredEventParser {
         }
 
         return null
+    }
+
+    private fun normalizeType(type: String): String {
+        return type.trim().lowercase().replace('/', '.')
+    }
+
+    private fun isLifecycleType(type: String): Boolean {
+        return type == "thread.started" ||
+            type == "thread.completed" ||
+            type == "turn.started" ||
+            type == "turn.completed" ||
+            type == "turn.failed" ||
+            type == "item.started" ||
+            type == "item.completed" ||
+            type == "item.failed"
     }
 
     private fun parseProposalEvent(type: String, obj: JsonObject): EngineEvent? {
@@ -215,6 +265,10 @@ internal object CliStructuredEventParser {
         if (text.startsWith("WARNING:")) return EngineEvent.Status(text)
         if (text.contains("Reconnecting")) return EngineEvent.Status(text)
         return null
+    }
+
+    private fun shouldSuppressPlainStatusLine(text: String): Boolean {
+        return text == "Reading prompt from stdin..."
     }
 
     private fun isThinkingEvent(type: String, obj: JsonObject): Boolean {

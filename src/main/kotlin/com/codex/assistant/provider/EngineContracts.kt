@@ -17,7 +17,7 @@ data class EngineDescriptor(
 )
 
 interface CliInvocationSpec {
-    fun buildCommand(executablePath: String, request: com.codex.assistant.model.AgentRequest, prompt: String): List<String>
+    fun buildCommand(executablePath: String, request: com.codex.assistant.model.AgentRequest): List<String>
 }
 
 interface StructuredEventParser {

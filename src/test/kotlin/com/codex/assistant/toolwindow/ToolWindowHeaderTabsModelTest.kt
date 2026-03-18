@@ -1,6 +1,7 @@
 package com.codex.assistant.toolwindow
 
 import com.codex.assistant.service.AgentChatService
+import com.codex.assistant.toolwindow.session.ToolWindowHeaderTabsModel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

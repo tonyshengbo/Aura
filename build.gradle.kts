@@ -1,9 +1,10 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "1.9.22"
+    id("org.jetbrains.kotlin.jvm") version "2.0.21"
+    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
     id("org.jetbrains.intellij.platform") version "2.10.2"
-    id("org.jetbrains.compose") version "1.6.11"
-    kotlin("plugin.serialization") version "1.9.22"
+    id("org.jetbrains.compose") version "1.7.3"
+    kotlin("plugin.serialization") version "2.0.21"
 }
 
 group = "com.codex.assistant"
@@ -19,33 +20,32 @@ repositories {
 
 dependencies {
     implementation(compose.desktop.currentOs)
-    implementation("com.atlassian.commonmark:commonmark:0.13.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer:0.31.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m2:0.31.0")
+    implementation("org.xerial:sqlite-jdbc:3.46.1.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.7.3")
     testRuntimeOnly("net.java.dev.jna:jna:5.14.0")
     testImplementation(kotlin("test"))
     intellijPlatform {
-        intellijIdea("2024.1.7")
+        intellijIdea("2024.3.4.1")
         bundledPlugin("com.intellij.java")
         bundledPlugin("Git4Idea")
     }
 }
-tasks {
-    withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "17"
-    }
-}
-
 kotlin {
     jvmToolchain(17)
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "233"
-            untilBuild = "241.*"
+            sinceBuild = "243"
+            untilBuild = "243.*"
         }
     }
 }

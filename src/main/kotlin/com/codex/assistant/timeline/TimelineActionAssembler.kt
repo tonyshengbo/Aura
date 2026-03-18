@@ -19,6 +19,11 @@ class TimelineActionAssembler(
 
     fun accept(event: EngineEvent): List<TimelineAction> {
         return when (event) {
+            is EngineEvent.TurnStarted -> emptyList()
+            is EngineEvent.NarrativeItem -> {
+                narrativeBuffer.append(event.text)
+                emptyList()
+            }
             is EngineEvent.AssistantTextDelta -> {
                 narrativeBuffer.append(event.text)
                 emptyList()
