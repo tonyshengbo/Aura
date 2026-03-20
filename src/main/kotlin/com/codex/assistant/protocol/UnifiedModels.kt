@@ -30,6 +30,26 @@ enum class ApprovalDecision {
     REJECTED,
 }
 
+enum class UnifiedApprovalRequestKind {
+    COMMAND,
+    FILE_CHANGE,
+    PERMISSIONS,
+}
+
+data class UnifiedApprovalRequest(
+    val requestId: String,
+    val turnId: String?,
+    val itemId: String,
+    val kind: UnifiedApprovalRequestKind,
+    val title: String,
+    val body: String,
+    val command: String? = null,
+    val cwd: String? = null,
+    val fileChanges: List<UnifiedFileChange> = emptyList(),
+    val permissions: List<String> = emptyList(),
+    val allowForSession: Boolean = true,
+)
+
 data class TurnUsage(
     val inputTokens: Int,
     val cachedInputTokens: Int,
@@ -43,6 +63,17 @@ data class UnifiedFileChange(
     val newContent: String? = null,
 )
 
+data class UnifiedMessageAttachment(
+    val id: String,
+    val kind: String,
+    val displayName: String,
+    val assetPath: String,
+    val originalPath: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val status: ItemStatus,
+)
+
 data class UnifiedItem(
     val id: String,
     val kind: ItemKind,
@@ -53,11 +84,16 @@ data class UnifiedItem(
     val cwd: String? = null,
     val filePath: String? = null,
     val fileChanges: List<UnifiedFileChange> = emptyList(),
+    val attachments: List<UnifiedMessageAttachment> = emptyList(),
     val exitCode: Int? = null,
     val approvalDecision: ApprovalDecision? = null,
 )
 
 sealed class UnifiedEvent {
+    data class ApprovalRequested(
+        val request: UnifiedApprovalRequest,
+    ) : UnifiedEvent()
+
     data class ThreadStarted(
         val threadId: String,
         val resumedFromTurnId: String? = null,

@@ -1,34 +1,34 @@
 package com.codex.assistant.service
 
+import com.codex.assistant.conversation.ConversationHistoryPage
+import com.codex.assistant.conversation.ConversationRef
+import com.codex.assistant.conversation.ConversationSummaryPage
 import com.codex.assistant.i18n.CodexBundle
 import com.codex.assistant.model.AgentAction
+import com.codex.assistant.model.AgentApprovalMode
 import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.model.ChatMessage
 import com.codex.assistant.model.ContextFile
-import com.codex.assistant.model.EngineEvent
 import com.codex.assistant.model.FileAttachment
 import com.codex.assistant.model.ImageAttachment
 import com.codex.assistant.model.MessageRole
-import com.codex.assistant.model.TimelineAction
 import com.codex.assistant.model.TurnUsageSnapshot
 import com.codex.assistant.persistence.chat.ChatSessionRepository
-import com.codex.assistant.persistence.chat.PersistedActivityKind
 import com.codex.assistant.persistence.chat.PersistedMessageAttachment
-import com.codex.assistant.persistence.chat.PersistedTimelineEntry
+import com.codex.assistant.persistence.chat.PersistedSessionAsset
 import com.codex.assistant.persistence.chat.PersistedChatSession
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
-import com.codex.assistant.persistence.chat.TimelineHistoryPage
-import com.codex.assistant.protocol.EngineEventBridge
-import com.codex.assistant.protocol.ActivityTitleFormatter
 import com.codex.assistant.protocol.ItemKind
 import com.codex.assistant.protocol.ItemStatus
+import com.codex.assistant.protocol.TurnUsage
 import com.codex.assistant.protocol.UnifiedEvent
 import com.codex.assistant.protocol.UnifiedItem
+import com.codex.assistant.protocol.UnifiedMessageAttachment
 import com.codex.assistant.provider.CodexProviderFactory
 import com.codex.assistant.provider.EngineDescriptor
 import com.codex.assistant.provider.ProviderRegistry
 import com.codex.assistant.settings.AgentSettingsService
-import com.codex.assistant.timeline.TimelineActionAssembler
+import com.codex.assistant.toolwindow.approval.ApprovalAction
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.openapi.Disposable
@@ -43,10 +43,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.Comparator
 import java.util.UUID
 
 @Service(Service.Level.PROJECT)
@@ -87,15 +85,17 @@ class AgentChatService private constructor(
         val title: String,
         val updatedAt: Long,
         val messageCount: Int,
+        val remoteConversationId: String,
     )
 
     private data class SessionData(
         val id: String,
+        var providerId: String,
         val createdAt: Long,
         var title: String,
         var updatedAt: Long,
         var messageCount: Int,
-        var cliSessionId: String,
+        var remoteConversationId: String,
         var usageSnapshot: TurnUsageSnapshot? = null,
     )
 
@@ -140,27 +140,41 @@ class AgentChatService private constructor(
         sessions[currentSessionId]?.usageSnapshot
     }
 
-    internal fun loadCurrentSessionTimeline(limit: Int): TimelineHistoryPage {
-        val sessionId = synchronized(stateLock) { currentSessionId }
-        if (sessionId.isBlank()) {
-            return TimelineHistoryPage(entries = emptyList(), hasOlder = false)
+    internal suspend fun loadCurrentConversationHistory(limit: Int): ConversationHistoryPage {
+        val session = synchronized(stateLock) { sessions[currentSessionId] }
+            ?: return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
+        val conversationId = session.remoteConversationId.trim()
+        if (conversationId.isBlank()) {
+            return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
         }
-        return repository.loadRecentTimeline(sessionId = sessionId, limit = limit)
+        val provider = registry.providerOrDefault(session.providerId)
+        return runCatching {
+            provider.loadInitialHistory(
+                ref = ConversationRef(providerId = session.providerId, remoteConversationId = conversationId),
+                pageSize = limit,
+            )
+        }.getOrElse {
+            ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
+        }.attachLocalAssets(session.id)
     }
 
-    internal fun loadOlderTimeline(beforeCursorExclusive: Long, limit: Int): TimelineHistoryPage {
-        if (beforeCursorExclusive <= 0L) {
-            return TimelineHistoryPage(entries = emptyList(), hasOlder = false)
+    internal suspend fun loadOlderConversationHistory(cursor: String, limit: Int): ConversationHistoryPage {
+        val session = synchronized(stateLock) { sessions[currentSessionId] }
+            ?: return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
+        val conversationId = session.remoteConversationId.trim()
+        if (conversationId.isBlank()) {
+            return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
         }
-        val sessionId = synchronized(stateLock) { currentSessionId }
-        if (sessionId.isBlank()) {
-            return TimelineHistoryPage(entries = emptyList(), hasOlder = false)
-        }
-        return repository.loadTimelineBefore(
-            sessionId = sessionId,
-            beforeCursorExclusive = beforeCursorExclusive,
-            limit = limit,
-        )
+        val provider = registry.providerOrDefault(session.providerId)
+        return runCatching {
+            provider.loadOlderHistory(
+                ref = ConversationRef(providerId = session.providerId, remoteConversationId = conversationId),
+                cursor = cursor,
+                pageSize = limit,
+            )
+        }.getOrElse {
+            ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
+        }.attachLocalAssets(session.id)
     }
 
     fun listSessions(): List<SessionSummary> {
@@ -173,19 +187,42 @@ class AgentChatService private constructor(
                         title = it.title,
                         updatedAt = it.updatedAt,
                         messageCount = it.messageCount,
+                        remoteConversationId = it.remoteConversationId,
                     )
                 }
+        }
+    }
+
+    internal suspend fun loadRemoteConversationSummaries(
+        limit: Int,
+        cursor: String? = null,
+        searchTerm: String? = null,
+    ): ConversationSummaryPage {
+        val engineId = synchronized(stateLock) {
+            sessions[currentSessionId]?.providerId ?: registry.defaultEngineId()
+        }
+        val provider = registry.providerOrDefault(engineId)
+        return runCatching {
+            provider.listRemoteConversations(
+                pageSize = limit,
+                cursor = cursor,
+                cwd = workingDirectoryProvider(),
+                searchTerm = searchTerm,
+            )
+        }.getOrElse {
+            ConversationSummaryPage(conversations = emptyList(), nextCursor = null)
         }
     }
 
     fun createSession(): String {
         val session = PersistedChatSession(
             id = UUID.randomUUID().toString(),
+            providerId = CodexProviderFactory.ENGINE_ID,
             title = "",
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis(),
             messageCount = 0,
-            remoteThreadId = "",
+            remoteConversationId = "",
             usageSnapshot = null,
             isActive = true,
         )
@@ -211,6 +248,60 @@ class AgentChatService private constructor(
         repository.markActiveSession(sessionId)
         persistSessionSnapshot(sessionId)
         return true
+    }
+
+    fun openRemoteConversation(
+        remoteConversationId: String,
+        suggestedTitle: String = "",
+        providerId: String = registry.defaultEngineId(),
+    ): String? {
+        val normalizedRemoteId = remoteConversationId.trim()
+        if (normalizedRemoteId.isBlank()) return null
+        val sessionId = synchronized(stateLock) {
+            val existing = sessions.values.firstOrNull {
+                it.providerId == providerId && it.remoteConversationId == normalizedRemoteId
+            }
+            when {
+                existing != null -> {
+                    existing.updatedAt = System.currentTimeMillis()
+                    if (existing.title.isBlank() && suggestedTitle.isNotBlank()) {
+                        existing.title = suggestedTitle.trim()
+                    }
+                    currentSessionId = existing.id
+                    existing.id
+                }
+                currentSessionId.isNotBlank() && sessions[currentSessionId]?.let { current ->
+                    current.messageCount == 0 && current.remoteConversationId.isBlank()
+                } == true -> {
+                    val current = sessions.getValue(currentSessionId)
+                    current.providerId = providerId
+                    current.remoteConversationId = normalizedRemoteId
+                    current.updatedAt = System.currentTimeMillis()
+                    if (suggestedTitle.isNotBlank()) {
+                        current.title = suggestedTitle.trim()
+                    }
+                    current.id
+                }
+                else -> {
+                    val now = System.currentTimeMillis()
+                    val id = UUID.randomUUID().toString()
+                    sessions[id] = SessionData(
+                        id = id,
+                        providerId = providerId,
+                        createdAt = now,
+                        title = suggestedTitle.trim(),
+                        updatedAt = now,
+                        messageCount = 0,
+                        remoteConversationId = normalizedRemoteId,
+                    )
+                    currentSessionId = id
+                    id
+                }
+            }
+        }
+        repository.markActiveSession(sessionId)
+        persistSessionSnapshot(sessionId)
+        return sessionId
     }
 
     fun deleteSession(sessionId: String): Boolean {
@@ -240,26 +331,40 @@ class AgentChatService private constructor(
         return true
     }
 
+    internal data class LocalUserMessage(
+        val sourceId: String,
+        val prompt: String,
+        val turnId: String?,
+        val timestamp: Long,
+        val attachments: List<PersistedMessageAttachment>,
+    )
+
     internal fun recordUserMessage(
         prompt: String,
         turnId: String = "",
         attachments: List<PersistedMessageAttachment> = emptyList(),
-    ): PersistedTimelineEntry? {
+    ): LocalUserMessage? {
         val sessionId = synchronized(stateLock) { currentSessionId }
         if (sessionId.isBlank()) return null
         val message = ChatMessage(role = MessageRole.USER, content = prompt)
-        val entry = repository.insertMessageRecord(
+        repository.saveSessionAssets(
             sessionId = sessionId,
-            message = message,
             turnId = turnId,
-            sourceId = message.id,
+            messageRole = MessageRole.USER,
             attachments = attachments,
+            createdAt = message.timestamp,
         )
         synchronized(stateLock) {
             sessions[sessionId]?.applyMessage(message)
         }
         persistSessionSnapshot(sessionId)
-        return entry
+        return LocalUserMessage(
+            sourceId = message.id,
+            prompt = prompt,
+            turnId = turnId.ifBlank { null },
+            timestamp = message.timestamp,
+            attachments = attachments,
+        )
     }
 
     fun runAgent(
@@ -272,13 +377,13 @@ class AgentChatService private constructor(
         contextFiles: List<ContextFile>,
         imageAttachments: List<ImageAttachment> = emptyList(),
         fileAttachments: List<FileAttachment> = emptyList(),
+        approvalMode: AgentApprovalMode = AgentApprovalMode.AUTO,
         onTurnPersisted: () -> Unit = {},
         onUnifiedEvent: (UnifiedEvent) -> Unit = {},
-        onAction: (TimelineAction) -> Unit,
     ) {
         cancelCurrent()
         val resolvedModel = resolveModel(engineId, model)
-        val cliSessionId = currentCliSessionId()
+        val remoteConversationId = currentRemoteConversationId()
         val request = AgentRequest(
             engineId = engineId,
             action = AgentAction.CHAT,
@@ -290,81 +395,59 @@ class AgentChatService private constructor(
             imageAttachments = imageAttachments,
             fileAttachments = fileAttachments,
             workingDirectory = workingDirectoryProvider(),
-            cliSessionId = cliSessionId,
+            remoteConversationId = remoteConversationId,
+            approvalMode = approvalMode,
         )
         if (engineId == CodexProviderFactory.ENGINE_ID) {
             logCodexChain(
                 "Codex chain request: sessionId=${sessionIdForLog()} requestId=${request.requestId} " +
-                    "mode=${if (cliSessionId == null) "exec" else "resume"} " +
+                    "mode=${if (remoteConversationId == null) "start-thread" else "resume-thread"} " +
                     "model=${resolvedModel ?: "<auto>"} " +
-                    "cliSessionId=${cliSessionId ?: "<none>"} contextFiles=${contextFiles.size} " +
+                    "remoteConversationId=${remoteConversationId ?: "<none>"} contextFiles=${contextFiles.size} " +
                     "images=${imageAttachments.size} files=${fileAttachments.size}",
             )
         }
         val provider = registry.providerOrDefault(engineId)
         val job = scope.launch {
-            val assembler = TimelineActionAssembler()
-            val runtime = TimelineActionRuntime(
-                scope = this,
-                supportsCommandExecution = registry.engine(engineId)?.capabilities?.supportsCommandProposal == true,
-                commandExecutor = { command, cwd ->
-                    withContext(Dispatchers.IO) {
-                        executeCommand(command, cwd)
-                    }
-                },
-                emitAction = onAction,
-            )
             val assistantBuffer = StringBuilder()
             val sessionId = synchronized(stateLock) { currentSessionId }
             var activeTurnId = localTurnId?.trim().orEmpty()
+            val countedAssistantItems = mutableSetOf<String>()
             try {
-                provider.stream(request).collect { event ->
-                    collectAssistantOutput(event, assistantBuffer)
-                    EngineEventBridge.map(event, request.requestId)?.let { unified ->
-                        val persistResult = persistUnifiedEvent(
-                            sessionId = sessionId,
-                            activeTurnId = activeTurnId,
-                            event = unified,
-                            assistantText = assistantBuffer.toString(),
-                        )
-                        activeTurnId = persistResult.turnId
-                        if (persistResult.createdAssistantMessage ) {
-                            synchronized(stateLock) {
-                                sessions[sessionId]?.applyMessage(
-                                    ChatMessage(
-                                        role = MessageRole.ASSISTANT,
-                                        content = assistantBuffer.toString().ifBlank { prompt },
-                                        timestamp = System.currentTimeMillis(),
-                                    ),
-                                )
-                            }
-                            persistSessionSnapshot(sessionId)
-                        }
-                        onUnifiedEvent(unified)
-                    }
-                    when (event) {
-                        is EngineEvent.SessionReady -> {
-                            if (engineId == CodexProviderFactory.ENGINE_ID) {
-                                logCodexChain(
-                                    "Codex chain session ready: sessionId=${sessionIdForLog()} cliSessionId=${event.sessionId}",
-                                )
-                            }
-                            updateCurrentCliSessionId(event.sessionId)
-                        }
-                        is EngineEvent.TurnUsage -> {
-                            updateCurrentUsageSnapshot(
-                                model = resolvedModel ?: model,
-                                usage = event,
-                                engineId = engineId,
+                provider.stream(request).collect { unified ->
+                    collectAssistantOutput(unified, assistantBuffer)
+                    val persistResult = persistUnifiedEvent(
+                        sessionId = sessionId,
+                        activeTurnId = activeTurnId,
+                        event = unified,
+                    )
+                    activeTurnId = persistResult.turnId
+                    if (unified is UnifiedEvent.ItemUpdated &&
+                        unified.item.kind == ItemKind.NARRATIVE &&
+                        narrativeRole(unified.item) == MessageRole.ASSISTANT &&
+                        assistantBuffer.isNotBlank() &&
+                        countedAssistantItems.add(unified.item.id)
+                    ) {
+                        synchronized(stateLock) {
+                            sessions[sessionId]?.applyMessage(
+                                ChatMessage(
+                                    role = MessageRole.ASSISTANT,
+                                    content = assistantBuffer.toString().ifBlank { prompt },
+                                    timestamp = System.currentTimeMillis(),
+                                ),
                             )
                         }
-                        else -> Unit
+                        persistSessionSnapshot(sessionId)
                     }
-                    assembler.accept(event).forEach { action ->
-                        runtime.accept(action)
+                    if (unified is UnifiedEvent.TurnCompleted && unified.usage != null) {
+                        updateCurrentUsageSnapshot(
+                            model = resolvedModel ?: model,
+                            usage = unified.usage,
+                            engineId = engineId,
+                        )
                     }
+                    onUnifiedEvent(unified)
                 }
-                runtime.awaitIdle()
                 onTurnPersisted()
             } finally {
                 synchronized(stateLock) {
@@ -395,6 +478,10 @@ class AgentChatService private constructor(
                 registry.cancel(id)
             }
         }
+    }
+
+    fun submitApprovalDecision(requestId: String, decision: ApprovalAction): Boolean {
+        return registry.submitApprovalDecision(requestId, decision)
     }
 
     fun availableEngines(): List<EngineDescriptor> = registry.engines()
@@ -457,14 +544,18 @@ class AgentChatService private constructor(
     }
 
     private fun collectAssistantOutput(
-        event: EngineEvent,
+        event: UnifiedEvent,
         assistantBuffer: StringBuilder,
     ) {
         when (event) {
-            is EngineEvent.AssistantTextDelta -> assistantBuffer.append(event.text)
-            is EngineEvent.NarrativeItem -> {
-                if (!event.isUser && !event.isThinking) {
-                    assistantBuffer.append(event.text)
+            is UnifiedEvent.ItemUpdated -> {
+                val item = event.item
+                if (item.kind == ItemKind.NARRATIVE &&
+                    narrativeRole(item) == MessageRole.ASSISTANT &&
+                    !item.text.isNullOrBlank()
+                ) {
+                    assistantBuffer.clear()
+                    assistantBuffer.append(item.text)
                 }
             }
             else -> Unit
@@ -475,116 +566,53 @@ class AgentChatService private constructor(
         sessionId: String,
         activeTurnId: String,
         event: UnifiedEvent,
-        assistantText: String,
     ): PersistResult {
         var nextTurnId = activeTurnId
-        var createdAssistantMessage = false
         when (event) {
-            is UnifiedEvent.ThreadStarted -> Unit
+            is UnifiedEvent.ApprovalRequested -> Unit
+            is UnifiedEvent.ThreadStarted -> updateCurrentRemoteConversationId(event.threadId)
             is UnifiedEvent.TurnStarted -> {
                 val incoming = event.turnId.trim()
                 if (incoming.isNotBlank()) {
-                    if (nextTurnId.isNotBlank() && nextTurnId != incoming) {
-                        repository.replaceTurnId(
-                            sessionId = sessionId,
-                            fromTurnId = nextTurnId,
-                            toTurnId = incoming,
-                        )
-                    }
+                    repository.replaceSessionAssetTurnId(sessionId, nextTurnId, incoming)
                     nextTurnId = incoming
                 }
             }
 
             is UnifiedEvent.ItemUpdated -> {
-                val turnId = nextTurnId
                 val item = event.item
-                if (item.kind == ItemKind.NARRATIVE) {
-                    val role = narrativeRole(item)
-                    val body = when {
-                        role == MessageRole.ASSISTANT && assistantText.isNotBlank() -> assistantText
-                        else -> item.text.orEmpty()
-                    }
-                    if (body.isNotBlank()) {
-                        val existingAssistant = role == MessageRole.ASSISTANT &&
-                            item.status == ItemStatus.RUNNING &&
-                            assistantText.isNotBlank()
-                        repository.upsertMessageRecord(
-                            sessionId = sessionId,
-                            turnId = turnId,
-                            sourceId = item.id,
-                            role = role,
-                            body = body,
-                            status = item.status,
-                            timestamp = System.currentTimeMillis(),
-                        )
-                        createdAssistantMessage = existingAssistant
-                    }
-                } else {
-                    repository.upsertActivityRecord(
-                        sessionId = sessionId,
-                        turnId = turnId,
-                        sourceId = item.id,
-                        kind = item.kind.toPersistedActivityKind(),
-                        title = item.activityTitle(),
-                        body = item.activityBody(),
-                        status = item.status,
-                        timestamp = System.currentTimeMillis(),
-                    )
+                if (item.kind == ItemKind.NARRATIVE && narrativeRole(item) == MessageRole.USER) {
+                    // user messages are restored from remote history but not duplicated into local persistence
                 }
             }
-
-            is UnifiedEvent.TurnCompleted -> {
-                val targetTurnId = event.turnId.takeIf { it.isNotBlank() } ?: nextTurnId
-                if (targetTurnId.isNotBlank()) {
-                    repository.markTurnRecordsStatus(
-                        sessionId = sessionId,
-                        turnId = targetTurnId,
-                        fromStatus = ItemStatus.RUNNING,
-                        toStatus = event.outcome.toItemStatus(),
-                    )
-                }
-                if (event.turnId.isNotBlank()) {
-                    nextTurnId = event.turnId
-                }
-            }
-
-            is UnifiedEvent.Error -> {
-                if (nextTurnId.isNotBlank()) {
-                    repository.markTurnRecordsStatus(
-                        sessionId = sessionId,
-                        turnId = nextTurnId,
-                        fromStatus = ItemStatus.RUNNING,
-                        toStatus = ItemStatus.FAILED,
-                    )
-                }
-            }
+            is UnifiedEvent.TurnCompleted -> if (event.turnId.isNotBlank()) nextTurnId = event.turnId
+            is UnifiedEvent.Error -> Unit
         }
         return PersistResult(
             turnId = nextTurnId,
-            createdAssistantMessage = createdAssistantMessage,
         )
     }
 
-    private fun currentCliSessionId(): String? = synchronized(stateLock) {
-        sessions[currentSessionId]?.cliSessionId?.trim()?.takeIf { it.isNotBlank() }
+    private fun currentRemoteConversationId(): String? = synchronized(stateLock) {
+        sessions[currentSessionId]?.remoteConversationId?.trim()?.takeIf { it.isNotBlank() }
     }
 
-    private fun updateCurrentCliSessionId(cliSessionId: String) {
-        val trimmed = cliSessionId.trim()
+    private fun updateCurrentRemoteConversationId(remoteConversationId: String) {
+        val trimmed = remoteConversationId.trim()
         if (trimmed.isBlank()) return
         val sessionId = synchronized(stateLock) {
             val sessionId = currentSessionId
-            sessions[sessionId]?.cliSessionId = trimmed
+            sessions[sessionId]?.remoteConversationId = trimmed
             sessions[sessionId]?.updatedAt = System.currentTimeMillis()
             sessionId
         }
-        logCodexChain("Codex chain stored cli session: sessionId=${sessionIdForLog()} cliSessionId=$trimmed")
+        logCodexChain("Codex chain stored remote conversation: sessionId=${sessionIdForLog()} remoteConversationId=$trimmed")
         persistSessionSnapshot(sessionId)
     }
 
     private fun updateCurrentUsageSnapshot(
         model: String?,
-        usage: EngineEvent.TurnUsage,
+        usage: TurnUsage,
         engineId: String,
     ) {
         val snapshot = TurnUsageSnapshot(
@@ -625,11 +653,12 @@ class AgentChatService private constructor(
     private fun PersistedChatSession.toSessionData(): SessionData {
         return SessionData(
             id = id,
+            providerId = providerId,
             createdAt = createdAt,
             title = title.trim(),
             updatedAt = updatedAt,
             messageCount = messageCount,
-            cliSessionId = remoteThreadId,
+            remoteConversationId = remoteConversationId,
             usageSnapshot = usageSnapshot,
         )
     }
@@ -637,11 +666,12 @@ class AgentChatService private constructor(
     private fun SessionData.toPersisted(isActive: Boolean): PersistedChatSession {
         return PersistedChatSession(
             id = id,
+            providerId = providerId,
             title = title,
             createdAt = createdAt,
             updatedAt = updatedAt,
             messageCount = messageCount,
-            remoteThreadId = cliSessionId,
+            remoteConversationId = remoteConversationId,
             usageSnapshot = usageSnapshot,
             isActive = isActive,
         )
@@ -665,14 +695,13 @@ class AgentChatService private constructor(
         if (!Files.exists(dir)) return
         runCatching {
             Files.walk(dir)
-                .sorted(Comparator.reverseOrder())
+                .sorted(java.util.Comparator.reverseOrder())
                 .forEach { path -> Files.deleteIfExists(path) }
         }
     }
 
     private data class PersistResult(
         val turnId: String,
-        val createdAssistantMessage: Boolean,
     )
 
     private fun narrativeRole(item: UnifiedItem): MessageRole {
@@ -683,62 +712,54 @@ class AgentChatService private constructor(
         }
     }
 
-    private fun UnifiedItem.activityTitle(): String {
-        return when (kind.toPersistedActivityKind()) {
-            PersistedActivityKind.TOOL -> ActivityTitleFormatter.toolTitle(
-                explicitName = name,
-                body = activityBody(),
-            )
-            PersistedActivityKind.COMMAND -> ActivityTitleFormatter.commandTitle(
-                explicitName = name,
-                command = command,
-                body = activityBody(),
-            )
-            PersistedActivityKind.DIFF -> ActivityTitleFormatter.fileChangeTitle(
-                explicitName = name,
-                changes = fileChanges.map { change ->
-                    ActivityTitleFormatter.FileChangeSummary(
-                        path = change.path,
-                        kind = change.kind,
+    private fun ConversationHistoryPage.attachLocalAssets(sessionId: String): ConversationHistoryPage {
+        if (events.isEmpty()) return this
+        val assetsByTurn = repository.loadSessionAssets(sessionId)
+            .filter { it.messageRole == MessageRole.USER && it.turnId.isNotBlank() }
+            .groupBy { it.turnId }
+            .mapValues { (_, value) ->
+                value.map { asset ->
+                    UnifiedMessageAttachment(
+                        id = asset.attachment.id,
+                        kind = asset.attachment.kind.name.lowercase(),
+                        displayName = asset.attachment.displayName,
+                        assetPath = asset.attachment.assetPath,
+                        originalPath = asset.attachment.originalPath,
+                        mimeType = asset.attachment.mimeType,
+                        sizeBytes = asset.attachment.sizeBytes,
+                        status = asset.attachment.status,
                     )
-                },
-                body = activityBody(),
-            )
-            PersistedActivityKind.APPROVAL -> "Approval"
-            PersistedActivityKind.PLAN -> "Plan Update"
-            PersistedActivityKind.UNKNOWN -> "Activity"
-        }
-    }
-
-    private fun UnifiedItem.activityBody(): String {
-        return listOfNotNull(
-            text?.takeIf { it.isNotBlank() },
-            command?.takeIf { it.isNotBlank() },
-            filePath?.takeIf { it.isNotBlank() },
-        ).joinToString("\n").ifBlank { id }
-    }
-
-    private fun ItemKind.toPersistedActivityKind(): PersistedActivityKind {
-        return when (this) {
-            ItemKind.TOOL_CALL -> PersistedActivityKind.TOOL
-            ItemKind.COMMAND_EXEC -> PersistedActivityKind.COMMAND
-            ItemKind.DIFF_APPLY -> PersistedActivityKind.DIFF
-            ItemKind.APPROVAL_REQUEST -> PersistedActivityKind.APPROVAL
-            ItemKind.PLAN_UPDATE -> PersistedActivityKind.PLAN
-            ItemKind.NARRATIVE,
-            ItemKind.UNKNOWN,
-            -> PersistedActivityKind.UNKNOWN
-        }
-    }
-
-    private fun com.codex.assistant.protocol.TurnOutcome.toItemStatus(): ItemStatus {
-        return when (this) {
-            com.codex.assistant.protocol.TurnOutcome.SUCCESS -> ItemStatus.SUCCESS
-            com.codex.assistant.protocol.TurnOutcome.CANCELLED,
-            com.codex.assistant.protocol.TurnOutcome.FAILED,
-            -> ItemStatus.FAILED
-
-            com.codex.assistant.protocol.TurnOutcome.RUNNING -> ItemStatus.RUNNING
-        }
+                }
+            }
+        if (assetsByTurn.isEmpty()) return this
+        var activeTurnId: String? = null
+        return copy(
+            events = events.map { event ->
+                when (event) {
+                    is UnifiedEvent.TurnStarted -> {
+                        activeTurnId = event.turnId
+                        event
+                    }
+                    is UnifiedEvent.ItemUpdated -> {
+                        val turnId = activeTurnId
+                        if (
+                            event.item.kind == ItemKind.NARRATIVE &&
+                            narrativeRole(event.item) == MessageRole.USER &&
+                            !turnId.isNullOrBlank()
+                        ) {
+                            val attachments = assetsByTurn[turnId].orEmpty()
+                            if (attachments.isNotEmpty()) {
+                                event.copy(item = event.item.copy(attachments = attachments))
+                            } else {
+                                event
+                            }
+                        } else {
+                            event
+                        }
+                    }
+                    else -> event
+                }
+            },
+        )
     }
 }

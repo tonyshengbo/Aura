@@ -25,13 +25,13 @@ internal fun RightDrawerRegion(
 ) {
     val t = assistantUiTokens()
     val shape = RoundedCornerShape(t.spacing.lg)
-    val isSettings = state.kind == RightDrawerKind.SETTINGS
+    val isFullBleed = state.kind == RightDrawerKind.SETTINGS || state.kind == RightDrawerKind.HISTORY
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(p.appBg, if (isSettings) RoundedCornerShape(0.dp) else shape)
+            .background(p.appBg, if (isFullBleed) RoundedCornerShape(0.dp) else shape)
             .then(
-                if (isSettings) {
+                if (isFullBleed) {
                     Modifier
                 } else {
                     Modifier.border(1.dp, p.markdownDivider.copy(alpha = 0.72f), shape)

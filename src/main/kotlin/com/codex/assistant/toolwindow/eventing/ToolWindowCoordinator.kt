@@ -1,6 +1,7 @@
 package com.codex.assistant.toolwindow.eventing
 
 import com.codex.assistant.model.ChatMessage
+import com.codex.assistant.model.AgentApprovalMode
 import com.codex.assistant.model.ContextFile
 import com.codex.assistant.model.FileAttachment
 import com.codex.assistant.model.ImageAttachment
@@ -11,6 +12,9 @@ import com.codex.assistant.persistence.chat.PersistedMessageAttachment
 import com.codex.assistant.protocol.TurnOutcome
 import com.codex.assistant.protocol.UnifiedEvent
 import com.codex.assistant.settings.SavedAgentDefinition
+import com.codex.assistant.toolwindow.approval.ApprovalAction
+import com.codex.assistant.toolwindow.approval.ApprovalAreaStore
+import com.codex.assistant.toolwindow.approval.toUiModel
 import com.codex.assistant.toolwindow.composer.AttachmentEntry
 import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.settings.AgentSettingsService
@@ -25,6 +29,7 @@ import com.codex.assistant.toolwindow.timeline.TimelineAreaStore
 import com.codex.assistant.toolwindow.timeline.TimelineFileChange
 import com.codex.assistant.toolwindow.timeline.TimelineMutation
 import com.codex.assistant.toolwindow.timeline.TimelineNodeMapper
+import com.codex.assistant.toolwindow.timeline.TimelineNodeReducer
 import com.intellij.codeInsight.navigation.LOG
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.PathManager
@@ -57,6 +62,7 @@ internal class ToolWindowCoordinator(
     private val timelineStore: TimelineAreaStore,
     private val composerStore: ComposerAreaStore,
     private val rightDrawerStore: RightDrawerAreaStore,
+    private val approvalStore: ApprovalAreaStore = ApprovalAreaStore(),
     private val pickAttachments: () -> List<String> = { emptyList() },
     private val searchProjectFiles: (String, Int) -> List<String> = { _, _ -> emptyList() },
     private val isMentionCandidateFile: (String) -> Boolean = { path -> MentionFileWhitelist.allowPath(path) },
@@ -85,8 +91,11 @@ internal class ToolWindowCoordinator(
                 timelineStore.onEvent(event)
                 composerStore.onEvent(event)
                 rightDrawerStore.onEvent(event)
+                approvalStore.onEvent(event)
                 if (event is AppEvent.UiIntentPublished) {
                     handleUiIntent(event.intent)
+                } else if (event is AppEvent.UnifiedEventPublished) {
+                    handleUnifiedEvent(event.event)
                 }
             }
         }
@@ -104,9 +113,20 @@ internal class ToolWindowCoordinator(
                 }
             }
 
+            UiIntent.ToggleHistory -> {
+                if (rightDrawerStore.state.value.kind == RightDrawerKind.HISTORY) {
+                    loadHistoryConversations(reset = true)
+                }
+            }
+
             UiIntent.SendPrompt -> submitPromptIfAllowed()
             UiIntent.CancelRun -> cancelPromptRun()
             is UiIntent.DeleteSession -> deleteSession(intent.sessionId)
+            is UiIntent.SwitchSession -> switchSession(intent.sessionId)
+            UiIntent.LoadHistoryConversations -> loadHistoryConversations(reset = true)
+            UiIntent.LoadMoreHistoryConversations -> loadHistoryConversations(reset = false)
+            is UiIntent.EditHistorySearchQuery -> loadHistoryConversations(reset = true)
+            is UiIntent.OpenRemoteConversation -> openRemoteConversation(intent.remoteConversationId, intent.title)
             is UiIntent.OpenTimelineFileChange -> openTimelineFileChange(intent.change)
             is UiIntent.OpenTimelineFilePath -> openTimelineFilePath(intent.path)
             UiIntent.LoadOlderMessages -> loadOlderMessages()
@@ -154,9 +174,24 @@ internal class ToolWindowCoordinator(
             is UiIntent.UpdateFocusedContextFile -> recordFocusedFile(intent.path)
             is UiIntent.EditSettingsLanguageMode -> applyLanguagePreview(intent.mode)
             is UiIntent.EditSettingsThemeMode -> applyThemePreview(intent.mode)
+            is UiIntent.SubmitApprovalAction -> submitApprovalDecision(intent.action)
             UiIntent.SaveAgentDraft -> saveAgentDraft()
             is UiIntent.DeleteSavedAgent -> deleteSavedAgent(intent.id)
             UiIntent.SaveSettings -> saveSettings()
+            else -> Unit
+        }
+    }
+
+    private fun handleUnifiedEvent(event: UnifiedEvent) {
+        when (event) {
+            is UnifiedEvent.ApprovalRequested -> {
+                eventHub.publish(AppEvent.ApprovalRequested(event.request.toUiModel()))
+            }
+
+            is UnifiedEvent.TurnCompleted -> {
+                eventHub.publish(AppEvent.ClearApprovals)
+            }
+
             else -> Unit
         }
     }
@@ -240,6 +275,23 @@ internal class ToolWindowCoordinator(
         restoreCurrentSessionHistory()
     }
 
+    private fun switchSession(sessionId: String) {
+        if (!chatService.switchSession(sessionId)) return
+        publishSessionSnapshot()
+        restoreCurrentSessionHistory()
+    }
+
+    private fun openRemoteConversation(remoteConversationId: String, title: String) {
+        val sessionId = chatService.openRemoteConversation(
+            remoteConversationId = remoteConversationId,
+            suggestedTitle = title,
+        ) ?: return
+        publishSessionSnapshot()
+        restoreCurrentSessionHistory()
+        eventHub.publishUiIntent(UiIntent.CloseRightDrawer)
+        onSessionSnapshotPublished()
+    }
+
     private fun recordFocusedFile(path: String?) {
         val normalized = path?.trim().orEmpty()
         if (normalized.isBlank() || !isMentionCandidateFile(normalized)) return
@@ -262,7 +314,7 @@ internal class ToolWindowCoordinator(
             attachments = composerState.attachments,
         )
 
-        val persistedMessage = if (prompt.isBlank()) {
+        val localMessage = if (prompt.isBlank()) {
             null
         } else {
             chatService.recordUserMessage(
@@ -272,10 +324,16 @@ internal class ToolWindowCoordinator(
             )
         }
         eventHub.publish(AppEvent.PromptAccepted(prompt))
-        persistedMessage?.let { entry ->
+        localMessage?.let { message ->
             eventHub.publish(
                 AppEvent.TimelineMutationApplied(
-                    TimelineNodeMapper.localUserMessageMutation(entry),
+                    TimelineNodeMapper.localUserMessageMutation(
+                        sourceId = message.sourceId,
+                        text = message.prompt,
+                        timestamp = message.timestamp,
+                        turnId = message.turnId,
+                        attachments = message.attachments,
+                    ),
                 ),
             )
         }
@@ -302,9 +360,13 @@ internal class ToolWindowCoordinator(
             contextFiles = contextFiles,
             imageAttachments = imageAttachments,
             fileAttachments = fileAttachments,
+            approvalMode = when (composerState.selectedMode) {
+                ComposerMode.AUTO -> AgentApprovalMode.AUTO
+                ComposerMode.APPROVAL -> AgentApprovalMode.REQUIRE_CONFIRMATION
+            },
             onTurnPersisted = { publishSessionSnapshot() },
             onUnifiedEvent = ::publishUnifiedEvent,
-        ) { }
+        )
     }
 
     private fun cancelPromptRun() {
@@ -338,6 +400,35 @@ internal class ToolWindowCoordinator(
                 savedAgents = state.savedAgents.toList(),
             ),
         )
+    }
+
+    private fun loadHistoryConversations(reset: Boolean) {
+        val drawerState = rightDrawerStore.state.value
+        if (drawerState.historyLoading) return
+        if (!reset && drawerState.historyNextCursor == null) return
+        eventHub.publish(
+            AppEvent.HistoryConversationsUpdated(
+                conversations = if (reset) emptyList() else drawerState.historyConversations,
+                nextCursor = drawerState.historyNextCursor,
+                isLoading = true,
+                append = !reset,
+            ),
+        )
+        scope.launch {
+            val page = chatService.loadRemoteConversationSummaries(
+                limit = historyPageSize,
+                cursor = if (reset) null else drawerState.historyNextCursor,
+                searchTerm = drawerState.historyQuery.trim().takeIf { it.isNotBlank() },
+            )
+            eventHub.publish(
+                AppEvent.HistoryConversationsUpdated(
+                    conversations = page.conversations,
+                    nextCursor = page.nextCursor,
+                    isLoading = false,
+                    append = !reset,
+                ),
+            )
+        }
     }
 
     fun onSessionActivated() {
@@ -468,15 +559,17 @@ internal class ToolWindowCoordinator(
 
     private fun restoreCurrentSessionHistory() {
         eventHub.publish(AppEvent.ConversationReset)
-        val page = chatService.loadCurrentSessionTimeline(limit = historyPageSize)
-        eventHub.publish(
-            AppEvent.TimelineHistoryLoaded(
-                nodes = page.entries.map(TimelineNodeMapper::fromHistory),
-                oldestCursor = page.entries.firstOrNull()?.cursor,
-                hasOlder = page.hasOlder,
-                prepend = false,
-            ),
-        )
+        scope.launch {
+            val page = chatService.loadCurrentConversationHistory(limit = historyPageSize)
+            eventHub.publish(
+                AppEvent.TimelineHistoryLoaded(
+                    nodes = restoreNodes(page.events),
+                    oldestCursor = page.olderCursor,
+                    hasOlder = page.hasOlder,
+                    prepend = false,
+                ),
+            )
+        }
     }
 
     private fun loadOlderMessages() {
@@ -484,18 +577,20 @@ internal class ToolWindowCoordinator(
         if (!state.hasOlder || state.isLoadingOlder) return
         val beforeCursor = state.oldestCursor ?: return
         eventHub.publish(AppEvent.TimelineOlderLoadingChanged(loading = true))
-        val page = chatService.loadOlderTimeline(
-            beforeCursorExclusive = beforeCursor,
-            limit = historyPageSize,
-        )
-        eventHub.publish(
-            AppEvent.TimelineHistoryLoaded(
-                nodes = page.entries.map(TimelineNodeMapper::fromHistory),
-                oldestCursor = page.entries.firstOrNull()?.cursor,
-                hasOlder = page.hasOlder,
-                prepend = true,
-            ),
-        )
+        scope.launch {
+            val page = chatService.loadOlderConversationHistory(
+                cursor = beforeCursor,
+                limit = historyPageSize,
+            )
+            eventHub.publish(
+                AppEvent.TimelineHistoryLoaded(
+                    nodes = restoreNodes(page.events),
+                    oldestCursor = page.olderCursor,
+                    hasOlder = page.hasOlder,
+                    prepend = true,
+                ),
+            )
+        }
     }
 
     private fun publishUnifiedEvent(event: UnifiedEvent) {
@@ -503,6 +598,46 @@ internal class ToolWindowCoordinator(
         TimelineNodeMapper.fromUnifiedEvent(event)?.let { mutation ->
             eventHub.publish(AppEvent.TimelineMutationApplied(mutation))
         }
+    }
+
+    private fun submitApprovalDecision(explicitAction: ApprovalAction?) {
+        val current = approvalStore.state.value.current ?: return
+        val action = explicitAction ?: approvalStore.state.value.selectedAction
+        if (!chatService.submitApprovalDecision(current.requestId, action)) return
+        eventHub.publish(AppEvent.ApprovalResolved(current.requestId))
+        eventHub.publish(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertApproval(
+                    sourceId = current.itemId,
+                    title = current.title,
+                    body = buildResolvedApprovalBody(current.body, action),
+                    status = when (action) {
+                        ApprovalAction.REJECT -> com.codex.assistant.protocol.ItemStatus.FAILED
+                        ApprovalAction.ALLOW,
+                        ApprovalAction.ALLOW_FOR_SESSION,
+                        -> com.codex.assistant.protocol.ItemStatus.SUCCESS
+                    },
+                    turnId = current.turnId,
+                ),
+            ),
+        )
+    }
+
+    private fun buildResolvedApprovalBody(body: String, action: ApprovalAction): String {
+        val decisionLabel = when (action) {
+            ApprovalAction.ALLOW -> "Allowed"
+            ApprovalAction.REJECT -> "Rejected"
+            ApprovalAction.ALLOW_FOR_SESSION -> "Remembered for session"
+        }
+        return listOf(body.trim().takeIf { it.isNotBlank() }, decisionLabel).joinToString("\n\n")
+    }
+
+    private fun restoreNodes(events: List<UnifiedEvent>): List<com.codex.assistant.toolwindow.timeline.TimelineNode> {
+        val reducer = TimelineNodeReducer()
+        events.forEach { event ->
+            TimelineNodeMapper.fromUnifiedEvent(event)?.let(reducer::accept)
+        }
+        return reducer.state.nodes.filterNot { it is com.codex.assistant.toolwindow.timeline.TimelineNode.LoadMoreNode }
     }
 
     private fun buildContextFiles(

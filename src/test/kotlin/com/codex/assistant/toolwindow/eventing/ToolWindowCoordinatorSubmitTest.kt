@@ -1,7 +1,6 @@
 package com.codex.assistant.toolwindow.eventing
 
 import com.codex.assistant.model.AgentRequest
-import com.codex.assistant.model.EngineEvent
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
@@ -18,6 +17,8 @@ import com.codex.assistant.toolwindow.header.HeaderAreaStore
 import com.codex.assistant.toolwindow.status.StatusAreaStore
 import com.codex.assistant.toolwindow.timeline.TimelineAreaStore
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
+import com.codex.assistant.protocol.TurnOutcome
+import com.codex.assistant.protocol.UnifiedEvent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.nio.file.Files
@@ -226,9 +227,9 @@ class ToolWindowCoordinatorSubmitTest {
     private class RecordingProvider : AgentProvider {
         val requests = mutableListOf<AgentRequest>()
 
-        override fun stream(request: AgentRequest): Flow<EngineEvent> = flow {
+        override fun stream(request: AgentRequest): Flow<UnifiedEvent> = flow {
             requests += request
-            emit(EngineEvent.Completed(exitCode = 0))
+            emit(UnifiedEvent.TurnCompleted(turnId = "turn-1", outcome = TurnOutcome.SUCCESS))
         }
 
         override fun cancel(requestId: String) = Unit

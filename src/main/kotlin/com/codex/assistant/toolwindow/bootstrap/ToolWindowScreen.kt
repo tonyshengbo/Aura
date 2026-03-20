@@ -16,6 +16,8 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
+import com.codex.assistant.toolwindow.approval.ApprovalAreaState
+import com.codex.assistant.toolwindow.approval.ApprovalOverlay
 import com.codex.assistant.toolwindow.composer.ComposerAreaState
 import com.codex.assistant.toolwindow.composer.ComposerRegion
 import com.codex.assistant.toolwindow.drawer.RightDrawerAreaState
@@ -41,6 +43,7 @@ internal fun ToolWindowScreen(
     timelineState: TimelineAreaState,
     composerState: ComposerAreaState,
     rightDrawerState: RightDrawerAreaState,
+    approvalState: ApprovalAreaState,
     anchor: ToolWindowAnchor,
     themeMode: UiThemeMode,
     onIntent: (UiIntent) -> Unit,
@@ -108,12 +111,21 @@ internal fun ToolWindowScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = t.spacing.md, vertical = t.spacing.lg),
-            contentAlignment = Alignment.BottomCenter,
         ) {
             StatusToastOverlay(
                 p = p,
                 state = statusState,
-                modifier = Modifier.padding(bottom = t.controls.sendButton + t.spacing.xl),
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = t.controls.sendButton + t.spacing.xl),
+            )
+            ApprovalOverlay(
+                palette = p,
+                state = approvalState,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = t.controls.sendButton + t.spacing.xl),
+                onIntent = onIntent,
             )
         }
         if (rightDrawerState.kind != RightDrawerKind.NONE) {

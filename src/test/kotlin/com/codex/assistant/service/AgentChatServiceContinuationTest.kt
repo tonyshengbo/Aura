@@ -1,8 +1,6 @@
 package com.codex.assistant.service
 
 import com.codex.assistant.model.AgentRequest
-import com.codex.assistant.model.EngineEvent
-import com.codex.assistant.model.TimelineAction
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
@@ -10,6 +8,11 @@ import com.codex.assistant.provider.EngineCapabilities
 import com.codex.assistant.provider.EngineDescriptor
 import com.codex.assistant.provider.ProviderRegistry
 import com.codex.assistant.settings.AgentSettingsService
+import com.codex.assistant.protocol.TurnOutcome
+import com.codex.assistant.protocol.UnifiedEvent
+import com.codex.assistant.protocol.UnifiedItem
+import com.codex.assistant.protocol.ItemKind
+import com.codex.assistant.protocol.ItemStatus
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -22,7 +25,7 @@ import kotlin.test.assertNull
 
 class AgentChatServiceContinuationTest {
     @Test
-    fun `second turn reuses persisted cli session id after service reload`() = runBlocking {
+    fun `second turn reuses persisted remote conversation id after service reload`() = runBlocking {
         val dbPath = createTempDirectory("chat-service-continuation").resolve("chat.db")
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
         val firstProvider = RecordingProvider(sessionIds = ArrayDeque(listOf("thread_1")))
@@ -39,11 +42,8 @@ class AgentChatServiceContinuationTest {
             model = "gpt-5.3-codex",
             prompt = "First turn",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                firstFinished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { firstFinished.complete(Unit) },
+        )
         withTimeout(2_000) { firstFinished.await() }
         firstService.dispose()
 
@@ -59,17 +59,14 @@ class AgentChatServiceContinuationTest {
             model = "gpt-5.3-codex",
             prompt = "Second turn",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                secondFinished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { secondFinished.complete(Unit) },
+        )
         withTimeout(2_000) { secondFinished.await() }
 
         assertEquals(1, firstProvider.requests.size)
-        assertNull(firstProvider.requests[0].cliSessionId)
+        assertNull(firstProvider.requests[0].remoteConversationId)
         assertEquals(1, secondProvider.requests.size)
-        assertEquals("thread_1", secondProvider.requests[0].cliSessionId)
+        assertEquals("thread_1", secondProvider.requests[0].remoteConversationId)
         secondService.dispose()
     }
 
@@ -103,11 +100,22 @@ class AgentChatServiceContinuationTest {
     ) : AgentProvider {
         val requests = mutableListOf<AgentRequest>()
 
-        override fun stream(request: AgentRequest): Flow<EngineEvent> = flow {
+        override fun stream(request: AgentRequest): Flow<UnifiedEvent> = flow {
             requests += request
-            emit(EngineEvent.AssistantTextDelta("ok"))
-            emit(EngineEvent.SessionReady(sessionIds.removeFirst()))
-            emit(EngineEvent.Completed(exitCode = 0))
+            val threadId = sessionIds.removeFirst()
+            emit(UnifiedEvent.ThreadStarted(threadId = threadId))
+            emit(
+                UnifiedEvent.ItemUpdated(
+                    UnifiedItem(
+                        id = "${request.requestId}:assistant",
+                        kind = ItemKind.NARRATIVE,
+                        status = ItemStatus.SUCCESS,
+                        name = "message",
+                        text = "ok",
+                    ),
+                ),
+            )
+            emit(UnifiedEvent.TurnCompleted(turnId = "turn-1", outcome = TurnOutcome.SUCCESS))
         }
 
         override fun cancel(requestId: String) = Unit

@@ -14,8 +14,8 @@ class ToolWindowHeaderTabsModelTest {
             openSessionIds = listOf("s2", "s1"),
             activeSessionId = "s1",
             sessions = listOf(
-                AgentChatService.SessionSummary("s1", "First Session", 2L, 3),
-                AgentChatService.SessionSummary("s2", "Second Session", 1L, 1),
+                AgentChatService.SessionSummary("s1", "First Session", 2L, 3, ""),
+                AgentChatService.SessionSummary("s2", "Second Session", 1L, 1, ""),
             ),
         )
 
@@ -30,7 +30,7 @@ class ToolWindowHeaderTabsModelTest {
             openSessionIds = listOf("s1"),
             activeSessionId = "s1",
             sessions = listOf(
-                AgentChatService.SessionSummary("s1", "", 1L, 0),
+                AgentChatService.SessionSummary("s1", "", 1L, 0, ""),
             ),
         )
 

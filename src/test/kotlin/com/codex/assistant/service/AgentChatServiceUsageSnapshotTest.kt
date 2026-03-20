@@ -1,13 +1,18 @@
 package com.codex.assistant.service
 
 import com.codex.assistant.model.AgentRequest
-import com.codex.assistant.model.EngineEvent
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
 import com.codex.assistant.provider.EngineDescriptor
 import com.codex.assistant.provider.ProviderRegistry
+import com.codex.assistant.protocol.ItemKind
+import com.codex.assistant.protocol.ItemStatus
+import com.codex.assistant.protocol.TurnOutcome
+import com.codex.assistant.protocol.TurnUsage
+import com.codex.assistant.protocol.UnifiedEvent
+import com.codex.assistant.protocol.UnifiedItem
 import com.codex.assistant.settings.AgentSettingsService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -32,11 +37,8 @@ class AgentChatServiceUsageSnapshotTest {
             model = "gpt-5.3-codex",
             prompt = "Summarize the repo",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == com.codex.assistant.model.TimelineAction.FinishTurn) {
-                finished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { finished.complete(Unit) },
+        )
         withTimeout(2_000) { finished.await() }
 
         val snapshot = assertNotNull(service.currentUsageSnapshot())
@@ -98,16 +100,29 @@ class AgentChatServiceUsageSnapshotTest {
     }
 
     private class UsageReportingProvider : AgentProvider {
-        override fun stream(request: AgentRequest): Flow<EngineEvent> = flow {
-            emit(EngineEvent.AssistantTextDelta("done"))
+        override fun stream(request: AgentRequest): Flow<UnifiedEvent> = flow {
             emit(
-                EngineEvent.TurnUsage(
-                    inputTokens = 116_986,
-                    cachedInputTokens = 93_440,
-                    outputTokens = 3_202,
+                UnifiedEvent.ItemUpdated(
+                    UnifiedItem(
+                        id = "${request.requestId}:assistant",
+                        kind = ItemKind.NARRATIVE,
+                        status = ItemStatus.SUCCESS,
+                        name = "message",
+                        text = "done",
+                    ),
                 ),
             )
-            emit(EngineEvent.Completed(exitCode = 0))
+            emit(
+                UnifiedEvent.TurnCompleted(
+                    turnId = "turn-1",
+                    outcome = TurnOutcome.SUCCESS,
+                    usage = TurnUsage(
+                        inputTokens = 116_986,
+                        cachedInputTokens = 93_440,
+                        outputTokens = 3_202,
+                    ),
+                ),
+            )
         }
 
         override fun cancel(requestId: String) = Unit

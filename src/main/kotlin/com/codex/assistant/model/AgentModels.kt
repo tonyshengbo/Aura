@@ -30,6 +30,11 @@ data class FileAttachment(
     val mimeType: String = "application/octet-stream",
 )
 
+enum class AgentApprovalMode {
+    AUTO,
+    REQUIRE_CONFIRMATION,
+}
+
 data class AgentRequest(
     val requestId: String = UUID.randomUUID().toString(),
     val engineId: String,
@@ -42,7 +47,8 @@ data class AgentRequest(
     val imageAttachments: List<ImageAttachment> = emptyList(),
     val fileAttachments: List<FileAttachment> = emptyList(),
     val workingDirectory: String,
-    val cliSessionId: String? = null,
+    val remoteConversationId: String? = null,
+    val approvalMode: AgentApprovalMode = AgentApprovalMode.AUTO,
 )
 
 sealed class AgentEvent {

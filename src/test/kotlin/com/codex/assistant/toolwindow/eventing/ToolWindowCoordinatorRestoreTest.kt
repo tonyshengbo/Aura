@@ -1,9 +1,11 @@
 package com.codex.assistant.toolwindow.eventing
 
-import com.codex.assistant.model.ChatMessage
-import com.codex.assistant.model.EngineEvent
+import com.codex.assistant.conversation.ConversationHistoryPage
+import com.codex.assistant.conversation.ConversationRef
+import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.model.MessageRole
 import com.codex.assistant.persistence.chat.PersistedAttachmentKind
+import com.codex.assistant.persistence.chat.PersistedChatSession
 import com.codex.assistant.persistence.chat.PersistedMessageAttachment
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
@@ -11,9 +13,13 @@ import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
 import com.codex.assistant.provider.EngineDescriptor
 import com.codex.assistant.provider.ProviderRegistry
-import com.codex.assistant.service.AgentChatService
+import com.codex.assistant.protocol.ItemKind
 import com.codex.assistant.protocol.ItemStatus
+import com.codex.assistant.protocol.TurnOutcome
+import com.codex.assistant.protocol.UnifiedEvent
+import com.codex.assistant.protocol.UnifiedItem
 import com.codex.assistant.settings.AgentSettingsService
+import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.toolwindow.composer.ComposerAreaStore
 import com.codex.assistant.toolwindow.drawer.RightDrawerAreaStore
 import com.codex.assistant.toolwindow.header.HeaderAreaStore
@@ -21,8 +27,8 @@ import com.codex.assistant.toolwindow.status.StatusAreaStore
 import com.codex.assistant.toolwindow.timeline.TimelineAreaStore
 import com.codex.assistant.toolwindow.timeline.TimelineNode
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -32,33 +38,39 @@ import kotlin.test.assertTrue
 
 class ToolWindowCoordinatorRestoreTest {
     @Test
-    fun `rehydrate loads latest persisted history page for the active session`() {
+    fun `rehydrate loads latest remote history page for the active session`() {
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
         val repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-restore").resolve("chat.db"))
+        repository.upsertSession(
+            PersistedChatSession(
+                id = "session-1",
+                providerId = "codex",
+                title = "hello",
+                createdAt = 1L,
+                updatedAt = 2L,
+                messageCount = 2,
+                remoteConversationId = "thread-1",
+                usageSnapshot = null,
+                isActive = true,
+            ),
+        )
+        val provider = HistoryBackedProvider(
+            historyTurns = mutableListOf(
+                historyTurn(
+                    turnId = "turn-1",
+                    userText = "hello",
+                    assistantText = "world",
+                ),
+            ),
+        )
         val service = AgentChatService(
             repository = repository,
-            registry = registryWithNoopProvider(),
+            registry = registry(provider),
             settings = settings,
         )
-        service.recordUserMessage(prompt = "hello")
-        repository.insertMessageRecord(
-            sessionId = service.getCurrentSessionId(),
-            message = ChatMessage(role = MessageRole.ASSISTANT, content = "world"),
-        )
 
-        val eventHub = ToolWindowEventHub()
         val timelineStore = TimelineAreaStore()
-        val coordinator = ToolWindowCoordinator(
-            chatService = service,
-            settingsService = settings,
-            eventHub = eventHub,
-            headerStore = HeaderAreaStore(),
-            statusStore = StatusAreaStore(),
-            timelineStore = timelineStore,
-            composerStore = ComposerAreaStore(),
-            rightDrawerStore = RightDrawerAreaStore(),
-            historyPageSize = 10,
-        )
+        val coordinator = createCoordinator(service, settings, timelineStore)
         waitUntil(timeoutMs = 2_000) { timelineStore.state.value.nodes.filterIsInstance<TimelineNode.MessageNode>().size == 2 }
 
         val state = timelineStore.state.value
@@ -70,16 +82,26 @@ class ToolWindowCoordinatorRestoreTest {
     }
 
     @Test
-    fun `rehydrate restores tool activity and user attachments from persisted timeline history`() {
+    fun `rehydrate restores tool activity and user attachments from remote history plus local assets`() {
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
-        val service = AgentChatService(
-            repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-rich-restore").resolve("chat.db")),
-            registry = registryWithTimelineProvider(),
-            settings = settings,
+        val repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-rich-restore").resolve("chat.db"))
+        repository.upsertSession(
+            PersistedChatSession(
+                id = "session-1",
+                providerId = "codex",
+                title = "look at this",
+                createdAt = 1L,
+                updatedAt = 2L,
+                messageCount = 1,
+                remoteConversationId = "thread-1",
+                usageSnapshot = null,
+                isActive = true,
+            ),
         )
-        service.recordUserMessage(
-            prompt = "look at this",
-            turnId = "local-turn-1",
+        repository.saveSessionAssets(
+            sessionId = "session-1",
+            turnId = "turn-1",
+            messageRole = MessageRole.USER,
             attachments = listOf(
                 PersistedMessageAttachment(
                     id = "attachment-1",
@@ -92,35 +114,34 @@ class ToolWindowCoordinatorRestoreTest {
                     status = ItemStatus.SUCCESS,
                 ),
             ),
+            createdAt = 3L,
+        )
+        val provider = HistoryBackedProvider(
+            historyTurns = mutableListOf(
+                historyTurn(
+                    turnId = "turn-1",
+                    userText = "look at this",
+                    assistantText = "done",
+                    extraItems = listOf(
+                        UnifiedItem(
+                            id = "tool-1",
+                            kind = ItemKind.TOOL_CALL,
+                            status = ItemStatus.SUCCESS,
+                            name = "shell",
+                            text = "echo hi",
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val service = AgentChatService(
+            repository = repository,
+            registry = registry(provider),
+            settings = settings,
         )
 
-        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
-        service.runAgent(
-            engineId = "codex",
-            model = "gpt-5.3-codex",
-            prompt = "look at this",
-            localTurnId = "local-turn-1",
-            contextFiles = emptyList(),
-        ) { action ->
-            if (action == com.codex.assistant.model.TimelineAction.FinishTurn) {
-                finished.set(true)
-            }
-        }
-        waitUntil(timeoutMs = 2_000) { finished.get() }
-
-        val eventHub = ToolWindowEventHub()
         val timelineStore = TimelineAreaStore()
-        val coordinator = ToolWindowCoordinator(
-            chatService = service,
-            settingsService = settings,
-            eventHub = eventHub,
-            headerStore = HeaderAreaStore(),
-            statusStore = StatusAreaStore(),
-            timelineStore = timelineStore,
-            composerStore = ComposerAreaStore(),
-            rightDrawerStore = RightDrawerAreaStore(),
-            historyPageSize = 10,
-        )
+        val coordinator = createCoordinator(service, settings, timelineStore)
         waitUntil(timeoutMs = 2_000) { timelineStore.state.value.nodes.size == 3 }
 
         val state = timelineStore.state.value
@@ -139,19 +160,32 @@ class ToolWindowCoordinatorRestoreTest {
     @Test
     fun `load older intent prepends older history without resetting newer messages`() {
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
-        val service = AgentChatService(
-            repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-history").resolve("chat.db")),
-            registry = registryWithNoopProvider(),
-            settings = settings,
+        val repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-history").resolve("chat.db"))
+        repository.upsertSession(
+            PersistedChatSession(
+                id = "session-1",
+                providerId = "codex",
+                title = "first",
+                createdAt = 1L,
+                updatedAt = 4L,
+                messageCount = 4,
+                remoteConversationId = "thread-1",
+                usageSnapshot = null,
+                isActive = true,
+            ),
         )
-        listOf("first", "second", "third", "fourth").forEach { text ->
-            service.recordUserMessage(prompt = text)
-        }
-
+        val provider = HistoryBackedProvider(
+            historyTurns = mutableListOf(
+                historyTurn(turnId = "turn-1", userText = "first", assistantText = ""),
+                historyTurn(turnId = "turn-2", userText = "second", assistantText = ""),
+                historyTurn(turnId = "turn-3", userText = "third", assistantText = ""),
+                historyTurn(turnId = "turn-4", userText = "fourth", assistantText = ""),
+            ),
+        )
         val eventHub = ToolWindowEventHub()
         val timelineStore = TimelineAreaStore()
         val coordinator = ToolWindowCoordinator(
-            chatService = service,
+            chatService = AgentChatService(repository = repository, registry = registry(provider), settings = settings),
             settingsService = settings,
             eventHub = eventHub,
             headerStore = HeaderAreaStore(),
@@ -178,45 +212,58 @@ class ToolWindowCoordinatorRestoreTest {
         assertFalse(state.hasOlder)
 
         coordinator.dispose()
-        service.dispose()
     }
 
     @Test
     fun `rehydrate then continue chat should append assistant response even when provider reuses turn id`() {
-        val dbPath = createTempDirectory("coordinator-continue").resolve("chat.db")
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
-        val firstService = AgentChatService(
-            repository = SQLiteChatSessionRepository(dbPath),
-            registry = registryWithSingleReplyProvider(reply = "old answer", turnId = "turn-1"),
-            settings = settings,
+        val repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-continue").resolve("chat.db"))
+        repository.upsertSession(
+            PersistedChatSession(
+                id = "session-1",
+                providerId = "codex",
+                title = "old question",
+                createdAt = 1L,
+                updatedAt = 2L,
+                messageCount = 2,
+                remoteConversationId = "thread-1",
+                usageSnapshot = null,
+                isActive = true,
+            ),
         )
-        firstService.recordUserMessage(prompt = "old question", turnId = "local-turn-1")
-
-        val firstFinished = java.util.concurrent.atomic.AtomicBoolean(false)
-        firstService.runAgent(
-            engineId = "codex",
-            model = "gpt-5.3-codex",
-            prompt = "old question",
-            localTurnId = "local-turn-1",
-            contextFiles = emptyList(),
-        ) { action ->
-            if (action == com.codex.assistant.model.TimelineAction.FinishTurn) {
-                firstFinished.set(true)
-            }
-        }
-        waitUntil(timeoutMs = 2_000) { firstFinished.get() }
-        firstService.dispose()
-
-        val secondService = AgentChatService(
-            repository = SQLiteChatSessionRepository(dbPath),
-            registry = registryWithSingleReplyProvider(reply = "new answer", turnId = "turn-1"),
+        val provider = HistoryBackedProvider(
+            historyTurns = mutableListOf(
+                historyTurn(turnId = "turn-1", userText = "old question", assistantText = "old answer"),
+            ),
+            liveStream = { request ->
+                flow {
+                    emit(UnifiedEvent.ThreadStarted(threadId = "thread-1"))
+                    emit(UnifiedEvent.TurnStarted(turnId = "turn-1", threadId = "thread-1"))
+                    emit(
+                        UnifiedEvent.ItemUpdated(
+                            UnifiedItem(
+                                id = "${request.requestId}:assistant",
+                                kind = ItemKind.NARRATIVE,
+                                status = ItemStatus.SUCCESS,
+                                name = "message",
+                                text = "new answer",
+                            ),
+                        ),
+                    )
+                    emit(UnifiedEvent.TurnCompleted(turnId = "turn-1", outcome = TurnOutcome.SUCCESS))
+                }
+            },
+        )
+        val service = AgentChatService(
+            repository = repository,
+            registry = registry(provider),
             settings = settings,
         )
 
         val eventHub = ToolWindowEventHub()
         val timelineStore = TimelineAreaStore()
         val coordinator = ToolWindowCoordinator(
-            chatService = secondService,
+            chatService = service,
             settingsService = settings,
             eventHub = eventHub,
             headerStore = HeaderAreaStore(),
@@ -233,7 +280,7 @@ class ToolWindowCoordinatorRestoreTest {
 
         waitUntil(timeoutMs = 2_000) {
             !timelineStore.state.value.isRunning &&
-                timelineStore.state.value.nodes.filterIsInstance<TimelineNode.MessageNode>().size >= 3
+                timelineStore.state.value.nodes.filterIsInstance<TimelineNode.MessageNode>().size >= 4
         }
 
         val messages = timelineStore.state.value.nodes.filterIsInstance<TimelineNode.MessageNode>()
@@ -243,7 +290,50 @@ class ToolWindowCoordinatorRestoreTest {
         )
 
         coordinator.dispose()
-        secondService.dispose()
+        service.dispose()
+    }
+
+    private fun createCoordinator(
+        service: AgentChatService,
+        settings: AgentSettingsService,
+        timelineStore: TimelineAreaStore,
+    ): ToolWindowCoordinator {
+        return ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = ToolWindowEventHub(),
+            headerStore = HeaderAreaStore(),
+            statusStore = StatusAreaStore(),
+            timelineStore = timelineStore,
+            composerStore = ComposerAreaStore(),
+            rightDrawerStore = RightDrawerAreaStore(),
+            historyPageSize = 10,
+        )
+    }
+
+    private fun registry(provider: AgentProvider): ProviderRegistry {
+        return ProviderRegistry(
+            descriptors = listOf(
+                EngineDescriptor(
+                    id = "codex",
+                    displayName = "Codex",
+                    models = listOf("gpt-5.3-codex"),
+                    capabilities = EngineCapabilities(
+                        supportsThinking = true,
+                        supportsToolEvents = true,
+                        supportsCommandProposal = false,
+                        supportsDiffProposal = false,
+                    ),
+                ),
+            ),
+            factories = listOf(
+                object : AgentProviderFactory {
+                    override val engineId: String = "codex"
+                    override fun create(): AgentProvider = provider
+                },
+            ),
+            defaultEngineId = "codex",
+        )
     }
 
     private fun waitUntil(timeoutMs: Long, condition: () -> Boolean) {
@@ -256,111 +346,71 @@ class ToolWindowCoordinatorRestoreTest {
         }
     }
 
-    private fun registryWithNoopProvider(): ProviderRegistry {
-        return ProviderRegistry(
-            descriptors = listOf(
-                EngineDescriptor(
-                    id = "codex",
-                    displayName = "Codex",
-                    models = listOf("gpt-5.3-codex"),
-                    capabilities = EngineCapabilities(
-                        supportsThinking = true,
-                        supportsToolEvents = true,
-                        supportsCommandProposal = false,
-                        supportsDiffProposal = false,
-                    ),
-                ),
-            ),
-            factories = listOf(
-                object : AgentProviderFactory {
-                    override val engineId: String = "codex"
-                    override fun create(): AgentProvider = NoopProvider
-                },
-            ),
-            defaultEngineId = "codex",
-        )
-    }
-
-    private fun registryWithTimelineProvider(): ProviderRegistry {
-        return ProviderRegistry(
-            descriptors = listOf(
-                EngineDescriptor(
-                    id = "codex",
-                    displayName = "Codex",
-                    models = listOf("gpt-5.3-codex"),
-                    capabilities = EngineCapabilities(
-                        supportsThinking = true,
-                        supportsToolEvents = true,
-                        supportsCommandProposal = false,
-                        supportsDiffProposal = false,
-                    ),
-                ),
-            ),
-            factories = listOf(
-                object : AgentProviderFactory {
-                    override val engineId: String = "codex"
-                    override fun create(): AgentProvider = TimelineProvider
-                },
-            ),
-            defaultEngineId = "codex",
-        )
-    }
-
-    private fun registryWithSingleReplyProvider(
-        reply: String,
-        turnId: String,
-    ): ProviderRegistry {
-        return ProviderRegistry(
-            descriptors = listOf(
-                EngineDescriptor(
-                    id = "codex",
-                    displayName = "Codex",
-                    models = listOf("gpt-5.3-codex"),
-                    capabilities = EngineCapabilities(
-                        supportsThinking = true,
-                        supportsToolEvents = true,
-                        supportsCommandProposal = false,
-                        supportsDiffProposal = false,
-                    ),
-                ),
-            ),
-            factories = listOf(
-                object : AgentProviderFactory {
-                    override val engineId: String = "codex"
-                    override fun create(): AgentProvider = SingleReplyProvider(reply = reply, turnId = turnId)
-                },
-            ),
-            defaultEngineId = "codex",
-        )
-    }
-
-    private object NoopProvider : AgentProvider {
-        override fun stream(request: com.codex.assistant.model.AgentRequest): Flow<EngineEvent> = emptyFlow()
-        override fun cancel(requestId: String) = Unit
-    }
-
-    private object TimelineProvider : AgentProvider {
-        override fun stream(request: com.codex.assistant.model.AgentRequest): Flow<EngineEvent> = flow {
-            emit(EngineEvent.TurnStarted(turnId = "turn-1", threadId = "thread-1"))
-            emit(EngineEvent.ToolCallStarted(callId = "tool-1", name = "shell", input = "echo hi"))
-            emit(EngineEvent.ToolCallFinished(callId = "tool-1", name = "shell", output = "echo hi"))
-            emit(EngineEvent.AssistantTextDelta("done"))
-            emit(EngineEvent.Completed(exitCode = 0))
-        }
-
-        override fun cancel(requestId: String) = Unit
-    }
-
-    private class SingleReplyProvider(
-        private val reply: String,
-        private val turnId: String,
+    private class HistoryBackedProvider(
+        private val historyTurns: MutableList<List<UnifiedEvent>>,
+        private val liveStream: (AgentRequest) -> Flow<UnifiedEvent> = { emptyFlow() },
     ) : AgentProvider {
-        override fun stream(request: com.codex.assistant.model.AgentRequest): Flow<EngineEvent> = flow {
-            emit(EngineEvent.TurnStarted(turnId = turnId, threadId = "thread-1"))
-            emit(EngineEvent.AssistantTextDelta(reply))
-            emit(EngineEvent.Completed(exitCode = 0))
+        override fun stream(request: AgentRequest): Flow<UnifiedEvent> = liveStream(request)
+
+        override suspend fun loadInitialHistory(ref: ConversationRef, pageSize: Int): ConversationHistoryPage {
+            val pageTurns = historyTurns.takeLast(pageSize)
+            return ConversationHistoryPage(
+                events = pageTurns.flatten(),
+                hasOlder = historyTurns.size > pageTurns.size,
+                olderCursor = (historyTurns.size - pageTurns.size).takeIf { it > 0 }?.toString(),
+            )
+        }
+
+        override suspend fun loadOlderHistory(ref: ConversationRef, cursor: String, pageSize: Int): ConversationHistoryPage {
+            val endExclusive = cursor.toIntOrNull() ?: 0
+            val startInclusive = (endExclusive - pageSize).coerceAtLeast(0)
+            val pageTurns = historyTurns.subList(startInclusive, endExclusive)
+            return ConversationHistoryPage(
+                events = pageTurns.flatten(),
+                hasOlder = startInclusive > 0,
+                olderCursor = startInclusive.takeIf { it > 0 }?.toString(),
+            )
         }
 
         override fun cancel(requestId: String) = Unit
+    }
+
+    private companion object {
+        fun historyTurn(
+            turnId: String,
+            userText: String,
+            assistantText: String,
+            extraItems: List<UnifiedItem> = emptyList(),
+        ): List<UnifiedEvent> {
+            return buildList {
+                add(UnifiedEvent.TurnStarted(turnId = turnId, threadId = "thread-1"))
+                add(
+                    UnifiedEvent.ItemUpdated(
+                        UnifiedItem(
+                            id = "history:user:$turnId",
+                            kind = ItemKind.NARRATIVE,
+                            status = ItemStatus.SUCCESS,
+                            name = "user_message",
+                            text = userText,
+                        ),
+                    ),
+                )
+                extraItems.forEach { add(UnifiedEvent.ItemUpdated(it.copy(id = "history:${it.id}:$turnId"))) }
+                if (assistantText.isNotBlank()) {
+                    add(
+                        UnifiedEvent.ItemUpdated(
+                            UnifiedItem(
+                                id = "history:assistant:$turnId",
+                                kind = ItemKind.NARRATIVE,
+                                status = ItemStatus.SUCCESS,
+                                name = "message",
+                                text = assistantText,
+                            ),
+                        ),
+                    )
+                }
+                add(UnifiedEvent.TurnCompleted(turnId = turnId, outcome = TurnOutcome.SUCCESS))
+            }
+        }
     }
 }

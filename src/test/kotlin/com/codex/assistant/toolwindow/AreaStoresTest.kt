@@ -6,6 +6,7 @@ import com.codex.assistant.protocol.ItemStatus
 import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.settings.UiThemeMode
 import com.codex.assistant.settings.SavedAgentDefinition
+import com.codex.assistant.conversation.ConversationSummary
 import com.codex.assistant.toolwindow.composer.ComposerAreaStore
 import com.codex.assistant.toolwindow.composer.ContextEntry
 import com.codex.assistant.toolwindow.drawer.RightDrawerAreaStore
@@ -41,6 +42,7 @@ class AreaStoresTest {
                         title = "",
                         updatedAt = 1L,
                         messageCount = 0,
+                        remoteConversationId = "",
                     ),
                 ),
                 activeSessionId = "s1",
@@ -76,6 +78,7 @@ class AreaStoresTest {
                         title = "t1",
                         updatedAt = 1L,
                         messageCount = 1,
+                        remoteConversationId = "",
                     ),
                 ),
                 activeSessionId = "s1",
@@ -83,6 +86,33 @@ class AreaStoresTest {
         )
 
         assertEquals(RightDrawerKind.HISTORY, store.state.value.kind)
+    }
+
+    @Test
+    fun `history drawer tracks search query and paged remote conversations`() {
+        val store = RightDrawerAreaStore()
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.EditHistorySearchQuery("fix")))
+        store.onEvent(
+            AppEvent.HistoryConversationsUpdated(
+                conversations = listOf(
+                    ConversationSummary(
+                        remoteConversationId = "thr_1",
+                        title = "Fix tests",
+                        createdAt = 10L,
+                        updatedAt = 20L,
+                        status = "idle",
+                    ),
+                ),
+                nextCursor = "next",
+                isLoading = false,
+                append = false,
+            ),
+        )
+
+        assertEquals("fix", store.state.value.historyQuery)
+        assertEquals(1, store.state.value.historyConversations.size)
+        assertEquals("next", store.state.value.historyNextCursor)
     }
 
     @Test

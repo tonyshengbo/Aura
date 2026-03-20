@@ -1,19 +1,23 @@
 package com.codex.assistant.service
 
+import com.codex.assistant.conversation.ConversationHistoryPage
+import com.codex.assistant.conversation.ConversationRef
 import com.codex.assistant.i18n.CodexBundle
 import com.codex.assistant.model.AgentRequest
-import com.codex.assistant.model.EngineEvent
-import com.codex.assistant.model.TimelineAction
+import com.codex.assistant.model.MessageRole
 import com.codex.assistant.persistence.chat.PersistedAttachmentKind
 import com.codex.assistant.persistence.chat.PersistedMessageAttachment
-import com.codex.assistant.persistence.chat.PersistedTimelineRecordType
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
 import com.codex.assistant.provider.EngineCapabilities
 import com.codex.assistant.provider.EngineDescriptor
 import com.codex.assistant.provider.ProviderRegistry
+import com.codex.assistant.protocol.ItemKind
 import com.codex.assistant.protocol.ItemStatus
+import com.codex.assistant.protocol.TurnOutcome
+import com.codex.assistant.protocol.UnifiedEvent
+import com.codex.assistant.protocol.UnifiedItem
 import com.codex.assistant.settings.AgentSettingsService
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
@@ -30,9 +34,10 @@ class AgentChatServicePersistenceTest {
     fun `new empty session keeps raw title blank and resolves localized fallback on reload`() = runBlocking {
         val dbPath = createTempDirectory("chat-service-session-title").resolve("chat.db")
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State(uiLanguage = "EN")) }
+        val provider = RecordingHistoryProvider(threadId = "thread-1")
         val service = AgentChatService(
             repository = SQLiteChatSessionRepository(dbPath),
-            registry = registry(provider = ReplyingProvider("unused")),
+            registry = registry(provider),
             settings = settings,
         )
 
@@ -42,7 +47,7 @@ class AgentChatServicePersistenceTest {
 
         val reloaded = AgentChatService(
             repository = SQLiteChatSessionRepository(dbPath),
-            registry = registry(provider = ReplyingProvider("unused")),
+            registry = registry(provider),
             settings = settings,
         )
 
@@ -52,55 +57,65 @@ class AgentChatServicePersistenceTest {
     }
 
     @Test
-    fun `persists assistant replies and restores them after service reload`() = runBlocking {
+    fun `restores remote history after reload without local timeline persistence`() = runBlocking {
         val dbPath = createTempDirectory("chat-service-persistence").resolve("chat.db")
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
+        val provider = RecordingHistoryProvider(threadId = "thread-1")
+        provider.enqueueAssistantReply("assistant reply")
+
         val service = AgentChatService(
             repository = SQLiteChatSessionRepository(dbPath),
-            registry = registry(provider = ReplyingProvider("assistant reply")),
+            registry = registry(provider),
             settings = settings,
         )
-        service.recordUserMessage(prompt = "user prompt")
+        service.recordUserMessage(prompt = "user prompt", turnId = "local-turn-1")
 
         val finished = CompletableDeferred<Unit>()
         service.runAgent(
             engineId = "codex",
             model = "gpt-5.3-codex",
             prompt = "user prompt",
+            localTurnId = "local-turn-1",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                finished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { finished.complete(Unit) },
+        )
         withTimeout(2_000) { finished.await() }
         service.dispose()
 
         val reloaded = AgentChatService(
             repository = SQLiteChatSessionRepository(dbPath),
-            registry = registry(provider = ReplyingProvider("unused")),
+            registry = registry(provider),
             settings = settings,
         )
-        val history = reloaded.loadCurrentSessionTimeline(limit = 10)
+        val history = reloaded.loadCurrentConversationHistory(limit = 10)
 
         assertEquals(
-            listOf(
-                PersistedTimelineRecordType.MESSAGE to "user prompt",
-                PersistedTimelineRecordType.MESSAGE to "assistant reply",
-            ),
-            history.entries.map { it.recordType to it.body },
+            listOf(MessageRole.USER to "user prompt", MessageRole.ASSISTANT to "assistant reply"),
+            history.events.narrativeTexts(),
         )
 
         reloaded.dispose()
     }
 
     @Test
-    fun `persists user attachments and tool activity into timeline history`() = runBlocking {
-        val dbPath = createTempDirectory("chat-service-timeline").resolve("chat.db")
+    fun `merges local attachments into restored remote user history`() = runBlocking {
+        val dbPath = createTempDirectory("chat-service-assets").resolve("chat.db")
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
+        val provider = RecordingHistoryProvider(threadId = "thread-1").apply {
+            enqueueAssistantReply("done")
+            emitToolInNextTurn(
+                UnifiedItem(
+                    id = "tool-1",
+                    kind = ItemKind.TOOL_CALL,
+                    status = ItemStatus.SUCCESS,
+                    name = "shell",
+                    text = "echo hi",
+                ),
+            )
+        }
         val service = AgentChatService(
             repository = SQLiteChatSessionRepository(dbPath),
-            registry = registry(provider = TimelineProvider()),
+            registry = registry(provider),
             settings = settings,
         )
         service.recordUserMessage(
@@ -127,39 +142,26 @@ class AgentChatServicePersistenceTest {
             prompt = "look at this",
             localTurnId = "local-turn-1",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                finished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { finished.complete(Unit) },
+        )
         withTimeout(2_000) { finished.await() }
         service.dispose()
 
         val reloaded = AgentChatService(
             repository = SQLiteChatSessionRepository(dbPath),
-            registry = registry(provider = ReplyingProvider("unused")),
+            registry = registry(provider),
             settings = settings,
         )
-        val history = reloaded.loadCurrentSessionTimeline(limit = 10)
+        val history = reloaded.loadCurrentConversationHistory(limit = 10)
+        val userEvent = history.events.firstNarrative(role = MessageRole.USER)
+        val toolEvent = history.events.first { it is UnifiedEvent.ItemUpdated && it.item.kind == ItemKind.TOOL_CALL }
+        val assistantEvent = history.events.firstNarrative(role = MessageRole.ASSISTANT)
 
-        assertEquals(
-            listOf(
-                PersistedTimelineRecordType.MESSAGE,
-                PersistedTimelineRecordType.ACTIVITY,
-                PersistedTimelineRecordType.MESSAGE,
-            ),
-            history.entries.map { it.recordType },
-        )
-        val userEntry = history.entries.first()
-        assertEquals("look at this", userEntry.body)
-        assertEquals("turn-1", userEntry.turnId)
-        assertEquals(1, userEntry.attachments.size)
-        assertEquals("/assets/preview.png", userEntry.attachments.single().assetPath)
-
-        val activityEntry = history.entries[1]
-        assertEquals("Run Echo command", activityEntry.title)
-        assertEquals("done", history.entries.last().body)
-        assertTrue(history.entries.all { it.turnId == "turn-1" })
+        assertEquals("look at this", userEvent.item.text)
+        assertEquals(1, userEvent.item.attachments.size)
+        assertEquals("/assets/preview.png", userEvent.item.attachments.single().assetPath)
+        assertEquals("echo hi", (toolEvent as UnifiedEvent.ItemUpdated).item.text)
+        assertEquals("done", assistantEvent.item.text)
 
         reloaded.dispose()
     }
@@ -173,7 +175,7 @@ class AgentChatServicePersistenceTest {
                     models = listOf("gpt-5.3-codex"),
                     capabilities = EngineCapabilities(
                         supportsThinking = true,
-                        supportsToolEvents = false,
+                        supportsToolEvents = true,
                         supportsCommandProposal = false,
                         supportsDiffProposal = false,
                     ),
@@ -189,26 +191,134 @@ class AgentChatServicePersistenceTest {
         )
     }
 
-    private class ReplyingProvider(
-        private val reply: String,
+    private class RecordingHistoryProvider(
+        private val threadId: String,
     ) : AgentProvider {
-        override fun stream(request: AgentRequest): Flow<EngineEvent> = flow {
-            emit(EngineEvent.AssistantTextDelta(reply))
-            emit(EngineEvent.Completed(exitCode = 0))
+        private val turns = mutableListOf<List<UnifiedEvent>>()
+        private val pendingAssistantReplies = ArrayDeque<String>()
+        private var pendingTool: UnifiedItem? = null
+        private var nextTurnNumber = 1
+
+        fun enqueueAssistantReply(reply: String) {
+            pendingAssistantReplies += reply
+        }
+
+        fun emitToolInNextTurn(item: UnifiedItem) {
+            pendingTool = item
+        }
+
+        override fun stream(request: AgentRequest): Flow<UnifiedEvent> = flow {
+            val turnId = "turn-${nextTurnNumber++}"
+            val toolItem = pendingTool
+            val reply = pendingAssistantReplies.removeFirstOrNull().orEmpty()
+            val events = buildList {
+                add(UnifiedEvent.ThreadStarted(threadId = threadId))
+                add(UnifiedEvent.TurnStarted(turnId = turnId, threadId = threadId))
+                toolItem?.let { tool ->
+                    add(UnifiedEvent.ItemUpdated(tool.copy(id = "${request.requestId}:${tool.id}")))
+                }
+                add(
+                    UnifiedEvent.ItemUpdated(
+                        UnifiedItem(
+                            id = "${request.requestId}:assistant:$turnId",
+                            kind = ItemKind.NARRATIVE,
+                            status = ItemStatus.SUCCESS,
+                            name = "message",
+                            text = reply,
+                        ),
+                    ),
+                )
+                add(UnifiedEvent.TurnCompleted(turnId = turnId, outcome = TurnOutcome.SUCCESS))
+            }
+            turns += buildHistoryTurn(
+                turnId = turnId,
+                userText = request.prompt,
+                assistantText = reply,
+                toolItem = toolItem?.copy(id = "history:${toolItem.id}:$turnId"),
+            )
+            pendingTool = null
+            events.forEach { emit(it) }
+        }
+
+        override suspend fun loadInitialHistory(ref: ConversationRef, pageSize: Int): ConversationHistoryPage {
+            val pageTurns = turns.takeLast(pageSize)
+            return ConversationHistoryPage(
+                events = pageTurns.flatten(),
+                hasOlder = turns.size > pageTurns.size,
+                olderCursor = (turns.size - pageTurns.size).takeIf { it > 0 }?.toString(),
+            )
+        }
+
+        override suspend fun loadOlderHistory(ref: ConversationRef, cursor: String, pageSize: Int): ConversationHistoryPage {
+            val endExclusive = cursor.toIntOrNull() ?: 0
+            val startInclusive = (endExclusive - pageSize).coerceAtLeast(0)
+            val pageTurns = turns.subList(startInclusive, endExclusive)
+            return ConversationHistoryPage(
+                events = pageTurns.flatten(),
+                hasOlder = startInclusive > 0,
+                olderCursor = startInclusive.takeIf { it > 0 }?.toString(),
+            )
         }
 
         override fun cancel(requestId: String) = Unit
+
+        private fun buildHistoryTurn(
+            turnId: String,
+            userText: String,
+            assistantText: String,
+            toolItem: UnifiedItem? = null,
+        ): List<UnifiedEvent> {
+            return buildList {
+                add(UnifiedEvent.TurnStarted(turnId = turnId, threadId = threadId))
+                add(
+                    UnifiedEvent.ItemUpdated(
+                        UnifiedItem(
+                            id = "history:user:$turnId",
+                            kind = ItemKind.NARRATIVE,
+                            status = ItemStatus.SUCCESS,
+                            name = "user_message",
+                            text = userText,
+                        ),
+                    ),
+                )
+                toolItem?.let { add(UnifiedEvent.ItemUpdated(it)) }
+                add(
+                    UnifiedEvent.ItemUpdated(
+                        UnifiedItem(
+                            id = "history:assistant:$turnId",
+                            kind = ItemKind.NARRATIVE,
+                            status = ItemStatus.SUCCESS,
+                            name = "message",
+                            text = assistantText,
+                        ),
+                    ),
+                )
+                add(UnifiedEvent.TurnCompleted(turnId = turnId, outcome = TurnOutcome.SUCCESS))
+            }
+        }
     }
 
-    private class TimelineProvider : AgentProvider {
-        override fun stream(request: AgentRequest): Flow<EngineEvent> = flow {
-            emit(EngineEvent.TurnStarted(turnId = "turn-1", threadId = "thread-1"))
-            emit(EngineEvent.ToolCallStarted(callId = "tool-1", name = "shell", input = "echo hi"))
-            emit(EngineEvent.ToolCallFinished(callId = "tool-1", name = "shell", output = "echo hi"))
-            emit(EngineEvent.AssistantTextDelta("done"))
-            emit(EngineEvent.Completed(exitCode = 0))
+    private fun List<UnifiedEvent>.narrativeTexts(): List<Pair<MessageRole, String>> {
+        return mapNotNull { event ->
+            val item = (event as? UnifiedEvent.ItemUpdated)?.item ?: return@mapNotNull null
+            if (item.kind != ItemKind.NARRATIVE || item.text.isNullOrBlank()) return@mapNotNull null
+            val role = when (item.name) {
+                "user_message" -> MessageRole.USER
+                "system_message" -> MessageRole.SYSTEM
+                else -> MessageRole.ASSISTANT
+            }
+            role to item.text.orEmpty()
         }
+    }
 
-        override fun cancel(requestId: String) = Unit
+    private fun List<UnifiedEvent>.firstNarrative(role: MessageRole): UnifiedEvent.ItemUpdated {
+        return first { event ->
+            val item = (event as? UnifiedEvent.ItemUpdated)?.item ?: return@first false
+            item.kind == ItemKind.NARRATIVE && when (item.name) {
+                "user_message" -> role == MessageRole.USER
+                "system_message" -> role == MessageRole.SYSTEM
+                else -> role == MessageRole.ASSISTANT
+            }
+        } as UnifiedEvent.ItemUpdated
     }
 }

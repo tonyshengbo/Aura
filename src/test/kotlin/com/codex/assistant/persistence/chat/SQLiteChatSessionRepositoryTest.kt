@@ -1,18 +1,16 @@
 package com.codex.assistant.persistence.chat
 
-import com.codex.assistant.model.ChatMessage
 import com.codex.assistant.model.MessageRole
 import com.codex.assistant.protocol.ItemStatus
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class SQLiteChatSessionRepositoryTest {
     @Test
-    fun `stores timeline records with attachment children and paginates by top level entries`() {
+    fun `stores session assets and updates local turn ids after remote turn starts`() {
         val repository = SQLiteChatSessionRepository(createTempDirectory("chat-repository-test").resolve("chat.db"))
         repository.upsertSession(
             PersistedChatSession(
@@ -20,23 +18,18 @@ class SQLiteChatSessionRepositoryTest {
                 title = "First session",
                 createdAt = 10L,
                 updatedAt = 20L,
-                messageCount = 0,
-                remoteThreadId = "",
+                messageCount = 1,
+                providerId = "codex",
+                remoteConversationId = "thread-1",
                 usageSnapshot = null,
                 isActive = true,
             ),
         )
 
-        repository.insertMessageRecord(
+        repository.saveSessionAssets(
             sessionId = "session-1",
-            message = ChatMessage(
-                id = "user-1",
-                role = MessageRole.USER,
-                content = "show me this image",
-                timestamp = 1L,
-            ),
             turnId = "local-turn-1",
-            sourceId = "local-user-1",
+            messageRole = MessageRole.USER,
             attachments = listOf(
                 PersistedMessageAttachment(
                     id = "attachment-1",
@@ -59,53 +52,64 @@ class SQLiteChatSessionRepositoryTest {
                     status = ItemStatus.SUCCESS,
                 ),
             ),
-        )
-        repository.upsertActivityRecord(
-            sessionId = "session-1",
-            turnId = "turn-1",
-            sourceId = "tool-1",
-            kind = PersistedActivityKind.TOOL,
-            title = "shell",
-            body = "ls -la",
-            status = ItemStatus.SUCCESS,
-            timestamp = 2L,
-        )
-        repository.upsertMessageRecord(
-            sessionId = "session-1",
-            turnId = "turn-1",
-            sourceId = "assistant-1",
-            role = MessageRole.ASSISTANT,
-            body = "done",
-            status = ItemStatus.SUCCESS,
-            timestamp = 3L,
+            createdAt = 30L,
         )
 
-        val latestPage = repository.loadRecentTimeline(sessionId = "session-1", limit = 2)
-        assertTrue(latestPage.hasOlder)
-        assertEquals(
-            listOf(
-                PersistedTimelineRecordType.ACTIVITY,
-                PersistedTimelineRecordType.MESSAGE,
-            ),
-            latestPage.entries.map { it.recordType },
-        )
-        assertTrue(latestPage.entries.all { it.attachments.isEmpty() })
-
-        val olderPage = repository.loadTimelineBefore(
+        repository.replaceSessionAssetTurnId(
             sessionId = "session-1",
-            beforeCursorExclusive = latestPage.entries.first().cursor,
-            limit = 2,
+            fromTurnId = "local-turn-1",
+            toTurnId = "turn-1",
         )
-        assertFalse(olderPage.hasOlder)
-        assertEquals(1, olderPage.entries.size)
-        assertEquals("show me this image", olderPage.entries.single().body)
-        assertEquals(2, olderPage.entries.single().attachments.size)
+
+        val assets = repository.loadSessionAssets("session-1")
+        assertEquals(2, assets.size)
+        assertTrue(assets.all { it.turnId == "turn-1" })
         assertEquals(
             listOf(PersistedAttachmentKind.IMAGE, PersistedAttachmentKind.FILE),
-            olderPage.entries.single().attachments.map { it.kind },
+            assets.map { it.attachment.kind },
         )
 
         val activeSession = assertNotNull(repository.loadActiveSession())
         assertEquals("session-1", activeSession.id)
+    }
+
+    @Test
+    fun `deleting a session cascades stored assets`() {
+        val repository = SQLiteChatSessionRepository(createTempDirectory("chat-repository-delete").resolve("chat.db"))
+        repository.upsertSession(
+            PersistedChatSession(
+                id = "session-1",
+                title = "",
+                createdAt = 1L,
+                updatedAt = 1L,
+                messageCount = 0,
+                providerId = "codex",
+                remoteConversationId = "",
+                usageSnapshot = null,
+                isActive = true,
+            ),
+        )
+        repository.saveSessionAssets(
+            sessionId = "session-1",
+            turnId = "turn-1",
+            messageRole = MessageRole.USER,
+            attachments = listOf(
+                PersistedMessageAttachment(
+                    id = "attachment-1",
+                    kind = PersistedAttachmentKind.TEXT,
+                    displayName = "hello.txt",
+                    assetPath = "/assets/hello.txt",
+                    originalPath = "/tmp/hello.txt",
+                    mimeType = "text/plain",
+                    sizeBytes = 5L,
+                ),
+            ),
+            createdAt = 2L,
+        )
+
+        repository.deleteSession("session-1")
+
+        assertEquals(null, repository.loadSession("session-1"))
+        assertTrue(repository.loadSessionAssets("session-1").isEmpty())
     }
 }

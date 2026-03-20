@@ -33,7 +33,7 @@ internal class TimelineNodeReducer {
 
     fun replaceHistory(
         nodes: List<TimelineNode>,
-        oldestCursor: Long?,
+        oldestCursor: String?,
         hasOlder: Boolean,
     ) {
         state = state.copy(
@@ -49,7 +49,7 @@ internal class TimelineNodeReducer {
 
     fun prependHistory(
         nodes: List<TimelineNode>,
-        oldestCursor: Long?,
+        oldestCursor: String?,
         hasOlder: Boolean,
     ) {
         val existing = state.nodes.filterNot { it is TimelineNode.LoadMoreNode }

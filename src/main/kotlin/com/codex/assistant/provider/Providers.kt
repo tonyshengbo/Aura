@@ -1,81 +1,20 @@
 package com.codex.assistant.provider
 
-import com.codex.assistant.model.AgentRequest
 import com.codex.assistant.settings.AgentSettingsService
-import java.nio.file.Path
+import com.codex.assistant.toolwindow.approval.ApprovalAction
 import java.util.concurrent.ConcurrentHashMap
 
 private val codexCapabilities = EngineCapabilities(
     supportsThinking = true,
     supportsToolEvents = true,
-    supportsCommandProposal = false,
-    supportsDiffProposal = false,
-)
-
-internal class CodexInvocationSpec : CliInvocationSpec {
-    override fun buildCommand(executablePath: String, request: AgentRequest): List<String> {
-        val command = mutableListOf(
-            executablePath,
-            "exec",
-        )
-        val sessionId = request.cliSessionId?.trim().orEmpty()
-        if (sessionId.isNotBlank()) {
-            command += "resume"
-        }
-        request.model
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let {
-                command += "-m"
-                command += it
-            }
-        request.reasoningEffort
-            ?.trim()
-            ?.takeIf { it.isNotBlank() }
-            ?.let {
-                command += "-c"
-                command += "model_reasoning_effort=\"$it\""
-            }
-        command += "--skip-git-repo-check"
-        command += "--dangerously-bypass-approvals-and-sandbox"
-        command += "--json"
-        if (sessionId.isNotBlank()) {
-            command += sessionId
-        }
-        request.imageAttachments.forEach { image ->
-            command += "--image"
-            command += image.path
-        }
-        request.fileAttachments
-            .mapNotNull { runCatching { Path.of(it.path).parent?.toString() }.getOrNull() }
-            .distinct()
-            .forEach { dir ->
-                command += "--add-dir"
-                command += dir
-            }
-        return command
-    }
-}
-
-private class CodexEventParser : StructuredEventParser {
-    override fun parse(line: String) = CliStructuredEventParser.parseCodexLine(line)
-
-    override fun shouldEmitUnparsedLine(line: String): Boolean {
-        return line.isNotBlank() && !CliStructuredEventParser.shouldSuppressUnparsedLine(line)
-    }
-}
-
-class CodexCliProvider(settings: AgentSettingsService) : CliAgentProvider(
-    executablePath = { settings.getState().executablePathFor(CodexProviderFactory.ENGINE_ID) },
-    displayName = "Codex",
-    invocationSpec = CodexInvocationSpec(),
-    eventParser = CodexEventParser(),
+    supportsCommandProposal = true,
+    supportsDiffProposal = true,
 )
 
 class CodexProviderFactory(private val settings: AgentSettingsService) : AgentProviderFactory {
     override val engineId: String = ENGINE_ID
 
-    override fun create(): AgentProvider = CodexCliProvider(settings)
+    override fun create(): AgentProvider = CodexAppServerProvider(settings)
 
     companion object {
         const val ENGINE_ID: String = "codex"
@@ -122,5 +61,9 @@ class ProviderRegistry(
 
     fun cancel(requestId: String) {
         providers.values.forEach { it.cancel(requestId) }
+    }
+
+    fun submitApprovalDecision(requestId: String, decision: ApprovalAction): Boolean {
+        return providers.values.any { it.submitApprovalDecision(requestId, decision) }
     }
 }

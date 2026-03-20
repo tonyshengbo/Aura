@@ -15,6 +15,7 @@ import com.codex.assistant.context.EditorContextProvider
 import com.codex.assistant.context.SmartFileSearchService
 import com.codex.assistant.i18n.CodexBundle
 import com.codex.assistant.settings.AgentSettingsService
+import com.codex.assistant.toolwindow.approval.ApprovalAreaStore
 import com.codex.assistant.toolwindow.composer.ComposerAreaStore
 import com.codex.assistant.toolwindow.drawer.RightDrawerAreaStore
 import com.codex.assistant.toolwindow.eventing.AppEvent
@@ -67,6 +68,7 @@ class ComposeToolWindowPanel(
     private val timelineStore = TimelineAreaStore()
     private val composerStore = ComposerAreaStore()
     private val rightDrawerStore = RightDrawerAreaStore()
+    private val approvalStore = ApprovalAreaStore()
 
     private lateinit var sessionTabCoordinator: SessionTabCoordinator
 
@@ -79,6 +81,7 @@ class ComposeToolWindowPanel(
         timelineStore = timelineStore,
         composerStore = composerStore,
         rightDrawerStore = rightDrawerStore,
+        approvalStore = approvalStore,
         pickAttachments = {
             val app = ApplicationManager.getApplication()
             var selected: List<String> = emptyList()
@@ -145,6 +148,7 @@ class ComposeToolWindowPanel(
             val timelineState by timelineStore.state.collectAsState()
             val composerState by composerStore.state.collectAsState()
             val rightDrawerState by rightDrawerStore.state.collectAsState()
+            val approvalState by approvalStore.state.collectAsState()
             val languageVersion by settingsService.languageVersion.collectAsState()
             val appearanceVersion by settingsService.appearanceVersion.collectAsState()
             val themeMode = rightDrawerState.themeMode
@@ -166,6 +170,7 @@ class ComposeToolWindowPanel(
                             timelineState = timelineState,
                             composerState = composerState,
                             rightDrawerState = rightDrawerState,
+                            approvalState = approvalState,
                             anchor = toolWindowAnchor,
                             themeMode = themeMode,
                             onIntent = ::dispatchIntent,

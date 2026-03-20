@@ -1,5 +1,6 @@
 package com.codex.assistant.provider
 
+import com.codex.assistant.protocol.UnifiedEvent
 import com.codex.assistant.settings.AgentSettingsService
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -71,7 +72,7 @@ class ProviderRegistryTest {
                     override val engineId: String = "codex"
                     override fun create(): AgentProvider = object : AgentProvider {
                         override fun stream(request: com.codex.assistant.model.AgentRequest) =
-                            kotlinx.coroutines.flow.emptyFlow<com.codex.assistant.model.EngineEvent>()
+                            kotlinx.coroutines.flow.emptyFlow<UnifiedEvent>()
 
                         override fun cancel(requestId: String) = Unit
                     }

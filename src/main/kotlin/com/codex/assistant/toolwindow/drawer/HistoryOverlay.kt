@@ -21,7 +21,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
 import androidx.compose.material.MaterialTheme
+import androidx.compose.material.TextButton
+import androidx.compose.material.CircularProgressIndicator
 import androidx.compose.material.Text
+import androidx.compose.material.TextField
+import androidx.compose.material.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,8 +36,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.codex.assistant.i18n.CodexBundle
-import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.toolwindow.drawer.settings.DrawerHeader
+import com.codex.assistant.toolwindow.drawer.settings.OverlayCloseButton
 import com.codex.assistant.toolwindow.eventing.UiIntent
 import com.codex.assistant.toolwindow.shared.DesignPalette
 import com.codex.assistant.toolwindow.shared.HoverTooltip
@@ -46,38 +50,84 @@ internal fun HistoryOverlay(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    Column(modifier = Modifier.fillMaxSize().padding(t.spacing.md)) {
-        DrawerHeader(
-            p = p,
-            title = CodexBundle.message("drawer.history.title"),
-            subtitle = CodexBundle.message("drawer.history.subtitle"),
-        )
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = t.spacing.md, end = t.spacing.md, top = t.spacing.md),
+            horizontalArrangement = Arrangement.spacedBy(t.spacing.md),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(modifier = Modifier.weight(1f)) {
+                DrawerHeader(
+                    p = p,
+                    title = CodexBundle.message("drawer.history.title"),
+                    subtitle = CodexBundle.message("drawer.history.subtitle"),
+                )
+            }
+            OverlayCloseButton(
+                p = p,
+                onClick = { onIntent(UiIntent.CloseRightDrawer) },
+            )
+        }
         Spacer(Modifier.height(t.spacing.md))
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = t.spacing.md),
             horizontalArrangement = Arrangement.spacedBy(t.spacing.md),
         ) {
             SummaryCard(
                 p = p,
                 title = CodexBundle.message("drawer.history.summary.total"),
-                value = state.sessions.size.toString(),
+                value = state.historyConversations.size.toString(),
                 modifier = Modifier.weight(1f),
             )
             SummaryCard(
                 p = p,
                 title = CodexBundle.message("drawer.history.summary.active"),
-                value = if (state.activeSessionId.isBlank()) "-" else state.activeSessionId.take(8),
+                value = state.activeRemoteConversationId.ifBlank { "-" }.take(12),
                 modifier = Modifier.weight(1f),
             )
         }
         Spacer(Modifier.height(t.spacing.md))
+        TextField(
+            value = state.historyQuery,
+            onValueChange = { onIntent(UiIntent.EditHistorySearchQuery(it)) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = t.spacing.md),
+            singleLine = true,
+            placeholder = {
+                Text(
+                    text = CodexBundle.message("drawer.history.search.placeholder"),
+                    color = p.textMuted,
+                    style = MaterialTheme.typography.body2,
+                )
+            },
+            colors = TextFieldDefaults.textFieldColors(
+                textColor = p.textPrimary,
+                backgroundColor = p.topBarBg.copy(alpha = 0.72f),
+                focusedIndicatorColor = p.accent,
+                unfocusedIndicatorColor = p.markdownDivider.copy(alpha = 0.4f),
+                cursorColor = p.accent,
+            ),
+        )
+        Spacer(Modifier.height(t.spacing.md))
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(p.topBarBg.copy(alpha = 0.7f), RoundedCornerShape(t.spacing.lg))
-                .border(1.dp, p.markdownDivider.copy(alpha = 0.48f), RoundedCornerShape(t.spacing.lg)),
+                .padding(top = t.spacing.xs),
         ) {
-            if (state.sessions.isEmpty()) {
+            if (state.historyLoading && state.historyConversations.isEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    CircularProgressIndicator(color = p.accent)
+                }
+            } else if (state.historyConversations.isEmpty()) {
                 EmptyHistoryState(
                     p = p,
                     title = CodexBundle.message("drawer.history.empty.title"),
@@ -85,17 +135,48 @@ internal fun HistoryOverlay(
                 )
             } else {
                 LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(t.spacing.md),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = t.spacing.md, vertical = t.spacing.sm),
                     verticalArrangement = Arrangement.spacedBy(t.spacing.sm),
                 ) {
-                    items(state.sessions, key = { it.id }) { session ->
+                    items(state.historyConversations, key = { it.remoteConversationId }) { session ->
                         HistorySessionRow(
                             p = p,
                             session = session,
-                            active = session.id == state.activeSessionId,
-                            onOpen = { onIntent(UiIntent.SwitchSession(session.id)) },
-                            onDelete = { onIntent(UiIntent.DeleteSession(session.id)) },
+                            active = session.remoteConversationId == state.activeRemoteConversationId,
+                            onOpen = {
+                                onIntent(
+                                    UiIntent.OpenRemoteConversation(
+                                        remoteConversationId = session.remoteConversationId,
+                                        title = session.title,
+                                    ),
+                                )
+                            },
                         )
+                    }
+                    if (state.historyNextCursor != null || state.historyLoading) {
+                        item("history-load-more") {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().padding(top = t.spacing.sm),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (state.historyLoading) {
+                                    CircularProgressIndicator(
+                                        color = p.accent,
+                                        modifier = Modifier.size(t.controls.iconMd),
+                                        strokeWidth = 2.dp,
+                                    )
+                                } else {
+                                    TextButton(onClick = { onIntent(UiIntent.LoadMoreHistoryConversations) }) {
+                                        Text(
+                                            text = CodexBundle.message("timeline.loadMore"),
+                                            color = p.accent,
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -127,10 +208,9 @@ private fun SummaryCard(
 @Composable
 private fun HistorySessionRow(
     p: DesignPalette,
-    session: AgentChatService.SessionSummary,
+    session: com.codex.assistant.conversation.ConversationSummary,
     active: Boolean,
     onOpen: () -> Unit,
-    onDelete: () -> Unit,
 ) {
     val t = assistantUiTokens()
     val borderColor = if (active) p.accent.copy(alpha = 0.45f) else p.markdownDivider.copy(alpha = 0.36f)
@@ -161,19 +241,38 @@ private fun HistorySessionRow(
                 style = MaterialTheme.typography.body1,
             )
             Spacer(Modifier.height(t.spacing.xs))
-            Text(
-                text = CodexBundle.message("drawer.history.row.meta", session.messageCount.toString(), session.updatedAt.toString()),
-                color = p.textMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.caption,
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
             )
+            {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(p.accent.copy(alpha = 0.14f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        text = formatHistoryStatus(session.status),
+                        color = p.accent,
+                        style = MaterialTheme.typography.caption,
+                    )
+                }
+                Spacer(Modifier.width(t.spacing.sm))
+                Text(
+                    text = formatHistoryUpdatedAt(session.updatedAt),
+                    color = p.textMuted,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.caption,
+                )
+            }
         }
-        HoverTooltip(text = CodexBundle.message("common.delete")) {
-            IconButton(onClick = onDelete) {
+        HoverTooltip(text = CodexBundle.message("header.action.history")) {
+            IconButton(onClick = onOpen) {
                 Icon(
-                    painter = painterResource("/icons/delete.svg"),
-                    contentDescription = CodexBundle.message("common.delete"),
+                    painter = painterResource("/icons/history.svg"),
+                    contentDescription = CodexBundle.message("header.action.history"),
                     tint = p.textSecondary,
                     modifier = Modifier.size(t.controls.iconMd),
                 )

@@ -1,8 +1,7 @@
 package com.codex.assistant.toolwindow.timeline
 
 import com.codex.assistant.model.MessageRole
-import com.codex.assistant.persistence.chat.PersistedActivityKind
-import com.codex.assistant.persistence.chat.PersistedTimelineEntry
+import com.codex.assistant.persistence.chat.PersistedMessageAttachment
 import com.codex.assistant.protocol.ActivityTitleFormatter
 import com.codex.assistant.protocol.ItemKind
 import com.codex.assistant.protocol.UnifiedEvent
@@ -11,134 +10,23 @@ import kotlin.io.path.Path
 import kotlin.io.path.name
 
 internal object TimelineNodeMapper {
-    fun fromHistory(entry: PersistedTimelineEntry): TimelineNode {
-        return when (entry.recordType) {
-            com.codex.assistant.persistence.chat.PersistedTimelineRecordType.MESSAGE -> {
-                TimelineNode.MessageNode(
-                    id = historyNodeId(entry.cursor, entry.id),
-                    sourceId = entry.sourceId,
-                    role = entry.role ?: MessageRole.ASSISTANT,
-                    text = entry.body,
-                    status = entry.status,
-                    timestamp = entry.createdAt,
-                    turnId = entry.turnId.ifBlank { null },
-                    cursor = entry.cursor,
-                    attachments = entry.attachments.map { attachment ->
-                        TimelineMessageAttachment(
-                            id = attachment.id,
-                            kind = attachment.kind.toTimelineAttachmentKind(),
-                            displayName = attachment.displayName,
-                            assetPath = attachment.assetPath,
-                            originalPath = attachment.originalPath,
-                            mimeType = attachment.mimeType,
-                            sizeBytes = attachment.sizeBytes,
-                            status = attachment.status,
-                        )
-                    },
-                )
-            }
-
-            com.codex.assistant.persistence.chat.PersistedTimelineRecordType.ACTIVITY -> {
-                val turnId = entry.turnId.ifBlank { null }
-                when (entry.activityKind ?: PersistedActivityKind.UNKNOWN) {
-                    PersistedActivityKind.TOOL -> ActivityTitleFormatter.toolPresentation(
-                        explicitName = entry.title,
-                        body = entry.body,
-                    ).let { presentation ->
-                        TimelineNode.ToolCallNode(
-                            id = activityNodeId("tool", turnId, entry.sourceId),
-                            sourceId = entry.sourceId,
-                            title = presentation.title,
-                            titleTargetLabel = presentation.targetLabel,
-                            titleTargetPath = presentation.targetPath,
-                            body = entry.body,
-                            status = entry.status,
-                            turnId = turnId,
-                        )
-                    }
-
-                    PersistedActivityKind.COMMAND -> ActivityTitleFormatter.commandPresentation(
-                        explicitName = entry.title,
-                        body = entry.body,
-                    ).let { presentation ->
-                        TimelineNode.CommandNode(
-                            id = activityNodeId("command", turnId, entry.sourceId),
-                            sourceId = entry.sourceId,
-                            title = presentation.title,
-                            titleTargetLabel = presentation.targetLabel,
-                            titleTargetPath = presentation.targetPath,
-                            body = entry.body,
-                            status = entry.status,
-                            turnId = turnId,
-                        )
-                    }
-
-                    PersistedActivityKind.DIFF -> {
-                        val parsedChanges = parseFileChanges(entry.body)
-                        TimelineNode.FileChangeNode(
-                            id = activityNodeId("diff", turnId, entry.sourceId),
-                            sourceId = entry.sourceId,
-                            changes = parsedChanges,
-                            title = ActivityTitleFormatter.fileChangeTitle(
-                                explicitName = entry.title,
-                                changes = parsedChanges.map { change ->
-                                    ActivityTitleFormatter.FileChangeSummary(
-                                        path = change.path,
-                                        kind = change.kind.name,
-                                    )
-                                },
-                                body = entry.body,
-                            ),
-                            status = entry.status,
-                            turnId = turnId,
-                        )
-                    }
-
-                    PersistedActivityKind.APPROVAL -> TimelineNode.ApprovalNode(
-                        id = activityNodeId("approval", turnId, entry.sourceId),
-                        sourceId = entry.sourceId,
-                        title = entry.title,
-                        body = entry.body,
-                        status = entry.status,
-                        turnId = turnId,
-                    )
-
-                    PersistedActivityKind.PLAN -> TimelineNode.PlanNode(
-                        id = activityNodeId("plan", turnId, entry.sourceId),
-                        sourceId = entry.sourceId,
-                        title = entry.title,
-                        body = entry.body,
-                        status = entry.status,
-                        turnId = turnId,
-                    )
-
-                    PersistedActivityKind.UNKNOWN -> TimelineNode.UnknownActivityNode(
-                        id = activityNodeId("unknown", turnId, entry.sourceId),
-                        sourceId = entry.sourceId,
-                        title = entry.title,
-                        body = entry.body,
-                        status = entry.status,
-                        turnId = turnId,
-                    )
-                }
-            }
-
-            com.codex.assistant.persistence.chat.PersistedTimelineRecordType.ATTACHMENT ->
-                error("Attachment records should be grouped into parent message nodes before mapping")
-        }
-    }
-
-    fun localUserMessageMutation(entry: PersistedTimelineEntry): TimelineMutation.UpsertMessage {
+    fun localUserMessageMutation(
+        sourceId: String,
+        text: String,
+        timestamp: Long,
+        turnId: String?,
+        attachments: List<PersistedMessageAttachment>,
+    ): TimelineMutation.UpsertMessage {
         return TimelineNode.MessageNode(
-            id = historyNodeId(entry.cursor, entry.id),
-            sourceId = entry.sourceId,
-            role = entry.role ?: MessageRole.USER,
-            text = entry.body,
-            status = entry.status,
-            timestamp = entry.createdAt,
-            turnId = entry.turnId.ifBlank { null },
-            cursor = entry.cursor,
-            attachments = entry.attachments.map { attachment ->
+            id = messageNodeId(turnId = turnId, sourceId = sourceId),
+            sourceId = sourceId,
+            role = MessageRole.USER,
+            text = text,
+            status = com.codex.assistant.protocol.ItemStatus.SUCCESS,
+            timestamp = timestamp,
+            turnId = turnId,
+            cursor = null,
+            attachments = attachments.map { attachment ->
                 TimelineMessageAttachment(
                     id = attachment.id,
                     kind = attachment.kind.toTimelineAttachmentKind(),
@@ -166,6 +54,13 @@ internal object TimelineNodeMapper {
 
     fun fromUnifiedEvent(event: UnifiedEvent): TimelineMutation? {
         return when (event) {
+            is UnifiedEvent.ApprovalRequested -> TimelineMutation.UpsertApproval(
+                sourceId = event.request.itemId,
+                title = event.request.title,
+                body = event.request.body,
+                status = com.codex.assistant.protocol.ItemStatus.RUNNING,
+                turnId = event.request.turnId,
+            )
             is UnifiedEvent.ThreadStarted -> TimelineMutation.ThreadStarted(threadId = event.threadId)
             is UnifiedEvent.TurnStarted -> TimelineMutation.TurnStarted(turnId = event.turnId, threadId = event.threadId)
             is UnifiedEvent.TurnCompleted -> TimelineMutation.TurnCompleted(
@@ -187,7 +82,18 @@ internal object TimelineNodeMapper {
                     role = narrativeRole(),
                     text = content,
                     status = status,
-                    attachments = emptyList(),
+                    attachments = attachments.map { attachment ->
+                        TimelineMessageAttachment(
+                            id = attachment.id,
+                            kind = attachment.kind.toTimelineAttachmentKind(),
+                            displayName = attachment.displayName,
+                            assetPath = attachment.assetPath,
+                            originalPath = attachment.originalPath,
+                            mimeType = attachment.mimeType,
+                            sizeBytes = attachment.sizeBytes,
+                            status = attachment.status,
+                        )
+                    },
                 )
             }
 
@@ -344,7 +250,22 @@ internal object TimelineNodeMapper {
         }
     }
 
-    private fun historyNodeId(cursor: Long, messageId: String): String = "history-$cursor-$messageId"
+    private fun messageNodeId(turnId: String?, sourceId: String): String {
+        val normalizedTurnId = turnId?.trim().orEmpty()
+        return if (normalizedTurnId.isBlank()) {
+            "message:$sourceId"
+        } else {
+            "message:$normalizedTurnId:$sourceId"
+        }
+    }
+
+    private fun String.toTimelineAttachmentKind(): TimelineAttachmentKind {
+        return when (trim().lowercase()) {
+            "image" -> TimelineAttachmentKind.IMAGE
+            "text" -> TimelineAttachmentKind.TEXT
+            else -> TimelineAttachmentKind.FILE
+        }
+    }
 
     internal fun activityNodeId(
         prefix: String,

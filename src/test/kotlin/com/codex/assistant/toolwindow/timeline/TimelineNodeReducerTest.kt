@@ -42,7 +42,7 @@ class TimelineNodeReducerTest {
                     cursor = 4L,
                 ),
             ),
-            oldestCursor = 3L,
+            oldestCursor = "3",
             hasOlder = true,
         )
 
@@ -72,7 +72,7 @@ class TimelineNodeReducerTest {
                     cursor = 2L,
                 ),
             ),
-            oldestCursor = 1L,
+            oldestCursor = "1",
             hasOlder = false,
         )
 
@@ -213,7 +213,7 @@ class TimelineNodeReducerTest {
                     cursor = 2L,
                 ),
             ),
-            oldestCursor = 1L,
+            oldestCursor = "1",
             hasOlder = false,
         )
 
@@ -267,7 +267,7 @@ class TimelineNodeReducerTest {
                     cursor = 2L,
                 ),
             ),
-            oldestCursor = 1L,
+            oldestCursor = "1",
             hasOlder = false,
         )
 

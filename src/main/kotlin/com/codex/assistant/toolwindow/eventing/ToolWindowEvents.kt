@@ -6,9 +6,12 @@ import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.settings.SavedAgentDefinition
 import com.codex.assistant.settings.UiLanguageMode
 import com.codex.assistant.settings.UiThemeMode
+import com.codex.assistant.toolwindow.approval.ApprovalAction
+import com.codex.assistant.toolwindow.approval.PendingApprovalRequestUiModel
 import com.codex.assistant.toolwindow.composer.EditedFilesFilter
 import com.codex.assistant.toolwindow.composer.ContextEntry
 import com.codex.assistant.i18n.CodexBundle
+import com.codex.assistant.conversation.ConversationSummary
 import com.codex.assistant.toolwindow.drawer.SettingsSection
 import com.codex.assistant.toolwindow.shared.UiText
 import com.codex.assistant.toolwindow.timeline.TimelineFileChange
@@ -20,6 +23,10 @@ internal sealed interface UiIntent {
     data object NewSession : UiIntent
     data object NewTab : UiIntent
     data object ToggleHistory : UiIntent
+    data object LoadHistoryConversations : UiIntent
+    data object LoadMoreHistoryConversations : UiIntent
+    data class EditHistorySearchQuery(val value: String) : UiIntent
+    data class OpenRemoteConversation(val remoteConversationId: String, val title: String) : UiIntent
     data object ToggleSettings : UiIntent
     data object CloseRightDrawer : UiIntent
     data class DeleteSession(val sessionId: String) : UiIntent
@@ -65,6 +72,10 @@ internal sealed interface UiIntent {
     data object MoveAgentSelectionNext : UiIntent
     data object MoveAgentSelectionPrevious : UiIntent
     data object DismissAgentPopup : UiIntent
+    data object MoveApprovalActionNext : UiIntent
+    data object MoveApprovalActionPrevious : UiIntent
+    data class SelectApprovalAction(val action: ApprovalAction) : UiIntent
+    data class SubmitApprovalAction(val action: ApprovalAction? = null) : UiIntent
     data class SelectSettingsSection(val section: SettingsSection) : UiIntent
     data class EditSettingsCodexCliPath(val value: String) : UiIntent
     data class EditSettingsLanguageMode(val mode: UiLanguageMode) : UiIntent
@@ -114,6 +125,12 @@ internal sealed interface AppEvent {
         val sessions: List<AgentChatService.SessionSummary>,
         val activeSessionId: String,
     ) : AppEvent
+    data class HistoryConversationsUpdated(
+        val conversations: List<ConversationSummary>,
+        val nextCursor: String?,
+        val isLoading: Boolean,
+        val append: Boolean,
+    ) : AppEvent
     data class MentionSuggestionsUpdated(
         val query: String,
         val documentVersion: Long,
@@ -134,10 +151,17 @@ internal sealed interface AppEvent {
     data class TimelineOlderLoadingChanged(val loading: Boolean) : AppEvent
     data class TimelineHistoryLoaded(
         val nodes: List<TimelineNode>,
-        val oldestCursor: Long?,
+        val oldestCursor: String?,
         val hasOlder: Boolean,
         val prepend: Boolean,
     ) : AppEvent
+    data class ApprovalRequested(
+        val request: PendingApprovalRequestUiModel,
+    ) : AppEvent
+    data class ApprovalResolved(
+        val requestId: String,
+    ) : AppEvent
+    data object ClearApprovals : AppEvent
 
     data class PromptAccepted(val prompt: String) : AppEvent
     data object ConversationReset : AppEvent

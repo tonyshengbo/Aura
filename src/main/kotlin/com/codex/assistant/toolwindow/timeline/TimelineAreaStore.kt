@@ -15,7 +15,7 @@ internal enum class TimelineRenderCause {
 
 internal data class TimelineAreaState(
     val nodes: List<TimelineNode> = emptyList(),
-    val oldestCursor: Long? = null,
+    val oldestCursor: String? = null,
     val hasOlder: Boolean = false,
     val isLoadingOlder: Boolean = false,
     val isRunning: Boolean = false,

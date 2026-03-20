@@ -1,8 +1,6 @@
 package com.codex.assistant.service
 
 import com.codex.assistant.model.AgentRequest
-import com.codex.assistant.model.EngineEvent
-import com.codex.assistant.model.TimelineAction
 import com.codex.assistant.persistence.chat.SQLiteChatSessionRepository
 import com.codex.assistant.provider.AgentProvider
 import com.codex.assistant.provider.AgentProviderFactory
@@ -10,6 +8,11 @@ import com.codex.assistant.provider.EngineCapabilities
 import com.codex.assistant.provider.EngineDescriptor
 import com.codex.assistant.provider.ProviderRegistry
 import com.codex.assistant.settings.AgentSettingsService
+import com.codex.assistant.protocol.ItemKind
+import com.codex.assistant.protocol.ItemStatus
+import com.codex.assistant.protocol.TurnOutcome
+import com.codex.assistant.protocol.UnifiedEvent
+import com.codex.assistant.protocol.UnifiedItem
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -21,7 +24,7 @@ import kotlin.test.assertTrue
 
 class AgentChatServiceLoggingTest {
     @Test
-    fun `logs codex cli session chain across turns`() = runBlocking {
+    fun `logs codex remote conversation chain across turns`() = runBlocking {
         val provider = RecordingProvider(
             sessionIds = ArrayDeque(listOf("thread_1", "thread_1")),
         )
@@ -62,11 +65,8 @@ class AgentChatServiceLoggingTest {
             model = "gpt-5.3-codex",
             prompt = "First turn",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                firstFinished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { firstFinished.complete(Unit) },
+        )
         withTimeout(2_000) { firstFinished.await() }
 
         val secondFinished = CompletableDeferred<Unit>()
@@ -75,24 +75,21 @@ class AgentChatServiceLoggingTest {
             model = "gpt-5.3-codex",
             prompt = "Second turn",
             contextFiles = emptyList(),
-        ) { action ->
-            if (action == TimelineAction.FinishTurn) {
-                secondFinished.complete(Unit)
-            }
-        }
+            onTurnPersisted = { secondFinished.complete(Unit) },
+        )
         withTimeout(2_000) { secondFinished.await() }
 
         assertTrue(
-            logs.any { it.contains("Codex chain request:") && it.contains("cliSessionId=<none>") },
-            "Expected a first-turn log without cliSessionId, got: ${logs.joinToString()}",
+            logs.any { it.contains("Codex chain request:") && it.contains("remoteConversationId=<none>") },
+            "Expected a first-turn log without remoteConversationId, got: ${logs.joinToString()}",
         )
         assertTrue(
-            logs.any { it.contains("Codex chain stored cli session:") && it.contains("cliSessionId=thread_1") },
-            "Expected a stored cliSessionId log for thread_1, got: ${logs.joinToString()}",
+            logs.any { it.contains("Codex chain stored remote conversation:") && it.contains("remoteConversationId=thread_1") },
+            "Expected a stored remoteConversationId log for thread_1, got: ${logs.joinToString()}",
         )
         assertTrue(
-            logs.any { it.contains("Codex chain request:") && it.contains("cliSessionId=thread_1") },
-            "Expected a second-turn log with cliSessionId=thread_1, got: ${logs.joinToString()}",
+            logs.any { it.contains("Codex chain request:") && it.contains("remoteConversationId=thread_1") },
+            "Expected a second-turn log with remoteConversationId=thread_1, got: ${logs.joinToString()}",
         )
         service.dispose()
     }
@@ -115,10 +112,20 @@ class AgentChatServiceLoggingTest {
     private class RecordingProvider(
         private val sessionIds: ArrayDeque<String>,
     ) : AgentProvider {
-        override fun stream(request: AgentRequest): Flow<EngineEvent> = flow {
-            emit(EngineEvent.AssistantTextDelta("ok"))
-            emit(EngineEvent.SessionReady(sessionIds.removeFirst()))
-            emit(EngineEvent.Completed(exitCode = 0))
+        override fun stream(request: AgentRequest): Flow<UnifiedEvent> = flow {
+            emit(UnifiedEvent.ThreadStarted(threadId = sessionIds.removeFirst()))
+            emit(
+                UnifiedEvent.ItemUpdated(
+                    UnifiedItem(
+                        id = "${request.requestId}:assistant",
+                        kind = ItemKind.NARRATIVE,
+                        status = ItemStatus.SUCCESS,
+                        name = "message",
+                        text = "ok",
+                    ),
+                ),
+            )
+            emit(UnifiedEvent.TurnCompleted(turnId = "turn-1", outcome = TurnOutcome.SUCCESS))
         }
 
         override fun cancel(requestId: String) = Unit

@@ -1,5 +1,6 @@
 package com.codex.assistant.toolwindow.drawer
 
+import com.codex.assistant.conversation.ConversationSummary
 import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.settings.SavedAgentDefinition
 import com.codex.assistant.settings.UiLanguageMode
@@ -25,6 +26,11 @@ internal data class RightDrawerAreaState(
     val kind: RightDrawerKind = RightDrawerKind.NONE,
     val sessions: List<AgentChatService.SessionSummary> = emptyList(),
     val activeSessionId: String = "",
+    val activeRemoteConversationId: String = "",
+    val historyConversations: List<ConversationSummary> = emptyList(),
+    val historyNextCursor: String? = null,
+    val historyLoading: Boolean = false,
+    val historyQuery: String = "",
     val codexCliPath: String = "",
     val languageMode: UiLanguageMode = UiLanguageMode.FOLLOW_IDE,
     val themeMode: UiThemeMode = UiThemeMode.FOLLOW_IDE,
@@ -47,6 +53,10 @@ internal class RightDrawerAreaStore {
                     UiIntent.ToggleHistory -> {
                         val next = if (_state.value.kind == RightDrawerKind.HISTORY) RightDrawerKind.NONE else RightDrawerKind.HISTORY
                         _state.value = _state.value.copy(kind = next)
+                    }
+
+                    is UiIntent.EditHistorySearchQuery -> {
+                        _state.value = _state.value.copy(historyQuery = event.intent.value)
                     }
 
                     UiIntent.ToggleSettings -> {
@@ -118,9 +128,24 @@ internal class RightDrawerAreaStore {
             }
 
             is AppEvent.SessionSnapshotUpdated -> {
+                val active = event.sessions.firstOrNull { it.id == event.activeSessionId }
                 _state.value = _state.value.copy(
                     sessions = event.sessions,
                     activeSessionId = event.activeSessionId,
+                    activeRemoteConversationId = active?.remoteConversationId.orEmpty(),
+                )
+            }
+
+            is AppEvent.HistoryConversationsUpdated -> {
+                _state.value = _state.value.copy(
+                    historyConversations = if (event.append) {
+                        (_state.value.historyConversations + event.conversations)
+                            .distinctBy { it.remoteConversationId }
+                    } else {
+                        event.conversations
+                    },
+                    historyNextCursor = event.nextCursor,
+                    historyLoading = event.isLoading,
                 )
             }
 
