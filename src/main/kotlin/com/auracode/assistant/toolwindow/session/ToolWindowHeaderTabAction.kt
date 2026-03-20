@@ -1,0 +1,96 @@
+package com.auracode.assistant.toolwindow.session
+
+import com.auracode.assistant.i18n.AuraCodeBundle
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.Presentation
+import com.intellij.openapi.actionSystem.ex.CustomComponentAction
+import com.intellij.openapi.util.IconLoader
+import com.intellij.openapi.project.DumbAwareAction
+import com.auracode.assistant.toolwindow.shared.AssistantUiTheme
+import com.auracode.assistant.toolwindow.shared.assistantUiTokens
+import com.auracode.assistant.toolwindow.shared.currentIdeDarkTheme
+import com.auracode.assistant.toolwindow.shared.EffectiveTheme
+import java.awt.BorderLayout
+import java.awt.Font
+import javax.swing.BorderFactory
+import javax.swing.JButton
+import javax.swing.JComponent
+import javax.swing.JLabel
+import javax.swing.JPanel
+
+internal open class ToolWindowHeaderTabAction(
+    private val tab: ToolWindowHeaderTab,
+    private val onSelect: (String) -> Unit,
+    private val onClose: (String) -> Unit,
+) : DumbAwareAction(tab.fullTitle), CustomComponentAction {
+
+    override fun actionPerformed(e: AnActionEvent) {
+        onSelect(tab.sessionId)
+    }
+
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+    override fun createCustomComponent(presentation: Presentation, place: String): JComponent {
+        val tokens = assistantUiTokens()
+        val panel = JPanel(BorderLayout(4, 0)).apply {
+            isOpaque = true
+        }
+        val titleLabel = JLabel(tab.displayTitle)
+        val closeButton = JButton().apply {
+            isFocusable = false
+            isOpaque = false
+            setContentAreaFilled(false)
+            border = BorderFactory.createEmptyBorder(0, 0, 0, 0)
+            icon = IconLoader.getIcon("/icons/close-small.svg", ToolWindowHeaderTabAction::class.java)
+            toolTipText = AuraCodeBundle.message("session.tab.close")
+            isVisible = tab.closable
+            addActionListener { onClose(tab.sessionId) }
+        }
+        titleLabel.font = titleLabel.font.deriveFont(Font.PLAIN, 12f)
+        titleLabel.toolTipText = tab.fullTitle
+        closeButton.preferredSize = java.awt.Dimension(14, 14)
+        panel.add(titleLabel, BorderLayout.CENTER)
+        panel.add(closeButton, BorderLayout.EAST)
+        panel.putClientProperty("label", titleLabel)
+        panel.putClientProperty("close", closeButton)
+        applyStyle(panel, titleLabel, closeButton)
+        panel.border = BorderFactory.createEmptyBorder(0, tokens.spacing.xs.value.toInt(), 0, tokens.spacing.xs.value.toInt())
+        panel.toolTipText = tab.fullTitle
+        panel.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(e: java.awt.event.MouseEvent?) {
+                onSelect(tab.sessionId)
+            }
+        })
+        return panel
+    }
+
+    override fun updateCustomComponent(component: JComponent, presentation: Presentation) {
+        val panel = component as? JPanel ?: return
+        val titleLabel = panel.getClientProperty("label") as? JLabel ?: return
+        val closeButton = panel.getClientProperty("close") as? JButton ?: return
+        titleLabel.text = tab.displayTitle
+        titleLabel.toolTipText = tab.fullTitle
+        closeButton.isVisible = tab.closable
+        panel.toolTipText = tab.fullTitle
+        applyStyle(panel, titleLabel, closeButton)
+    }
+
+    private fun applyStyle(panel: JPanel, titleLabel: JLabel, closeButton: JButton) {
+        val tokens = assistantUiTokens()
+        val theme = if (currentIdeDarkTheme()) EffectiveTheme.DARK else EffectiveTheme.LIGHT
+        val palette = AssistantUiTheme.palette(theme)
+        panel.background = if (tab.active) palette.chromeRaised else palette.chromeBg
+        panel.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, if (tab.active) 2 else 0, 0, palette.accent),
+            BorderFactory.createEmptyBorder(
+                tokens.spacing.xs.value.toInt(),
+                tokens.spacing.sm.value.toInt(),
+                tokens.spacing.xs.value.toInt(),
+                tokens.spacing.sm.value.toInt(),
+            ),
+        )
+        titleLabel.foreground = if (tab.active) palette.textPrimary else palette.textSecondary
+        closeButton.foreground = if (tab.active) palette.textPrimary else palette.textSecondary
+    }
+}

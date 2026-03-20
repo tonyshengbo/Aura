@@ -7,7 +7,7 @@ plugins {
     kotlin("plugin.serialization") version "2.0.21"
 }
 
-group = "com.codex.assistant"
+group = "com.auracode.assistant"
 version = "1.0.0"
 
 repositories {
@@ -24,8 +24,6 @@ dependencies {
     implementation("com.mikepenz:multiplatform-markdown-renderer-m2:0.31.0")
     implementation("org.xerial:sqlite-jdbc:3.46.1.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.7.3")
     testRuntimeOnly("net.java.dev.jna:jna:5.14.0")
     testImplementation(kotlin("test"))
     intellijPlatform {
@@ -44,8 +42,7 @@ kotlin {
 intellijPlatform {
     pluginConfiguration {
         ideaVersion {
-            sinceBuild = "243"
-            untilBuild = "243.*"
+            sinceBuild = "233"
         }
     }
 }

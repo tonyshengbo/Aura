@@ -1,1 +1,1 @@
-rootProject.name = "Codex-Assistant"
+rootProject.name = "Aura-Code"

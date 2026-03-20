@@ -1,10 +1,21 @@
 <idea-plugin>
-    <id>com.codex.assistant</id>
-    <name>%plugin.name</name>
-    <vendor email="support@example.com">Codex Assistant</vendor>
+    <id>com.auracode.assistant</id>
+    <name>Aura Code</name>
+    <vendor email ="tonyshengbo@foxmail.com">Aura Code</vendor>
 
-    <resource-bundle>messages.CodexBundle</resource-bundle>
-    <description>%plugin.description</description>
+    <resource-bundle>messages.AuraCodeBundle</resource-bundle>
+    <description><![CDATA[
+        <p><b>Aura Code</b> brings the Aura Code runtime directly into IntelliJ IDEA, so you can plan, discuss, and execute coding tasks without leaving the IDE.</p>
+        <p><b>Core capabilities</b></p>
+        <ul>
+            <li>Native chat tool window for in-IDE collaboration</li>
+            <li>Project-scoped multi-tab sessions with resumable history</li>
+            <li>Rich context input with file mentions and attachments</li>
+            <li>Built-in plan/approval workflows with diff review</li>
+            <li>MCP-aware environment and server management</li>
+        </ul>
+        <p><b>Outcome:</b> Ship changes faster while keeping control inside existing development workflows.</p>
+    ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.java</depends>
@@ -12,16 +23,17 @@
 
     <extensions defaultExtensionNs="com.intellij">
         <toolWindow
-                id="Codex Chat"
-                factoryClass="com.codex.assistant.toolwindow.bootstrap.AgentToolWindowFactory"
+                id="Aura Code"
+                factoryClass="com.auracode.assistant.toolwindow.bootstrap.AgentToolWindowFactory"
                 anchor="right"
+                icon="/icons/toolwindow-stripe.svg"
                 canCloseContents="false"/>
 
     </extensions>
 
     <actions>
-        <action id="com.codex.assistant.QuickOpen"
-                class="com.codex.assistant.actions.QuickOpenAction"
+        <action id="com.auracode.assistant.QuickOpen"
+                class="com.auracode.assistant.actions.QuickOpenAction"
                 text="%action.open.text"
                 description="%action.open.description">
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl K"/>

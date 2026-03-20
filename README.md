@@ -1,32 +1,29 @@
-# Codex Assistant (English)
+# Aura Code (English)
 
 For Chinese documentation, see: [README.zh.md](README.zh.md)
 
 ## Overview
 
-Codex Assistant is an IntelliJ IDEA plugin that provides a unified Agent workflow over pluggable engines. The current Codex integration uses the local Codex CLI, including native multi-turn continuation through the CLI session `thread_id`.
+Aura Code is an IntelliJ IDEA plugin powered by the Aura Code runtime. It provides a native chat tool window inside IDEA, keeps project-local conversation history, and reuses the stored session `thread_id` for multi-turn continuation.
 
-## Implemented Features
+## Current Features
 
-- Unified Tool Window (`Codex Chat`)
-- Engine selector driven by provider registry (current engine: `codex`)
-- Streaming response + cancel
-- Native multi-turn continuation within each saved session
-- Action type: `CHAT`
-- Context input: current file + manually attached files
-- Project-local session persistence
-- Settings page for local Codex CLI path
-- **Smart Context Management**: Auto-detect open files, git diff integration, file search
-- **Code Editing & Diff Preview**: Visual diff viewer, one-click apply changes
-- **Multi-Provider Support**: Codex CLI, Claude CLI support
-- **Keyboard Shortcuts**: Cmd+K/Ctrl+K to quick open tool window
-- **Enhanced UI**: Code block rendering, search panel, welcome screen
+- `Aura Code` tool window for project-scoped conversations
+- Streaming responses with cancel support
+- Native multi-turn continuation through the stored session `thread_id`
+- Context support for current file, manual file context, mentions, and attachments
+- Project-local session persistence and restore
+- Composer controls for model, reasoning, mode, and pending queue
+- Local MCP JSON management
+- Local Skills management and slash entry support
+- Edited file aggregation and diff entry points
+- Cmd/Ctrl+K quick-open shortcut
 
 ## Requirements
 
 - IntelliJ IDEA 2023.3+
 - JDK 17
-- Local `codex` CLI available on `PATH`, or configured in `Settings -> Tools -> Codex Assistant`
+- Local `codex` CLI available on `PATH`, or configured in `Settings -> Tools -> Aura Code`
 
 ## Build and Install
 
@@ -36,15 +33,15 @@ Codex Assistant is an IntelliJ IDEA plugin that provides a unified Agent workflo
 ```
 2. Find the ZIP in `build/distributions/`.
 3. Install ZIP in IntelliJ IDEA.
-4. Configure the Codex CLI path in `Settings -> Tools -> Codex Assistant` if `codex` is not already on `PATH`.
+4. Configure the Aura Code runtime path in `Settings -> Tools -> Aura Code` if the executable is not already on `PATH`.
 
 ## Usage
 
-1. Open `View -> Tool Windows -> Codex Chat`
-2. Select engine
-3. Enter prompt and send
-4. Optional: attach extra context files
-5. Continue within the same saved session to reuse native conversation state
+1. Open `View -> Tool Windows -> Aura Code`
+2. Configure the local Aura Code runtime path if needed
+3. Enter a prompt and send
+4. Optionally add context files or attachments
+5. Continue in the same session to reuse native conversation state
 
 ## Debugging Guide
 
@@ -70,10 +67,10 @@ Check:
 - Local JDK version (must be 17)
 - Network access to JetBrains Maven repositories
 
-### 3) Codex CLI diagnostics
+### 3) Aura Code runtime diagnostics
 
 Verify in plugin settings:
-- Codex CLI path is correct
+- Aura Code runtime path is correct
 - `codex exec --help` works in your local environment
 - The CLI account/session is already authenticated outside the plugin
 
@@ -86,16 +83,16 @@ In sandbox IntelliJ, open logs:
 ### 5) Session/state checks
 
 - Reopen project and verify session restore.
-- Switch engine and verify provider change takes effect.
 - Cancel during streaming and verify request termination.
 - Ask a follow-up in the same session and verify the plugin reuses the stored CLI `thread_id`.
+- Restart IDEA and verify composer model / reasoning selections are restored.
 
 ## Safety Model
 
 - Session history is scoped to the current saved session only.
-- Native continuation is driven by the stored Codex CLI session `thread_id` in that session.
+- Native continuation is driven by the stored session `thread_id` in that session.
 
 ## Current Scope
 
-- Current release targets IntelliJ IDEA.
-- Multi-JetBrains IDE support is planned for later versions.
+- This release targets IntelliJ IDEA.
+- Marketplace signing and publishing are out of scope for this ZIP-only release.
