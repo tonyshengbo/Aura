@@ -19,7 +19,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import com.codex.assistant.i18n.CodexBundle
 import com.codex.assistant.protocol.ItemStatus
@@ -53,10 +60,13 @@ internal fun LoadOlderHistoryButton(
 @Composable
 internal fun TimelineExpandableCard(
     title: String,
+    titleTargetLabel: String? = null,
+    titleTargetPath: String? = null,
     status: ItemStatus,
     expanded: Boolean,
     palette: DesignPalette,
     onToggleExpanded: () -> Unit,
+    onOpenTitleTarget: ((String) -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     val t = assistantUiTokens()
@@ -92,11 +102,12 @@ internal fun TimelineExpandableCard(
                         )
                     }
                     Spacer(Modifier.width(t.spacing.sm))
-                    Text(
-                        text = title,
-                        color = palette.timelineCardText,
-                        fontWeight = FontWeight.Medium,
-                        style = androidx.compose.material.MaterialTheme.typography.subtitle1,
+                    TimelineExpandableCardTitle(
+                        title = title,
+                        titleTargetLabel = titleTargetLabel,
+                        titleTargetPath = titleTargetPath,
+                        palette = palette,
+                        onOpenTitleTarget = onOpenTitleTarget,
                     )
                     Spacer(Modifier.weight(1f))
                     Box(
@@ -124,22 +135,82 @@ internal fun TimelineExpandableCard(
 @Composable
 internal fun TimelineMarkdownActivityBody(
     title: String,
+    titleTargetLabel: String? = null,
+    titleTargetPath: String? = null,
     body: String,
     status: ItemStatus,
     expanded: Boolean,
     palette: DesignPalette,
     onToggleExpanded: () -> Unit,
+    onOpenTitleTarget: ((String) -> Unit)? = null,
 ) {
     TimelineExpandableCard(
         title = title,
+        titleTargetLabel = titleTargetLabel,
+        titleTargetPath = titleTargetPath,
         status = status,
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenTitleTarget = onOpenTitleTarget,
     ) {
         TimelineMarkdown(
             text = body,
             palette = palette,
         )
     }
+}
+
+@Composable
+private fun TimelineExpandableCardTitle(
+    title: String,
+    titleTargetLabel: String?,
+    titleTargetPath: String?,
+    palette: DesignPalette,
+    onOpenTitleTarget: ((String) -> Unit)?,
+) {
+    val targetLabel = titleTargetLabel
+    val targetPath = titleTargetPath
+    if (targetLabel.isNullOrBlank() || targetPath.isNullOrBlank() || onOpenTitleTarget == null) {
+        Text(
+            text = title,
+            color = palette.timelineCardText,
+            fontWeight = FontWeight.Medium,
+            style = androidx.compose.material.MaterialTheme.typography.subtitle1,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        return
+    }
+
+    val prefix = title.substringBefore(targetLabel).ifBlank { title.removeSuffix(targetLabel).trimEnd() }
+    val suffix = title.substringAfter(targetLabel, "")
+    val annotated = buildAnnotatedString {
+        append(prefix)
+        if (prefix.isNotBlank() && !prefix.endsWith(" ")) append(" ")
+        withLink(
+            LinkAnnotation.Clickable(
+                tag = targetPath,
+                styles = TextLinkStyles(
+                    style = SpanStyle(
+                        color = palette.linkColor,
+                        textDecoration = TextDecoration.Underline,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                ),
+                linkInteractionListener = { onOpenTitleTarget(targetPath) },
+            ),
+        ) {
+            append(targetLabel)
+        }
+        append(suffix)
+    }
+    Text(
+        text = annotated,
+        color = palette.timelineCardText,
+        fontWeight = FontWeight.Medium,
+        style = androidx.compose.material.MaterialTheme.typography.subtitle1,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
 }

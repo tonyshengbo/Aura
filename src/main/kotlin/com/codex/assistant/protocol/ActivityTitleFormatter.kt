@@ -1,61 +1,91 @@
 package com.codex.assistant.protocol
 
 internal object ActivityTitleFormatter {
+    data class TitlePresentation(
+        val title: String,
+        val targetLabel: String? = null,
+        val targetPath: String? = null,
+    )
+
     fun commandTitle(
         explicitName: String? = null,
         command: String? = null,
         body: String? = null,
     ): String {
+        return commandPresentation(
+            explicitName = explicitName,
+            command = command,
+            body = body,
+        ).title
+    }
+
+    fun commandPresentation(
+        explicitName: String? = null,
+        command: String? = null,
+        body: String? = null,
+    ): TitlePresentation {
         val candidate = explicitName?.trim().orEmpty()
         val rawCommand = command?.trim().takeUnless { it.isNullOrBlank() }
             ?: body?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
         val normalized = rawCommand?.unwrapCommandWrapper().orEmpty()
         if (normalized.isBlank()) {
-            return candidate.takeUnless {
-                it.isBlank() || it.equals("Exec Command", ignoreCase = true)
-            } ?: "Run shell command"
+            return TitlePresentation(
+                title = candidate.takeUnless {
+                    it.isBlank() || it.equals("Exec Command", ignoreCase = true)
+                } ?: "Run shell command",
+            )
         }
 
-        val summarized = summarizeCommand(normalized)
+        val summarized = summarizeCommandPresentation(normalized)
         if (summarized != null) {
             return summarized
         }
 
         val fallback = fallbackCommandTitle(normalized)
-        if (fallback != null) return fallback
+        if (fallback != null) return TitlePresentation(title = fallback)
 
-        if (candidate.isNotBlank() && !candidate.equals("Exec Command", ignoreCase = true)) {
-            return candidate
-        }
-
-        return "Run shell command"
+        return TitlePresentation(
+            title = if (candidate.isNotBlank() && !candidate.equals("Exec Command", ignoreCase = true)) {
+                candidate
+            } else {
+                "Run shell command"
+            },
+        )
     }
 
     fun toolTitle(
         explicitName: String? = null,
         body: String? = null,
     ): String {
+        return toolPresentation(explicitName = explicitName, body = body).title
+    }
+
+    fun toolPresentation(
+        explicitName: String? = null,
+        body: String? = null,
+    ): TitlePresentation {
         val candidate = explicitName?.trim().orEmpty()
         if (candidate.isShellLikeToolName()) {
-            return commandTitle(
+            return commandPresentation(
                 explicitName = null,
                 body = body,
             )
         }
 
         val normalized = body?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()?.unwrapCommandWrapper().orEmpty()
-        val summarized = normalized.takeIf { it.isNotBlank() }?.let(::summarizeCommand)
+        val summarized = normalized.takeIf { it.isNotBlank() }?.let(::summarizeCommandPresentation)
         if (summarized != null && candidate.isBlank()) {
             return summarized
         }
 
-        return candidate.ifBlank { "Tool Call" }
+        return TitlePresentation(title = candidate.ifBlank { "Tool Call" })
     }
 
-    private fun summarizeCommand(normalizedCommand: String): String? {
+    private fun summarizeCommandPresentation(normalizedCommand: String): TitlePresentation? {
         summarizeFileWrite(normalizedCommand)?.let { return it }
-        summarizePythonHeredoc(normalizedCommand)?.let { return it }
-        summarizeGroupedRipgrep(normalizedCommand)?.let { return it }
+        summarizeFileRead(normalizedCommand)?.let { return it }
+        summarizePythonHeredoc(normalizedCommand)?.let { return TitlePresentation(title = it) }
+        summarizeGroupedRipgrep(normalizedCommand)?.let { return TitlePresentation(title = it) }
 
         val effectiveCommand = extractEffectiveCommand(normalizedCommand) ?: return null
         val args = effectiveCommand.tokenizeShellLike()
@@ -64,49 +94,97 @@ internal object ActivityTitleFormatter {
         val executable = args.first().commandLeaf()
         val targetFile = args.drop(1).firstOrNull { token ->
             token.isLikelyFilePath()
-        }?.let(::fileDisplayName)
+        }?.trim('\'', '"')
 
         return when (executable) {
-            "cat" -> targetFile?.let { "Read $it" } ?: "Read file"
-            "type" -> targetFile?.let { "Read $it" } ?: "Read file"
-            "ls" -> "List files"
-            "dir" -> "List files"
-            "find" -> "Search files"
-            "rg" -> rgSummary(args)
-            "get-childitem" -> powershellSearchSummary(args)
-            "set-content" -> targetFile?.let { "Write $it" } ?: "Write file"
-            "add-content" -> targetFile?.let { "Append to $it" } ?: "Append to file"
-            "git" -> args.getOrNull(1)?.let { "Git ${it.humanizeToken()}" } ?: "Git command"
-            "gradlew", "./gradlew" -> args.getOrNull(1)?.let { "Run Gradle ${it.humanizeToken()}" } ?: "Run Gradle"
-            "python", "python3" -> "Run Python script"
-            "java", "javac" -> "Run Java command"
-            "node", "nodejs" -> "Run Node command"
-            "powershell", "pwsh" -> "Run PowerShell command"
+            "cat", "type", "sed", "head", "tail" ->
+                targetFile?.takeIf { it.isAbsoluteFilePath() }?.let { fileTitle("Read", it) } ?: TitlePresentation(title = "Read file")
+            "ls" -> TitlePresentation(title = "List files")
+            "dir" -> TitlePresentation(title = "List files")
+            "find" -> TitlePresentation(title = "Search files")
+            "rg" -> TitlePresentation(title = rgSummary(args))
+            "get-childitem" -> TitlePresentation(title = powershellSearchSummary(args))
+            "set-content" ->
+                targetFile?.takeIf { it.isAbsoluteFilePath() }?.let { fileTitle("Write", it) } ?: TitlePresentation(title = "Write file")
+            "add-content" ->
+                targetFile?.takeIf { it.isAbsoluteFilePath() }?.let { fileTitle("Append to", it) } ?: TitlePresentation(title = "Append to file")
+            "git" -> TitlePresentation(title = args.getOrNull(1)?.let { "Git ${it.humanizeToken()}" } ?: "Git command")
+            "gradlew", "./gradlew" -> TitlePresentation(title = args.getOrNull(1)?.let { "Run Gradle ${it.humanizeToken()}" } ?: "Run Gradle")
+            "python", "python3" -> TitlePresentation(title = "Run Python script")
+            "java", "javac" -> TitlePresentation(title = "Run Java command")
+            "node", "nodejs" -> TitlePresentation(title = "Run Node command")
+            "powershell", "pwsh" -> TitlePresentation(title = "Run PowerShell command")
             else -> {
                 val verb = executable.humanizeToken().replaceFirstChar { it.uppercase() }
-                targetFile?.let { "$verb $it" } ?: null
+                targetFile?.takeIf { it.isAbsoluteFilePath() }?.let { fileTitle(verb, it) }
+                    ?: targetFile?.let { TitlePresentation(title = "$verb ${fileDisplayName(it)}") }
             }
         }
     }
 
-    private fun summarizeFileWrite(command: String): String? {
+    private fun summarizeFileRead(command: String): TitlePresentation? {
+        val trimmed = command.trim()
+        val readPath = when {
+            trimmed.startsWith("sed ", ignoreCase = true) ->
+                Regex("""\s([^\s]+)$""").find(trimmed)?.groupValues?.getOrNull(1)
+            trimmed.startsWith("head ", ignoreCase = true) ->
+                Regex("""\s([^\s]+)$""").find(trimmed)?.groupValues?.getOrNull(1)
+            trimmed.startsWith("tail ", ignoreCase = true) ->
+                Regex("""\s([^\s]+)$""").find(trimmed)?.groupValues?.getOrNull(1)
+            trimmed.startsWith("cat ", ignoreCase = true) ->
+                Regex("""^cat\s+([^\s]+)$""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)
+            trimmed.startsWith("type ", ignoreCase = true) ->
+                Regex("""^type\s+([^\s]+)$""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)
+            else -> null
+        }?.trim('"', '\'')
+        return readPath?.takeIf { it.isAbsoluteFilePath() }?.let { fileTitle("Read", it) }
+    }
+
+    private fun summarizeFileWrite(command: String): TitlePresentation? {
         val trimmed = command.trim()
         val unixMatch = Regex("""cat\s*(>>|>)\s*([^\s<]+)\s*<<""", RegexOption.IGNORE_CASE).find(trimmed)
         if (unixMatch != null) {
             val op = unixMatch.groupValues[1]
-            val file = fileDisplayName(unixMatch.groupValues[2].trim('"', '\''))
-            return if (op == ">>") "Append to $file" else "Write $file"
+            val path = unixMatch.groupValues[2].trim('"', '\'')
+            return if (path.isAbsoluteFilePath()) {
+                fileTitle(if (op == ">>") "Append to" else "Write", path)
+            } else {
+                TitlePresentation(title = if (op == ">>") "Append to ${fileDisplayName(path)}" else "Write ${fileDisplayName(path)}")
+            }
         }
 
         val psSet = Regex("""(?:set-content|sc)\s+([^\s]+)""", RegexOption.IGNORE_CASE).find(trimmed)
         if (psSet != null) {
-            return "Write ${fileDisplayName(psSet.groupValues[1].trim('"', '\''))}"
+            val path = psSet.groupValues[1].trim('"', '\'')
+            return if (path.isAbsoluteFilePath()) fileTitle("Write", path) else TitlePresentation(title = "Write ${fileDisplayName(path)}")
         }
         val psAdd = Regex("""(?:add-content|ac)\s+([^\s]+)""", RegexOption.IGNORE_CASE).find(trimmed)
         if (psAdd != null) {
-            return "Append to ${fileDisplayName(psAdd.groupValues[1].trim('"', '\''))}"
+            val path = psAdd.groupValues[1].trim('"', '\'')
+            return if (path.isAbsoluteFilePath()) fileTitle("Append to", path) else TitlePresentation(title = "Append to ${fileDisplayName(path)}")
         }
         return null
+    }
+
+    private fun fileTitle(action: String, path: String): TitlePresentation {
+        val label = fileTargetLabel(path)
+        return TitlePresentation(
+            title = "$action $label",
+            targetLabel = label,
+            targetPath = path.trim().trim('"', '\''),
+        )
+    }
+
+    private fun fileTargetLabel(path: String): String {
+        val normalized = path.trim().trim('"', '\'').replace('\\', '/')
+        val segments = normalized.split('/').filter { it.isNotBlank() }
+        if (segments.isEmpty()) return normalized
+        val fileName = segments.last()
+        return if (fileName.equals("SKILL.md", ignoreCase = true) && segments.size >= 2) {
+            segments.takeLast(2).joinToString("/")
+        } else {
+            fileName
+        }
     }
 
     private fun summarizePythonHeredoc(command: String): String? {
@@ -259,6 +337,11 @@ internal object ActivityTitleFormatter {
         if (startsWith("-")) return false
         if (contains('*') || contains('|')) return false
         return contains('/') || contains('\\') || Regex("""^[A-Za-z]:\\""").containsMatchIn(this) || contains('.')
+    }
+
+    private fun String.isAbsoluteFilePath(): Boolean {
+        val normalized = trim().trim('"', '\'')
+        return normalized.startsWith("/") || Regex("""^[A-Za-z]:[\\/].+""").matches(normalized)
     }
 
     private fun rgSummary(args: List<String>): String {

@@ -35,43 +35,100 @@ internal fun ContextEntryStrip(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(p.topBarBg.copy(alpha = 0.72f), RoundedCornerShape(t.spacing.sm))
-            .padding(horizontal = t.spacing.sm, vertical = 3.dp)
-            .horizontalScroll(rememberScrollState()),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(horizontal = t.spacing.sm, vertical = 3.dp),
     ) {
-        HoverTooltip(text = CodexBundle.message("composer.addAttachment")) {
-            IconButton(
-                modifier = Modifier.size(26.dp),
-                onClick = { onIntent(UiIntent.OpenAttachmentPicker) },
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(end = if (state.editedFiles.isNotEmpty()) 96.dp else 0.dp)
+                .horizontalScroll(rememberScrollState()),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            HoverTooltip(text = CodexBundle.message("composer.addAttachment")) {
+                IconButton(
+                    modifier = Modifier.size(26.dp),
+                    onClick = { onIntent(UiIntent.OpenAttachmentPicker) },
+                ) {
+                    Icon(
+                        painter = painterResource("/icons/attach-file.svg"),
+                        contentDescription = CodexBundle.message("composer.addAttachment"),
+                        tint = p.textSecondary,
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.width(t.spacing.xs))
+            state.contextEntries.forEach { entry ->
+                ContextEntryChip(
+                    entry = entry,
+                    p = p,
+                    onRemove = { onIntent(UiIntent.RemoveContextFile(entry.path)) },
+                )
+                Spacer(Modifier.width(t.spacing.xs))
+            }
+            state.agentEntries.forEach { entry ->
+                AgentEntryChip(
+                    entry = entry,
+                    p = p,
+                    onRemove = { onIntent(UiIntent.RemoveSelectedAgent(entry.id)) },
+                )
+                Spacer(Modifier.width(t.spacing.xs))
+            }
+        }
+        if (state.editedFiles.isNotEmpty()) {
+            Box(
+                modifier = Modifier.align(Alignment.CenterEnd),
             ) {
-                Icon(
-                    painter = painterResource("/icons/attach-file.svg"),
-                    contentDescription = CodexBundle.message("composer.addAttachment"),
-                    tint = p.textSecondary,
-                    modifier = Modifier.size(16.dp),
+                EditedFilesEntry(
+                    p = p,
+                    count = state.editedFiles.size,
+                    expanded = state.editedFilesExpanded,
+                    onClick = { onIntent(UiIntent.ToggleEditedFilesExpanded) },
                 )
             }
         }
-        Spacer(Modifier.width(t.spacing.xs))
-        state.contextEntries.forEach { entry ->
-            ContextEntryChip(
-                entry = entry,
-                p = p,
-                onRemove = { onIntent(UiIntent.RemoveContextFile(entry.path)) },
+    }
+}
+
+@Composable
+private fun EditedFilesEntry(
+    p: DesignPalette,
+    count: Int,
+    expanded: Boolean,
+    onClick: () -> Unit,
+) {
+    val t = assistantUiTokens()
+    HoverTooltip(text = CodexBundle.message("composer.editedFiles.entry.tooltip")) {
+        Row(
+            modifier = Modifier
+                .background(p.topStripBg, RoundedCornerShape(999.dp))
+                .clickable(onClick = onClick)
+                .padding(horizontal = t.spacing.sm, vertical = t.spacing.xs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource("/icons/document.svg"),
+                contentDescription = CodexBundle.message("composer.editedFiles.entry.tooltip"),
+                tint = p.textSecondary,
+                modifier = Modifier.size(t.controls.iconMd),
             )
             Spacer(Modifier.width(t.spacing.xs))
-        }
-        state.agentEntries.forEach { entry ->
-            AgentEntryChip(
-                entry = entry,
-                p = p,
-                onRemove = { onIntent(UiIntent.RemoveSelectedAgent(entry.id)) },
+            Text(
+                text = CodexBundle.message("composer.editedFiles.entry", count.toString()),
+                color = p.textSecondary,
+                style = androidx.compose.material.MaterialTheme.typography.body2,
             )
             Spacer(Modifier.width(t.spacing.xs))
+            Icon(
+                painter = painterResource(if (expanded) "/icons/arrow-down.svg" else "/icons/arrow-up.svg"),
+                contentDescription = null,
+                tint = p.textMuted,
+                modifier = Modifier.size(14.dp),
+            )
         }
     }
 }

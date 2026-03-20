@@ -99,6 +99,9 @@ class ComposeToolWindowPanel(
         openTimelineFileChange = { change ->
             openTimelineFileChange(project, change)
         },
+        openTimelineFilePath = { path ->
+            openTimelineFilePath(project, path)
+        },
         onSessionSnapshotPublished = {
             if (::sessionTabCoordinator.isInitialized) {
                 sessionTabCoordinator.refresh()
@@ -254,6 +257,23 @@ class ComposeToolWindowPanel(
                 return@Runnable
             }
             vFile?.let { OpenFileDescriptor(project, it).navigate(true) }
+        }
+        if (app.isDispatchThread) {
+            action.run()
+        } else {
+            app.invokeLater(action)
+        }
+    }
+
+    private fun openTimelineFilePath(
+        project: Project,
+        path: String,
+    ) {
+        val app = ApplicationManager.getApplication()
+        val action = Runnable {
+            LocalFileSystem.getInstance()
+                .findFileByPath(path)
+                ?.let { OpenFileDescriptor(project, it).navigate(true) }
         }
         if (app.isDispatchThread) {
             action.run()

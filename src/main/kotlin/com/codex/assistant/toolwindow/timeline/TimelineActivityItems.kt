@@ -9,14 +9,18 @@ internal fun TimelineToolCallItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenTitleTarget: (String) -> Unit,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
+        titleTargetLabel = node.titleTargetLabel,
+        titleTargetPath = node.titleTargetPath,
         body = node.body,
         status = node.status,
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenTitleTarget = onOpenTitleTarget,
     )
 }
 
@@ -26,14 +30,18 @@ internal fun TimelineCommandItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenTitleTarget: (String) -> Unit,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
+        titleTargetLabel = node.titleTargetLabel,
+        titleTargetPath = node.titleTargetPath,
         body = node.body,
         status = node.status,
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenTitleTarget = onOpenTitleTarget,
     )
 }
 

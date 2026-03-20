@@ -240,15 +240,11 @@ class AreaStoresTest {
     }
 
     @Test
-    fun `composer store selects approval mode and closes popup`() {
+    fun `composer store selects approval mode directly`() {
         val store = ComposerAreaStore()
-
-        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleModeMenu))
-        assertTrue(store.state.value.modeMenuExpanded)
 
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectMode(ComposerMode.APPROVAL)))
         assertEquals(ComposerMode.APPROVAL, store.state.value.selectedMode)
-        assertFalse(store.state.value.modeMenuExpanded)
     }
 
     @Test

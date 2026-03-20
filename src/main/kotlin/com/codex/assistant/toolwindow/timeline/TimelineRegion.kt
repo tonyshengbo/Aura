@@ -131,6 +131,7 @@ internal fun TimelineRegion(
                         palette = p,
                         expanded = state.expandedNodeIds.contains(node.id),
                         onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                        onOpenTitleTarget = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                     )
 
                     is TimelineNode.CommandNode -> TimelineCommandItem(
@@ -138,6 +139,7 @@ internal fun TimelineRegion(
                         palette = p,
                         expanded = state.expandedNodeIds.contains(node.id),
                         onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                        onOpenTitleTarget = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                     )
 
                     is TimelineNode.ApprovalNode -> TimelineApprovalItem(

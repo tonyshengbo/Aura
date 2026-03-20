@@ -49,24 +49,15 @@ internal fun ComposerControlBar(
             .padding(start = t.spacing.sm, end = 2.dp, top = 3.dp, bottom = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        DropdownChip(
-            iconPath = modeOption(state.selectedMode).iconPath,
-            label = state.selectedMode.localizedLabel(),
-            expanded = state.modeMenuExpanded,
-            onToggle = { onIntent(UiIntent.ToggleModeMenu) },
-            onDismiss = { onIntent(UiIntent.ToggleModeMenu) },
+        ModeToggleGroup(
+            selectedMode = state.selectedMode,
             p = p,
-        ) {
-            ComposerMode.entries.forEach { mode ->
-                DropdownMenuItem(onClick = { onIntent(UiIntent.SelectMode(mode)) }) {
-                    DropdownOptionRow(
-                        option = modeOption(mode),
-                        selected = state.selectedMode == mode,
-                        p = p,
-                    )
+            onSelectMode = { mode ->
+                if (mode != state.selectedMode) {
+                    onIntent(UiIntent.SelectMode(mode))
                 }
-            }
-        }
+            },
+        )
         Spacer(Modifier.width(t.spacing.sm))
         DropdownChip(
             iconPath = if (state.selectedModel.contains("gpt")) "/icons/gpt.svg" else "/icons/codex.svg",
@@ -122,6 +113,48 @@ internal fun ComposerControlBar(
                     }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun ModeToggleGroup(
+    selectedMode: ComposerMode,
+    p: DesignPalette,
+    onSelectMode: (ComposerMode) -> Unit,
+) {
+    val t = assistantUiTokens()
+    Row(
+        modifier = Modifier
+            .background(p.topStripBg.copy(alpha = 0.78f), RoundedCornerShape(8.dp))
+            .border(1.dp, p.markdownDivider.copy(alpha = 0.34f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 2.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        ComposerMode.entries.forEach { mode ->
+            val selected = selectedMode == mode
+            val option = modeOption(mode)
+            val background = if (selected) p.accent.copy(alpha = 0.18f) else Color.Transparent
+            val border = if (selected) p.accent.copy(alpha = 0.42f) else Color.Transparent
+            val tint = if (selected) p.accent else p.textMuted
+            HoverTooltip(text = option.label) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 28.dp, height = 24.dp)
+                        .background(background, RoundedCornerShape(6.dp))
+                        .border(1.dp, border, RoundedCornerShape(6.dp))
+                        .clickable(onClick = { onSelectMode(mode) }),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(option.iconPath),
+                        contentDescription = option.label,
+                        tint = tint,
+                        modifier = Modifier.size(t.controls.iconMd),
+                    )
+                }
+            }
         }
     }
 }

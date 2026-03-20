@@ -6,6 +6,7 @@ import com.codex.assistant.service.AgentChatService
 import com.codex.assistant.settings.SavedAgentDefinition
 import com.codex.assistant.settings.UiLanguageMode
 import com.codex.assistant.settings.UiThemeMode
+import com.codex.assistant.toolwindow.composer.EditedFilesFilter
 import com.codex.assistant.toolwindow.composer.ContextEntry
 import com.codex.assistant.i18n.CodexBundle
 import com.codex.assistant.toolwindow.drawer.SettingsSection
@@ -26,11 +27,11 @@ internal sealed interface UiIntent {
     data object LoadOlderMessages : UiIntent
     data class ToggleNodeExpanded(val nodeId: String) : UiIntent
     data class OpenTimelineFileChange(val change: TimelineFileChange) : UiIntent
+    data class OpenTimelineFilePath(val path: String) : UiIntent
     data class UpdateDocument(val value: TextFieldValue) : UiIntent
     data class InputChanged(val value: String) : UiIntent
     data object SendPrompt : UiIntent
     data object CancelRun : UiIntent
-    data object ToggleModeMenu : UiIntent
     data class SelectMode(val mode: ComposerMode) : UiIntent
     data object ToggleModelMenu : UiIntent
     data class SelectModel(val model: String) : UiIntent
@@ -44,6 +45,13 @@ internal sealed interface UiIntent {
     data class OpenAttachmentPreview(val id: String) : UiIntent
     data object CloseAttachmentPreview : UiIntent
     data class RemoveContextFile(val path: String) : UiIntent
+    data object ToggleEditedFilesExpanded : UiIntent
+    data class SelectEditedFilesFilter(val filter: EditedFilesFilter) : UiIntent
+    data class AcceptEditedFile(val path: String) : UiIntent
+    data object AcceptAllEditedFiles : UiIntent
+    data class OpenEditedFileDiff(val path: String) : UiIntent
+    data class RevertEditedFile(val path: String) : UiIntent
+    data object RevertAllEditedFiles : UiIntent
     data class UpdateFocusedContextFile(val path: String?) : UiIntent
     data class RequestMentionSuggestions(val query: String, val documentVersion: Long) : UiIntent
     data class SelectMentionFile(val path: String) : UiIntent

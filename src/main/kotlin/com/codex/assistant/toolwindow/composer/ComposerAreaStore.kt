@@ -8,6 +8,7 @@ import com.codex.assistant.toolwindow.eventing.AppEvent
 import com.codex.assistant.toolwindow.eventing.ComposerMode
 import com.codex.assistant.toolwindow.eventing.ComposerReasoning
 import com.codex.assistant.toolwindow.eventing.UiIntent
+import com.codex.assistant.toolwindow.timeline.TimelineMutation
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,7 +72,6 @@ internal data class ComposerAreaState(
     val selectedMode: ComposerMode = ComposerMode.AUTO,
     val selectedModel: String = CodexModelCatalog.defaultModel,
     val selectedReasoning: ComposerReasoning = ComposerReasoning.MEDIUM,
-    val modeMenuExpanded: Boolean = false,
     val modelMenuExpanded: Boolean = false,
     val reasoningMenuExpanded: Boolean = false,
     val manualContextEntries: List<ContextEntry> = emptyList(),
@@ -89,6 +89,9 @@ internal data class ComposerAreaState(
     val agentSuggestions: List<SavedAgentDefinition> = emptyList(),
     val agentPopupVisible: Boolean = false,
     val activeAgentIndex: Int = 0,
+    val editedFiles: List<EditedFileAggregate> = emptyList(),
+    val editedFilesExpanded: Boolean = false,
+    val editedFilesFilter: EditedFilesFilter = EditedFilesFilter.ALL,
 ) {
     val inputText: String
         get() = normalizePromptBody(removeMentionRanges(document.text, mentionEntries))
@@ -106,6 +109,17 @@ internal data class ComposerAreaState(
     fun serializedSystemInstructions(): List<String> = agentEntries.mapNotNull { it.prompt.trim().takeIf(String::isNotBlank) }
 
     fun hasPromptContent(): Boolean = serializedPrompt().isNotBlank() || agentEntries.isNotEmpty()
+
+    val editedFilesSummary: EditedFilesSummary
+        get() = EditedFilesSummary(
+            total = editedFiles.size,
+            created = editedFiles.count { it.aggregateKind == EditedFileAggregateKind.CREATED },
+            updated = editedFiles.count { it.aggregateKind == EditedFileAggregateKind.UPDATED },
+            deleted = editedFiles.count { it.aggregateKind == EditedFileAggregateKind.DELETED },
+        )
+
+    val visibleEditedFiles: List<EditedFileAggregate>
+        get() = editedFiles.filter { it.matches(editedFilesFilter) }
 }
 
 internal class ComposerAreaStore {
@@ -131,18 +145,11 @@ internal class ComposerAreaStore {
                     is UiIntent.InputChanged -> applyDocumentUpdate(
                         TextFieldValue(intent.value, TextRange(intent.value.length)),
                     )
-                    UiIntent.ToggleModeMenu -> _state.value = _state.value.copy(
-                        modeMenuExpanded = !_state.value.modeMenuExpanded,
-                        modelMenuExpanded = false,
-                        reasoningMenuExpanded = false,
-                    )
                     is UiIntent.SelectMode -> _state.value = _state.value.copy(
                         selectedMode = intent.mode,
-                        modeMenuExpanded = false,
                     )
                     UiIntent.ToggleModelMenu -> _state.value = _state.value.copy(
                         modelMenuExpanded = !_state.value.modelMenuExpanded,
-                        modeMenuExpanded = false,
                         reasoningMenuExpanded = false,
                     )
                     is UiIntent.SelectModel -> _state.value = _state.value.copy(
@@ -151,7 +158,6 @@ internal class ComposerAreaStore {
                     )
                     UiIntent.ToggleReasoningMenu -> _state.value = _state.value.copy(
                         reasoningMenuExpanded = !_state.value.reasoningMenuExpanded,
-                        modeMenuExpanded = false,
                         modelMenuExpanded = false,
                     )
                     is UiIntent.SelectReasoning -> _state.value = _state.value.copy(
@@ -173,6 +179,18 @@ internal class ComposerAreaStore {
                         manualContextEntries = _state.value.manualContextEntries.filterNot { it.path == intent.path },
                         focusedContextEntry = _state.value.focusedContextEntry?.takeUnless { it.path == intent.path },
                     ).withResolvedContextEntries()
+                    UiIntent.ToggleEditedFilesExpanded -> _state.value = _state.value.copy(
+                        editedFilesExpanded = !_state.value.editedFilesExpanded && _state.value.editedFiles.isNotEmpty(),
+                    )
+                    is UiIntent.SelectEditedFilesFilter -> _state.value = _state.value.copy(
+                        editedFilesFilter = intent.filter,
+                    )
+                    is UiIntent.AcceptEditedFile -> _state.value = _state.value.removeEditedFile(intent.path)
+                    UiIntent.AcceptAllEditedFiles -> _state.value = _state.value.copy(
+                        editedFiles = emptyList(),
+                        editedFilesExpanded = false,
+                        editedFilesFilter = EditedFilesFilter.ALL,
+                    )
                     is UiIntent.SelectMentionFile -> addMention(intent.path)
                     is UiIntent.RemoveMentionFile -> removeMention(intent.id)
                     is UiIntent.SelectAgent -> addAgent(intent.agent)
@@ -248,6 +266,12 @@ internal class ComposerAreaStore {
                     agentPopupVisible = event.suggestions.isNotEmpty(),
                     activeAgentIndex = 0,
                 )
+            }
+
+            is AppEvent.TimelineMutationApplied -> {
+                if (event.mutation is TimelineMutation.UpsertFileChange) {
+                    acceptEditedFileChange(event.mutation)
+                }
             }
 
             is AppEvent.PromptAccepted -> {
@@ -440,6 +464,53 @@ internal class ComposerAreaStore {
             mention = MentionLookupRequest(query = query, documentVersion = documentVersion),
             documentVersion = documentVersion,
         )
+    }
+
+    private fun acceptEditedFileChange(mutation: TimelineMutation.UpsertFileChange) {
+        val current = _state.value
+        val now = System.currentTimeMillis()
+        val updates = current.editedFiles.associateBy { it.path }.toMutableMap()
+        mutation.changes.forEach { change ->
+            val existing = updates[change.path]
+            val kinds = buildSet {
+                existing?.let { addAll(it.kindSet) }
+                add(change.kind)
+            }
+            updates[change.path] = EditedFileAggregate(
+                path = change.path,
+                displayName = change.displayName,
+                latestKind = change.kind,
+                kindSet = kinds,
+                aggregateKind = kinds.toAggregateKind(),
+                editCount = (existing?.editCount ?: 0) + 1,
+                latestAddedLines = change.addedLines,
+                latestDeletedLines = change.deletedLines,
+                lastUpdatedAt = now,
+                latestChange = change,
+            )
+        }
+        _state.value = current.copy(
+            editedFiles = updates.values.sortedByDescending { it.lastUpdatedAt },
+            editedFilesExpanded = current.editedFilesExpanded && updates.isNotEmpty(),
+        )
+    }
+
+    private fun ComposerAreaState.removeEditedFile(path: String): ComposerAreaState {
+        val nextFiles = editedFiles.filterNot { it.path == path }
+        return copy(
+            editedFiles = nextFiles,
+            editedFilesExpanded = editedFilesExpanded && nextFiles.isNotEmpty(),
+            editedFilesFilter = if (nextFiles.isEmpty()) EditedFilesFilter.ALL else editedFilesFilter,
+        )
+    }
+
+    private fun Set<com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind>.toAggregateKind(): EditedFileAggregateKind {
+        return when {
+            size > 1 -> EditedFileAggregateKind.MIXED
+            contains(com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind.CREATE) -> EditedFileAggregateKind.CREATED
+            contains(com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind.DELETE) -> EditedFileAggregateKind.DELETED
+            else -> EditedFileAggregateKind.UPDATED
+        }
     }
 
     private fun toContextEntry(path: String): ContextEntry {

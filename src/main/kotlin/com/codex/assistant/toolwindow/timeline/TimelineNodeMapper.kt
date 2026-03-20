@@ -41,29 +41,37 @@ internal object TimelineNodeMapper {
             com.codex.assistant.persistence.chat.PersistedTimelineRecordType.ACTIVITY -> {
                 val turnId = entry.turnId.ifBlank { null }
                 when (entry.activityKind ?: PersistedActivityKind.UNKNOWN) {
-                    PersistedActivityKind.TOOL -> TimelineNode.ToolCallNode(
-                        id = activityNodeId("tool", turnId, entry.sourceId),
-                        sourceId = entry.sourceId,
-                        title = ActivityTitleFormatter.toolTitle(
-                            explicitName = entry.title,
-                            body = entry.body,
-                        ),
+                    PersistedActivityKind.TOOL -> ActivityTitleFormatter.toolPresentation(
+                        explicitName = entry.title,
                         body = entry.body,
-                        status = entry.status,
-                        turnId = turnId,
-                    )
+                    ).let { presentation ->
+                        TimelineNode.ToolCallNode(
+                            id = activityNodeId("tool", turnId, entry.sourceId),
+                            sourceId = entry.sourceId,
+                            title = presentation.title,
+                            titleTargetLabel = presentation.targetLabel,
+                            titleTargetPath = presentation.targetPath,
+                            body = entry.body,
+                            status = entry.status,
+                            turnId = turnId,
+                        )
+                    }
 
-                    PersistedActivityKind.COMMAND -> TimelineNode.CommandNode(
-                        id = activityNodeId("command", turnId, entry.sourceId),
-                        sourceId = entry.sourceId,
-                        title = ActivityTitleFormatter.commandTitle(
-                            explicitName = entry.title,
-                            body = entry.body,
-                        ),
+                    PersistedActivityKind.COMMAND -> ActivityTitleFormatter.commandPresentation(
+                        explicitName = entry.title,
                         body = entry.body,
-                        status = entry.status,
-                        turnId = turnId,
-                    )
+                    ).let { presentation ->
+                        TimelineNode.CommandNode(
+                            id = activityNodeId("command", turnId, entry.sourceId),
+                            sourceId = entry.sourceId,
+                            title = presentation.title,
+                            titleTargetLabel = presentation.targetLabel,
+                            titleTargetPath = presentation.targetPath,
+                            body = entry.body,
+                            status = entry.status,
+                            turnId = turnId,
+                        )
+                    }
 
                     PersistedActivityKind.DIFF -> {
                         val parsedChanges = parseFileChanges(entry.body)
@@ -183,26 +191,34 @@ internal object TimelineNodeMapper {
                 )
             }
 
-            ItemKind.TOOL_CALL -> TimelineMutation.UpsertToolCall(
-                sourceId = id,
-                title = ActivityTitleFormatter.toolTitle(
-                    explicitName = titleTextOrNull(),
-                    body = bodyText(),
-                ),
+            ItemKind.TOOL_CALL -> ActivityTitleFormatter.toolPresentation(
+                explicitName = titleTextOrNull(),
                 body = bodyText(),
-                status = status,
-            )
+            ).let { presentation ->
+                TimelineMutation.UpsertToolCall(
+                    sourceId = id,
+                    title = presentation.title,
+                    titleTargetLabel = presentation.targetLabel,
+                    titleTargetPath = presentation.targetPath,
+                    body = bodyText(),
+                    status = status,
+                )
+            }
 
-            ItemKind.COMMAND_EXEC -> TimelineMutation.UpsertCommand(
-                sourceId = id,
-                title = ActivityTitleFormatter.commandTitle(
-                    explicitName = titleTextOrNull(),
-                    command = command,
-                    body = bodyText(),
-                ),
+            ItemKind.COMMAND_EXEC -> ActivityTitleFormatter.commandPresentation(
+                explicitName = titleTextOrNull(),
+                command = command,
                 body = bodyText(),
-                status = status,
-            )
+            ).let { presentation ->
+                TimelineMutation.UpsertCommand(
+                    sourceId = id,
+                    title = presentation.title,
+                    titleTargetLabel = presentation.targetLabel,
+                    titleTargetPath = presentation.targetPath,
+                    body = bodyText(),
+                    status = status,
+                )
+            }
 
             ItemKind.DIFF_APPLY -> TimelineMutation.UpsertFileChange(
                 sourceId = id,

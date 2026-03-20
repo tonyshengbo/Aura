@@ -51,6 +51,8 @@ class TimelineNodeMapperTest {
 
         val command = assertIs<TimelineMutation.UpsertCommand>(mutation)
         assertEquals("Read b.java", command.title)
+        assertEquals("b.java", command.titleTargetLabel)
+        assertEquals("/tmp/b.java", command.titleTargetPath)
     }
 
     @Test
@@ -69,6 +71,27 @@ class TimelineNodeMapperTest {
 
         val tool = assertIs<TimelineMutation.UpsertToolCall>(mutation)
         assertEquals("Search java files", tool.title)
+        assertEquals(null, tool.titleTargetLabel)
+        assertEquals(null, tool.titleTargetPath)
+    }
+
+    @Test
+    fun `skill file read command exposes clickable title target`() {
+        val mutation = TimelineNodeMapper.fromUnifiedEvent(
+            UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "request-1:item-skill",
+                    kind = ItemKind.COMMAND_EXEC,
+                    status = ItemStatus.RUNNING,
+                    command = "/bin/zsh -lc 'sed -n ''1,140p'' /Users/tonysheng/.codex/superpowers/skills/using-superpowers/SKILL.md'",
+                ),
+            ),
+        )
+
+        val command = assertIs<TimelineMutation.UpsertCommand>(mutation)
+        assertEquals("Read using-superpowers/SKILL.md", command.title)
+        assertEquals("using-superpowers/SKILL.md", command.titleTargetLabel)
+        assertEquals("/Users/tonysheng/.codex/superpowers/skills/using-superpowers/SKILL.md", command.titleTargetPath)
     }
 
     @Test

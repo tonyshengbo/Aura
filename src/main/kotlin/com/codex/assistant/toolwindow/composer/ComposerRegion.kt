@@ -40,6 +40,10 @@ internal fun ComposerRegion(
         if (state.attachments.isNotEmpty()) {
             Spacer(Modifier.height(t.spacing.xs))
         }
+        EditedFilesPanel(p = p, state = state, onIntent = onIntent)
+        if (state.editedFilesExpanded && state.editedFiles.isNotEmpty()) {
+            Spacer(Modifier.height(t.spacing.xs))
+        }
         ContextEntryStrip(p = p, state = state, onIntent = onIntent)
         Spacer(Modifier.height(t.spacing.xs))
         ComposerInputSection(

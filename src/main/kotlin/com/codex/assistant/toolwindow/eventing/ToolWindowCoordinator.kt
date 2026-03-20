@@ -39,6 +39,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.StandardCopyOption
+import java.nio.charset.StandardCharsets
 import kotlin.io.path.isRegularFile
 import kotlin.io.path.name
 import java.security.MessageDigest
@@ -61,6 +62,7 @@ internal class ToolWindowCoordinator(
     private val isMentionCandidateFile: (String) -> Boolean = { path -> MentionFileWhitelist.allowPath(path) },
     private val readFileContent: (String) -> String? = { path -> readFileContentDefault(path) },
     private val openTimelineFileChange: (TimelineFileChange) -> Unit = {},
+    private val openTimelineFilePath: (String) -> Unit = {},
     private val onSessionSnapshotPublished: () -> Unit = {},
     private val historyPageSize: Int = 40,
 ) : Disposable {
@@ -106,6 +108,7 @@ internal class ToolWindowCoordinator(
             UiIntent.CancelRun -> cancelPromptRun()
             is UiIntent.DeleteSession -> deleteSession(intent.sessionId)
             is UiIntent.OpenTimelineFileChange -> openTimelineFileChange(intent.change)
+            is UiIntent.OpenTimelineFilePath -> openTimelineFilePath(intent.path)
             UiIntent.LoadOlderMessages -> loadOlderMessages()
             UiIntent.OpenAttachmentPicker -> {
                 val selected = pickAttachments()
@@ -114,6 +117,9 @@ internal class ToolWindowCoordinator(
                 }
             }
             UiIntent.PasteImageFromClipboard -> pasteImageFromClipboard()
+            is UiIntent.OpenEditedFileDiff -> openEditedFileDiff(intent.path)
+            is UiIntent.RevertEditedFile -> revertEditedFile(intent.path)
+            UiIntent.RevertAllEditedFiles -> revertAllEditedFiles()
             is UiIntent.RequestMentionSuggestions -> {
                 val query = intent.query.trim()
                 val paths = if (query.isBlank()) {
@@ -358,6 +364,80 @@ internal class ToolWindowCoordinator(
         val image = readImageFromClipboard() ?: return
         val tempPath = writeClipboardImage(image) ?: return
         eventHub.publishUiIntent(UiIntent.AddAttachments(listOf(tempPath)))
+    }
+
+    private fun openEditedFileDiff(path: String) {
+        val change = composerStore.state.value.editedFiles.firstOrNull { it.path == path }?.latestChange ?: return
+        openTimelineFileChange(change)
+    }
+
+    private fun revertEditedFile(path: String) {
+        val aggregate = composerStore.state.value.editedFiles.firstOrNull { it.path == path } ?: return
+        val result = revertAggregate(aggregate)
+        if (result.isSuccess) {
+            eventHub.publishUiIntent(UiIntent.AcceptEditedFile(path))
+            eventHub.publish(AppEvent.StatusTextUpdated(com.codex.assistant.toolwindow.shared.UiText.raw(result.getOrDefault(""))))
+        } else {
+            eventHub.publish(AppEvent.StatusTextUpdated(com.codex.assistant.toolwindow.shared.UiText.raw(result.exceptionOrNull()?.message ?: "Revert failed.")))
+        }
+    }
+
+    private fun revertAllEditedFiles() {
+        val aggregates = composerStore.state.value.editedFiles
+        if (aggregates.isEmpty()) return
+        var success = 0
+        var failed = 0
+        aggregates.forEach { aggregate ->
+            val result = revertAggregate(aggregate)
+            if (result.isSuccess) {
+                success += 1
+                eventHub.publishUiIntent(UiIntent.AcceptEditedFile(aggregate.path))
+            } else {
+                failed += 1
+            }
+        }
+        eventHub.publish(
+            AppEvent.StatusTextUpdated(
+                com.codex.assistant.toolwindow.shared.UiText.raw(
+                    if (failed == 0) {
+                        "Reverted $success files."
+                    } else {
+                        "Reverted $success files, failed $failed."
+                    },
+                ),
+            ),
+        )
+    }
+
+    private fun revertAggregate(aggregate: com.codex.assistant.toolwindow.composer.EditedFileAggregate): Result<String> {
+        return runCatching {
+            val change = aggregate.latestChange
+            val path = Path.of(aggregate.path)
+            when (change.kind) {
+                com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind.CREATE -> {
+                    Files.deleteIfExists(path)
+                    "Reverted ${aggregate.displayName}."
+                }
+
+                com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind.UPDATE,
+                com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind.DELETE,
+                com.codex.assistant.toolwindow.timeline.TimelineFileChangeKind.UNKNOWN,
+                -> {
+                    val oldContent = change.oldContent
+                        ?: throw IllegalStateException("No previous content available for ${aggregate.displayName}.")
+                    path.parent?.let { Files.createDirectories(it) }
+                    Files.writeString(
+                        path,
+                        oldContent,
+                        StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE,
+                    )
+                    "Reverted ${aggregate.displayName}."
+                }
+            }
+        }
     }
 
     private fun readImageFromClipboard(): BufferedImage? {
