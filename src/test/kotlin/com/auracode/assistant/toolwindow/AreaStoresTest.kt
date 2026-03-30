@@ -35,6 +35,8 @@ import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.header.HeaderAreaStore
 import com.auracode.assistant.toolwindow.status.StatusAreaStore
 import com.auracode.assistant.toolwindow.timeline.TimelineAreaStore
+import com.auracode.assistant.toolwindow.timeline.TimelineFileChange
+import com.auracode.assistant.toolwindow.timeline.TimelineFileChangeKind
 import com.auracode.assistant.toolwindow.timeline.TimelineMutation
 import com.auracode.assistant.toolwindow.timeline.TimelineNode
 import kotlin.test.Test
@@ -393,17 +395,25 @@ class AreaStoresTest {
 
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSettingsSection(SettingsSection.AGENTS)))
         assertEquals(AgentSettingsPage.LIST, store.state.value.agentSettingsPage)
+        assertFalse(store.state.value.isAgentEditorDialogVisible)
 
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSavedAgentForEdit("a1")))
         assertEquals(AgentSettingsPage.EDITOR, store.state.value.agentSettingsPage)
         assertEquals("Code Review", store.state.value.agentDraftName)
+        assertTrue(store.state.value.isAgentEditorDialogVisible)
 
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.ShowAgentSettingsList))
         assertEquals(AgentSettingsPage.LIST, store.state.value.agentSettingsPage)
+        assertFalse(store.state.value.isAgentEditorDialogVisible)
 
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.CreateNewAgentDraft))
         assertEquals(AgentSettingsPage.EDITOR, store.state.value.agentSettingsPage)
         assertEquals("", store.state.value.agentDraftName)
+        assertTrue(store.state.value.isAgentEditorDialogVisible)
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSettingsSection(SettingsSection.GENERAL)))
+        assertEquals(AgentSettingsPage.LIST, store.state.value.agentSettingsPage)
+        assertFalse(store.state.value.isAgentEditorDialogVisible)
     }
 
     @Test
@@ -651,6 +661,70 @@ class AreaStoresTest {
         )
 
         assertTrue(store.state.value.expandedNodeIds.contains(restored.id))
+    }
+
+    @Test
+    fun `timeline store keeps edited node collapsed by default and lets user expand it`() {
+        val store = TimelineAreaStore()
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.TurnStarted(turnId = "turn_1", threadId = "th"),
+            ),
+        )
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertFileChange(
+                    sourceId = "diff_1",
+                    title = "Edited Main.kt",
+                    changes = listOf(
+                        TimelineFileChange(
+                            sourceScopedId = "diff_1:file_1",
+                            path = "src/Main.kt",
+                            displayName = "Main.kt",
+                            kind = TimelineFileChangeKind.UPDATE,
+                        ),
+                    ),
+                    status = ItemStatus.RUNNING,
+                    turnId = "turn_1",
+                ),
+            ),
+        )
+
+        val node = assertIs<TimelineNode.FileChangeNode>(store.state.value.nodes.single())
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleNodeExpanded(node.id)))
+        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleNodeExpanded(node.id)))
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+    }
+
+    @Test
+    fun `timeline store expands plan node by default and lets user collapse it`() {
+        val store = TimelineAreaStore()
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.TurnStarted(turnId = "turn_1", threadId = "th"),
+            ),
+        )
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertPlan(
+                    sourceId = "plan_1",
+                    title = "Plan",
+                    body = "1. Inspect\n2. Fix\n3. Verify",
+                    status = ItemStatus.RUNNING,
+                    turnId = "turn_1",
+                ),
+            ),
+        )
+
+        val node = assertIs<TimelineNode.PlanNode>(store.state.value.nodes.single())
+        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleNodeExpanded(node.id)))
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
     }
 
     @Test

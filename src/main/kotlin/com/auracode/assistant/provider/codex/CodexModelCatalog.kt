@@ -8,7 +8,7 @@ data class CodexModelOption(
 
 /** Holds the built-in Codex model list and default model selection. */
 object CodexModelCatalog {
-    const val defaultModel: String = "gpt-5.3-codex"
+    const val defaultModel: String = "gpt-5.4"
 
     val options: List<CodexModelOption> = listOf(
         CodexModelOption(

@@ -36,6 +36,7 @@ internal fun TimelineMessageItem(
     node: TimelineNode.MessageNode,
     palette: DesignPalette,
     onPreviewAttachment: (TimelineMessageAttachment) -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     val t = assistantUiTokens()
     if (isUserMessageNode(node)) {
@@ -49,7 +50,12 @@ internal fun TimelineMessageItem(
                     .background(palette.userBubbleBg, RoundedCornerShape(t.spacing.sm + t.spacing.xs))
                     .padding(horizontal = t.spacing.md, vertical = t.spacing.xs + t.spacing.xs),
             ) {
-                TimelineMessageContent(node = node, palette = palette, onPreviewAttachment = onPreviewAttachment)
+                TimelineMessageContent(
+                    node = node,
+                    palette = palette,
+                    onPreviewAttachment = onPreviewAttachment,
+                    onOpenMarkdownFilePath = onOpenMarkdownFilePath,
+                )
             }
         }
     } else {
@@ -67,7 +73,12 @@ internal fun TimelineMessageItem(
                 )
                 .padding(horizontal = t.spacing.md, vertical = t.spacing.sm),
         ) {
-            TimelineMessageContent(node = node, palette = palette, onPreviewAttachment = onPreviewAttachment)
+            TimelineMessageContent(
+                node = node,
+                palette = palette,
+                onPreviewAttachment = onPreviewAttachment,
+                onOpenMarkdownFilePath = onOpenMarkdownFilePath,
+            )
         }
     }
 }
@@ -77,6 +88,7 @@ private fun TimelineMessageContent(
     node: TimelineNode.MessageNode,
     palette: DesignPalette,
     onPreviewAttachment: (TimelineMessageAttachment) -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     val t = assistantUiTokens()
     Column {
@@ -97,6 +109,7 @@ private fun TimelineMessageContent(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(end = 2.dp),
+                onOpenFilePath = onOpenMarkdownFilePath,
             )
         }
     }

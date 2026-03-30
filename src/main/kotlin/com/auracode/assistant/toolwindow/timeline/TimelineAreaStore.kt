@@ -99,19 +99,35 @@ internal class TimelineAreaStore {
 
         val previousById = previous.nodes.associateBy(TimelineNode::id)
         nextState.nodes.forEach { node ->
+            if (shouldExpandByDefault(node, previousById[node.id])) {
+                expanded = expanded + node.id
+            }
+
             if (!node.isProcessActivityNode()) return@forEach
 
             val previousNode = previousById[node.id]
             val isRunning = node.status == ItemStatus.RUNNING
             val wasRunning = previousNode?.status == ItemStatus.RUNNING
             when {
-                previousNode == null && isRunning -> expanded = expanded + node.id
-                wasRunning && !isRunning -> expanded = expanded - node.id
+                previousNode == null && shouldAutoExpandOnArrival(node, isRunning) -> expanded = expanded + node.id
+                wasRunning && shouldAutoCollapseOnCompletion(node, isRunning) -> expanded = expanded - node.id
             }
         }
 
         _state.value = reducer.state.copy(
             expandedNodeIds = expanded,
         )
+    }
+
+    private fun shouldAutoExpandOnArrival(node: TimelineNode, isRunning: Boolean): Boolean {
+        return isRunning && node !is TimelineNode.FileChangeNode
+    }
+
+    private fun shouldAutoCollapseOnCompletion(node: TimelineNode, isRunning: Boolean): Boolean {
+        return !isRunning && node !is TimelineNode.FileChangeNode
+    }
+
+    private fun shouldExpandByDefault(node: TimelineNode, previousNode: TimelineNode?): Boolean {
+        return previousNode == null && node is TimelineNode.PlanNode
     }
 }

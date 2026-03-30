@@ -18,13 +18,13 @@ class StatusAreaStoreTest {
     }
 
     @Test
-    fun `engine errors become raw toasts and clear the running turn status`() {
+    fun `terminal engine errors clear the running turn status without toast`() {
         val store = StatusAreaStore()
         store.onEvent(AppEvent.PromptAccepted(prompt = "hello"))
 
         store.onEvent(AppEvent.UnifiedEventPublished(UnifiedEvent.Error("boom")))
 
-        assertEquals(UiText.Raw("boom"), store.state.value.toast?.text)
+        assertEquals(null, store.state.value.toast)
         assertEquals(null, store.state.value.turnStatus)
     }
 

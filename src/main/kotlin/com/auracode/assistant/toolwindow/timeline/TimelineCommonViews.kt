@@ -180,6 +180,7 @@ internal fun TimelineMarkdownActivityBody(
     palette: DesignPalette,
     onToggleExpanded: () -> Unit,
     onOpenTitleTarget: ((String) -> Unit)? = null,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
     expandedBodyMaxHeight: Dp? = timelineExpandedBodyMaxHeight(),
     accentColor: androidx.compose.ui.graphics.Color? = null,
     cardBackground: androidx.compose.ui.graphics.Color? = null,
@@ -206,6 +207,7 @@ internal fun TimelineMarkdownActivityBody(
         TimelineMarkdown(
             text = body,
             palette = palette,
+            onOpenFilePath = onOpenMarkdownFilePath,
         )
     }
 }

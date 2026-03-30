@@ -551,7 +551,7 @@ internal class ToolWindowCoordinator(
         }
         state.savedAgents = updated
         publishSettingsSnapshot()
-        eventHub.publishUiIntent(UiIntent.SelectSavedAgentForEdit(saved.id))
+        eventHub.publishUiIntent(UiIntent.ShowAgentSettingsList)
     }
 
     private fun saveCustomModel() {
@@ -590,6 +590,7 @@ internal class ToolWindowCoordinator(
         state.savedAgents = updated
         settingsService.deselectAgent(id)
         publishSettingsSnapshot()
+        eventHub.publishUiIntent(UiIntent.ShowAgentSettingsList)
     }
 
     private fun persistSelectedAgent(id: String) {

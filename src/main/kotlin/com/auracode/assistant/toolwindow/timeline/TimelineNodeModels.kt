@@ -165,6 +165,19 @@ internal sealed interface TimelineNode {
         override val turnId: String?,
     ) : TimelineNode
 
+    /**
+     * Keeps terminal conversation failures explicit in the timeline instead of
+     * hiding them behind toast-only rendering or collapsed failure summaries.
+     */
+    data class ErrorNode(
+        override val id: String,
+        override val sourceId: String,
+        val title: String,
+        val body: String,
+        override val status: ItemStatus,
+        override val turnId: String?,
+    ) : TimelineNode
+
     data class LoadMoreNode(
         override val id: String = LOAD_MORE_NODE_ID,
         val isLoading: Boolean,
@@ -289,7 +302,11 @@ internal sealed interface TimelineMutation {
         val outcome: TurnOutcome,
     ) : TimelineMutation
 
-    data class Error(
+    /**
+     * Appends a dedicated timeline error item for terminal conversation
+     * failures while keeping retry notifications out of the timeline.
+     */
+    data class AppendError(
         val message: String,
     ) : TimelineMutation
 }

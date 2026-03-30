@@ -119,7 +119,7 @@ class TimelineNodeReducerTest {
     }
 
     @Test
-    fun `activity nodes update in place and failed turn marks running nodes failed`() {
+    fun `terminal error finalizes running nodes and appends dedicated error node`() {
         val reducer = TimelineNodeReducer()
 
         reducer.accept(TimelineMutation.TurnStarted(turnId = "turn_2", threadId = "thread_1"))
@@ -139,13 +139,30 @@ class TimelineNodeReducerTest {
                 status = ItemStatus.RUNNING,
             ),
         )
-        reducer.accept(TimelineMutation.Error(message = "boom"))
+        reducer.accept(TimelineMutation.AppendError(message = "boom"))
 
-        val activity = assertIs<TimelineNode.ToolCallNode>(reducer.state.nodes.single())
+        assertEquals(2, reducer.state.nodes.size)
+        val activity = assertIs<TimelineNode.ToolCallNode>(reducer.state.nodes.first())
         assertEquals("ls\nBUILD FAILED", activity.body)
         assertEquals(ItemStatus.FAILED, activity.status)
         assertTrue(activity.collapsedSummary.orEmpty().contains("boom"))
+        val error = assertIs<TimelineNode.ErrorNode>(reducer.state.nodes.last())
+        assertEquals("boom", error.body)
+        assertEquals("turn_2", error.turnId)
         assertEquals("boom", reducer.state.latestError)
+        assertFalse(reducer.state.isRunning)
+    }
+
+    @Test
+    fun `terminal error without active turn creates synthetic error node`() {
+        val reducer = TimelineNodeReducer()
+
+        reducer.accept(TimelineMutation.AppendError(message = "startup failed"))
+
+        val error = assertIs<TimelineNode.ErrorNode>(reducer.state.nodes.single())
+        assertEquals("startup failed", error.body)
+        assertEquals(ItemStatus.FAILED, error.status)
+        assertTrue(error.turnId.orEmpty().startsWith("local-turn-"))
         assertFalse(reducer.state.isRunning)
     }
 
@@ -449,11 +466,14 @@ class TimelineNodeReducerTest {
             ),
         )
 
-        reducer.accept(TimelineMutation.Error(message = "command failed"))
+        reducer.accept(TimelineMutation.AppendError(message = "command failed"))
 
-        val process = assertIs<TimelineNode.CommandNode>(reducer.state.nodes.single())
+        assertEquals(2, reducer.state.nodes.size)
+        val process = assertIs<TimelineNode.CommandNode>(reducer.state.nodes.first())
         assertEquals(ItemStatus.FAILED, process.status)
         assertEquals(null, process.collapsedSummary)
+        val error = assertIs<TimelineNode.ErrorNode>(reducer.state.nodes.last())
+        assertEquals("command failed", error.body)
     }
 
     @Test

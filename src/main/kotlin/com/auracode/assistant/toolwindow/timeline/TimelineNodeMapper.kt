@@ -78,7 +78,7 @@ internal object TimelineNodeMapper {
             is UnifiedEvent.Error ->
                 // Retryable app-server errors should not collapse the active timeline into a
                 // terminal failure state. They are surfaced via toast/status only.
-                if (event.terminal) TimelineMutation.Error(message = event.message) else null
+                if (event.terminal) TimelineMutation.AppendError(message = event.message) else null
             is UnifiedEvent.ItemUpdated -> event.item.toTimelineMutation()
         }
     }

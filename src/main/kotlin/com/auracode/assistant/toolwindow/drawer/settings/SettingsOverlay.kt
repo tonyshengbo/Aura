@@ -25,7 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.auracode.assistant.i18n.AuraCodeBundle
-import com.auracode.assistant.toolwindow.drawer.AgentSettingsPage
 import com.auracode.assistant.toolwindow.drawer.RightDrawerAreaState
 import com.auracode.assistant.toolwindow.drawer.SettingsSection
 import com.auracode.assistant.toolwindow.drawer.presentation
@@ -49,10 +48,9 @@ internal fun SettingsOverlay(
         Column(
             modifier = Modifier
                 .fillMaxHeight()
-                .width(68.dp)
+                .width(56.dp)
                 .background(p.topBarBg.copy(alpha = 0.88f))
-                .border(1.dp, p.markdownDivider.copy(alpha = 0.42f))
-                .padding(vertical = t.spacing.md, horizontal = t.spacing.xs),
+                .padding(vertical = t.spacing.md, horizontal = 6.dp),
             verticalArrangement = Arrangement.spacedBy(t.spacing.sm),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -87,6 +85,13 @@ internal fun SettingsOverlay(
                 description = AuraCodeBundle.message("settings.section.usage"),
             ) { onIntent(UiIntent.SelectSettingsSection(SettingsSection.TOKEN_USAGE)) }
         }
+
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(1.dp)
+                .background(p.markdownDivider.copy(alpha = 0.24f)),
+        )
 
         Box(
             modifier = Modifier
@@ -126,11 +131,7 @@ internal fun SettingsOverlay(
                     }
 
                     SettingsSection.AGENTS -> {
-                        if (state.agentSettingsPage == AgentSettingsPage.LIST) {
-                            AgentSettingsListPage(p = p, state = state, onIntent = onIntent)
-                        } else {
-                            AgentSettingsEditorPage(p = p, state = state, onIntent = onIntent)
-                        }
+                        AgentSettingsListPage(p = p, state = state, onIntent = onIntent)
                     }
 
                     SettingsSection.SKILLS -> {
@@ -159,6 +160,14 @@ internal fun SettingsOverlay(
 
     if (state.isMcpEditorDialogVisible) {
         McpEditorDialog(
+            p = p,
+            state = state,
+            onIntent = onIntent,
+        )
+    }
+
+    if (state.isAgentEditorDialogVisible) {
+        AgentEditorDialog(
             p = p,
             state = state,
             onIntent = onIntent,

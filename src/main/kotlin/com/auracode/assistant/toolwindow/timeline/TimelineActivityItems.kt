@@ -10,6 +10,7 @@ internal fun TimelineReasoningItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = AuraCodeBundle.message("timeline.reasoning"),
@@ -18,6 +19,7 @@ internal fun TimelineReasoningItem(
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }
 
@@ -28,6 +30,7 @@ internal fun TimelineToolCallItem(
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
     onOpenTitleTarget: (String) -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
@@ -40,6 +43,7 @@ internal fun TimelineToolCallItem(
         palette = palette,
         onToggleExpanded = onToggleExpanded,
         onOpenTitleTarget = onOpenTitleTarget,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }
 
@@ -80,6 +84,7 @@ internal fun TimelineApprovalItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
@@ -88,6 +93,7 @@ internal fun TimelineApprovalItem(
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }
 
@@ -97,6 +103,7 @@ internal fun TimelineContextCompactionItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
@@ -106,6 +113,7 @@ internal fun TimelineContextCompactionItem(
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }
 
@@ -115,6 +123,7 @@ internal fun TimelinePlanItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = timelinePlanDisplayTitle(),
@@ -128,6 +137,7 @@ internal fun TimelinePlanItem(
         expandedBodyMaxHeight = timelinePlanExpandedBodyMaxHeight(),
         accentColor = palette.accent,
         useBodyContainer = false,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }
 
@@ -186,6 +196,7 @@ internal fun TimelineUserInputItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
@@ -195,6 +206,7 @@ internal fun TimelineUserInputItem(
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }
 
@@ -204,6 +216,7 @@ internal fun TimelineUnknownActivityItem(
     palette: DesignPalette,
     expanded: Boolean,
     onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
 ) {
     TimelineMarkdownActivityBody(
         title = node.title,
@@ -212,5 +225,26 @@ internal fun TimelineUnknownActivityItem(
         expanded = expanded,
         palette = palette,
         onToggleExpanded = onToggleExpanded,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
+    )
+}
+
+@Composable
+internal fun TimelineErrorItem(
+    node: TimelineNode.ErrorNode,
+    palette: DesignPalette,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
+    onOpenMarkdownFilePath: ((String) -> Unit)? = null,
+) {
+    TimelineMarkdownActivityBody(
+        title = node.title,
+        body = node.body,
+        status = node.status,
+        expanded = expanded,
+        palette = palette,
+        onToggleExpanded = onToggleExpanded,
+        accentColor = palette.danger,
+        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
     )
 }

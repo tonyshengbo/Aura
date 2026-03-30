@@ -12,6 +12,7 @@ internal class TimelineNodeReducer {
     private var activeThreadId: String? = null
     private var activeTurnId: String? = null
     private var syntheticTurnCount: Int = 0
+    private var errorNodeCount: Int = 0
 
     fun accept(mutation: TimelineMutation) {
         state = when (mutation) {
@@ -32,7 +33,7 @@ internal class TimelineNodeReducer {
             is TimelineMutation.UpsertUserInput -> acceptUserInput(mutation)
             is TimelineMutation.UpsertUnknownActivity -> acceptUnknownActivity(mutation)
             is TimelineMutation.TurnCompleted -> acceptTurnCompleted(mutation)
-            is TimelineMutation.Error -> acceptError(mutation)
+            is TimelineMutation.AppendError -> acceptAppendedError(mutation)
         }.withLiveRender()
     }
 
@@ -102,6 +103,7 @@ internal class TimelineNodeReducer {
         activeThreadId = null
         activeTurnId = null
         syntheticTurnCount = 0
+        errorNodeCount = 0
         state = TimelineAreaState()
     }
 
@@ -369,12 +371,28 @@ internal class TimelineNodeReducer {
         )
     }
 
-    private fun acceptError(mutation: TimelineMutation.Error): TimelineAreaState {
-        val nextNodes = finalizeRunningNodes(
-            nodes = state.nodes,
-            turnId = activeTurnId,
-            status = ItemStatus.FAILED,
-            errorSummary = mutation.message,
+    /**
+     * Records a terminal conversation error as its own timeline item while
+     * still finalizing any running nodes that belong to the same turn.
+     */
+    private fun acceptAppendedError(mutation: TimelineMutation.AppendError): TimelineAreaState {
+        val turnId = resolveTurnId(activeTurnId)
+        val errorSourceId = nextErrorSourceId()
+        val nextNodes = appendNode(
+            nodes = finalizeRunningNodes(
+                nodes = state.nodes,
+                turnId = turnId,
+                status = ItemStatus.FAILED,
+                errorSummary = mutation.message,
+            ),
+            node = TimelineNode.ErrorNode(
+                id = activityNodeId("error", turnId, errorSourceId),
+                sourceId = errorSourceId,
+                title = "Error",
+                body = mutation.message,
+                status = ItemStatus.FAILED,
+                turnId = turnId,
+            ),
         )
         activeTurnId = null
         return state.copy(
@@ -466,6 +484,13 @@ internal class TimelineNodeReducer {
         return next
     }
 
+    private fun appendNode(
+        nodes: List<TimelineNode>,
+        node: TimelineNode,
+    ): List<TimelineNode> {
+        return nodes + node
+    }
+
     private fun decorateHistoryNodes(
         nodes: List<TimelineNode>,
         hasOlder: Boolean,
@@ -522,6 +547,8 @@ internal class TimelineNodeReducer {
                 if (turnId != fromTurnId) this else copy(id = activityNodeId("user-input", toTurnId, sourceId), turnId = toTurnId)
             is TimelineNode.UnknownActivityNode ->
                 if (turnId != fromTurnId) this else copy(id = activityNodeId("unknown", toTurnId, sourceId), turnId = toTurnId)
+            is TimelineNode.ErrorNode ->
+                if (turnId != fromTurnId) this else copy(id = activityNodeId("error", toTurnId, sourceId), turnId = toTurnId)
             is TimelineNode.LoadMoreNode -> this
         }
     }
@@ -565,6 +592,7 @@ internal class TimelineNodeReducer {
                 collapsedSummary = summarizeUserInputBody(body),
             )
             is TimelineNode.UnknownActivityNode -> copy(status = status)
+            is TimelineNode.ErrorNode -> copy(status = status)
             is TimelineNode.LoadMoreNode -> this
         }
     }
@@ -583,6 +611,11 @@ internal class TimelineNodeReducer {
     private fun nextSyntheticTurnId(): String {
         syntheticTurnCount += 1
         return "local-turn-$syntheticTurnCount"
+    }
+
+    private fun nextErrorSourceId(): String {
+        errorNodeCount += 1
+        return "timeline-error-$errorNodeCount"
     }
 
     private fun isSyntheticTurnId(turnId: String): Boolean = turnId.startsWith("local-turn-")

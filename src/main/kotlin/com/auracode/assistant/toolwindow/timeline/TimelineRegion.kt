@@ -311,6 +311,7 @@ internal fun TimelineRegion(
                             node = node,
                             palette = p,
                             onPreviewAttachment = { previewAttachment = it },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.ReasoningNode -> TimelineReasoningItem(
@@ -318,6 +319,7 @@ internal fun TimelineRegion(
                             palette = p,
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.FileChangeNode -> TimelineFileChangeItem(
@@ -334,6 +336,7 @@ internal fun TimelineRegion(
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
                             onOpenTitleTarget = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.CommandNode -> TimelineCommandItem(
@@ -349,6 +352,7 @@ internal fun TimelineRegion(
                             palette = p,
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.ContextCompactionNode -> TimelineContextCompactionItem(
@@ -356,6 +360,7 @@ internal fun TimelineRegion(
                             palette = p,
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.PlanNode -> TimelinePlanItem(
@@ -363,6 +368,7 @@ internal fun TimelineRegion(
                             palette = p,
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.UserInputNode -> TimelineUserInputItem(
@@ -370,6 +376,7 @@ internal fun TimelineRegion(
                             palette = p,
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
 
                         is TimelineNode.UnknownActivityNode -> TimelineUnknownActivityItem(
@@ -377,6 +384,15 @@ internal fun TimelineRegion(
                             palette = p,
                             expanded = state.expandedNodeIds.contains(node.id),
                             onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
+                        )
+
+                        is TimelineNode.ErrorNode -> TimelineErrorItem(
+                            node = node,
+                            palette = p,
+                            expanded = state.expandedNodeIds.contains(node.id),
+                            onToggleExpanded = { onIntent(UiIntent.ToggleNodeExpanded(node.id)) },
+                            onOpenMarkdownFilePath = { path -> onIntent(UiIntent.OpenTimelineFilePath(path)) },
                         )
                     }
                 }

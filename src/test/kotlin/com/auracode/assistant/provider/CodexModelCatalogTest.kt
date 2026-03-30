@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 class CodexModelCatalogTest {
     @Test
     fun `catalog exposes default model and menu descriptions in display order`() {
-        assertEquals("gpt-5.3-codex", CodexModelCatalog.defaultModel)
+        assertEquals("gpt-5.4", CodexModelCatalog.defaultModel)
         assertEquals(
             listOf(
                 "gpt-5.3-codex",

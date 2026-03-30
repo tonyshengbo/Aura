@@ -107,14 +107,10 @@ internal fun SettingsRailItem(
     HoverTooltip(text = description) {
         Box(
             modifier = Modifier
-                .size(t.controls.railItem)
-                .clip(RoundedCornerShape(t.spacing.md))
-                .background(if (selected) p.accent.copy(alpha = 0.16f) else Color.Transparent)
-                .border(
-                    width = 1.dp,
-                    color = if (selected) p.accent.copy(alpha = 0.35f) else Color.Transparent,
-                    shape = RoundedCornerShape(t.spacing.md),
-                )
+                .size(36.dp)
+                .clip(RoundedCornerShape(t.spacing.sm))
+                .background(if (selected) p.accent.copy(alpha = 0.14f) else Color.Transparent)
+                .border(width = 1.dp, color = if (selected) p.accent.copy(alpha = 0.22f) else Color.Transparent, shape = RoundedCornerShape(t.spacing.sm))
                 .clickable(onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {

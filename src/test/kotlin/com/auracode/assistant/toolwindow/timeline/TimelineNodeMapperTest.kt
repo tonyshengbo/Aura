@@ -11,6 +11,25 @@ import kotlin.test.assertNull
 
 class TimelineNodeMapperTest {
     @Test
+    fun `terminal unified errors map to timeline error mutations`() {
+        val mutation = TimelineNodeMapper.fromUnifiedEvent(
+            UnifiedEvent.Error(message = "boom", terminal = true),
+        )
+
+        val error = assertIs<TimelineMutation.AppendError>(mutation)
+        assertEquals("boom", error.message)
+    }
+
+    @Test
+    fun `retryable unified errors stay out of the timeline`() {
+        val mutation = TimelineNodeMapper.fromUnifiedEvent(
+            UnifiedEvent.Error(message = "retrying", terminal = false),
+        )
+
+        assertNull(mutation)
+    }
+
+    @Test
     fun `assistant reasoning narrative maps to reasoning mutation instead of top level message`() {
         val mutation = TimelineNodeMapper.fromUnifiedEvent(
             UnifiedEvent.ItemUpdated(

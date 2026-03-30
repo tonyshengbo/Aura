@@ -77,6 +77,13 @@ internal data class RightDrawerAreaState(
     val mcpFeedbackMessage: String? = null,
     val mcpFeedbackIsError: Boolean = false,
 ) {
+    /**
+     * Keeps agent editing modal visibility derived from the existing page mode
+     * so the UI does not need a second source of truth for the same state.
+     */
+    val isAgentEditorDialogVisible: Boolean
+        get() = settingsSection == SettingsSection.AGENTS && agentSettingsPage == AgentSettingsPage.EDITOR
+
     val isMcpEditorDialogVisible: Boolean
         get() = settingsSection == SettingsSection.MCP && mcpSettingsPage == McpSettingsPage.EDITOR
 }
@@ -107,11 +114,9 @@ internal class RightDrawerAreaStore {
                         _state.value = _state.value.copy(
                             kind = RightDrawerKind.SETTINGS,
                             settingsSection = event.intent.section,
-                            agentSettingsPage = if (event.intent.section == SettingsSection.AGENTS) {
-                                AgentSettingsPage.LIST
-                            } else {
-                                _state.value.agentSettingsPage
-                            },
+                            // Reset page-scoped editors when switching sections so
+                            // modal visibility does not leak across settings areas.
+                            agentSettingsPage = AgentSettingsPage.LIST,
                             mcpSettingsPage = if (event.intent.section == SettingsSection.MCP) {
                                 McpSettingsPage.LIST
                             } else {

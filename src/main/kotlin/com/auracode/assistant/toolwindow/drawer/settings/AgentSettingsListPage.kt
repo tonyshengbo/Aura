@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -68,7 +69,6 @@ internal fun AgentSettingsListPage(
                     AgentListRow(
                         p = p,
                         name = agent.name,
-                        selected = false,
                         onClick = { onIntent(UiIntent.SelectSavedAgentForEdit(agent.id)) },
                     )
                 }
@@ -81,40 +81,41 @@ internal fun AgentSettingsListPage(
 private fun AgentListRow(
     p: DesignPalette,
     name: String,
-    selected: Boolean,
     onClick: () -> Unit,
 ) {
     val t = assistantUiTokens()
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = 44.dp)
             .background(
-                if (selected) p.userBubbleBg.copy(alpha = 0.45f) else p.topBarBg.copy(alpha = 0.72f),
-                RoundedCornerShape(t.spacing.md),
+                p.topBarBg.copy(alpha = 0.78f),
+                RoundedCornerShape(10.dp),
             )
             .border(
                 width = 1.dp,
-                color = if (selected) p.accent.copy(alpha = 0.35f) else p.markdownDivider.copy(alpha = 0.4f),
-                shape = RoundedCornerShape(t.spacing.md),
+                color = p.markdownDivider.copy(alpha = 0.46f),
+                shape = RoundedCornerShape(10.dp),
             )
             .clickable(onClick = onClick)
-            .padding(horizontal = t.spacing.md, vertical = t.spacing.sm),
+            .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Start,
     ) {
         Icon(
             painter = painterResource("/icons/agent-settings.svg"),
             contentDescription = null,
-            tint = if (selected) p.accent else p.textSecondary,
+            tint = p.textSecondary,
             modifier = Modifier.size(t.controls.iconMd),
         )
         Spacer(Modifier.width(t.spacing.sm))
         Text(
             text = name,
-            color = if (selected) p.textPrimary else p.textSecondary,
+            color = p.textPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.body2,
+            style = MaterialTheme.typography.body1,
+            fontWeight = FontWeight.Medium,
         )
     }
 }
