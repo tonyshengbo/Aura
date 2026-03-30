@@ -4,7 +4,8 @@ import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.protocol.UnifiedApprovalRequestKind
 import com.auracode.assistant.model.ContextFile
 import com.auracode.assistant.model.TurnUsageSnapshot
-import com.auracode.assistant.provider.CodexModelCatalog
+import com.auracode.assistant.provider.codex.CodexModelCatalog
+import com.auracode.assistant.settings.SavedAgentDefinition
 import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.ComposerMode
 import com.auracode.assistant.toolwindow.eventing.UiIntent
@@ -16,6 +17,8 @@ import com.auracode.assistant.toolwindow.timeline.TimelineMutation
 import com.auracode.assistant.toolwindow.toolinput.ToolUserInputOptionUiModel
 import com.auracode.assistant.toolwindow.toolinput.ToolUserInputPromptUiModel
 import com.auracode.assistant.toolwindow.toolinput.ToolUserInputQuestionUiModel
+import java.nio.file.Files
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -98,7 +101,7 @@ class ComposerAreaStoreTest {
     }
 
     @Test
-    fun `same file change lifecycle should not double count edits`() {
+    fun `file change timeline mutations no longer populate edited files`() {
         val store = ComposerAreaStore()
         val started = TimelineMutation.UpsertFileChange(
             sourceId = "request-1:item-5",
@@ -110,6 +113,8 @@ class ComposerAreaStoreTest {
                     displayName = "hello.java",
                     kind = TimelineFileChangeKind.UPDATE,
                     timestamp = 100L,
+                    oldContent = "fun a() = 1\n",
+                    newContent = "fun a() = 2\n",
                     addedLines = 2,
                     deletedLines = 1,
                 ),
@@ -121,10 +126,8 @@ class ComposerAreaStoreTest {
         store.onEvent(AppEvent.TimelineMutationApplied(started))
         store.onEvent(AppEvent.TimelineMutationApplied(completed))
 
-        val aggregate = store.state.value.editedFiles.single()
-        assertEquals(1, aggregate.editCount)
-        assertEquals(1, store.state.value.editedFilesSummary.totalEdits)
-        assertEquals(100L, aggregate.lastUpdatedAt)
+        assertTrue(store.state.value.editedFiles.isEmpty())
+        assertEquals(0, store.state.value.editedFilesSummary.total)
     }
 
     @Test
@@ -171,8 +174,6 @@ class ComposerAreaStoreTest {
         val files = store.state.value.editedFiles
         assertEquals(listOf("/tmp/Bar.kt", "/tmp/Foo.kt"), files.map { it.path })
         assertEquals(2, store.state.value.editedFilesSummary.total)
-        assertEquals(2, files.first { it.path == "/tmp/Foo.kt" }.editCount)
-        assertEquals(1, files.first { it.path == "/tmp/Bar.kt" }.editCount)
     }
 
     @Test
@@ -192,7 +193,187 @@ class ComposerAreaStoreTest {
 
         val aggregate = store.state.value.editedFiles.single()
         assertEquals(1, store.state.value.editedFilesSummary.total)
-        assertEquals(1, aggregate.editCount)
+        assertEquals("/tmp/Foo.kt", aggregate.path)
+    }
+
+    @Test
+    fun `create file diff is represented from turn diff only`() {
+        val store = ComposerAreaStore()
+
+        store.onEvent(
+            AppEvent.TurnDiffUpdated(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                diff = """
+                    diff --git a//tmp/Created.kt b//tmp/Created.kt
+                    new file mode 100644
+                    --- /dev/null
+                    +++ b//tmp/Created.kt
+                    @@ -0,0 +1 @@
+                    +class Created
+                """.trimIndent(),
+            ),
+        )
+
+        val aggregate = store.state.value.editedFiles.single()
+        assertEquals(TimelineFileChangeKind.CREATE, aggregate.parsedDiff.kind)
+        assertEquals("turn-1", aggregate.turnId)
+        assertEquals("thread-1", aggregate.threadId)
+    }
+
+    @Test
+    fun `turn diff updated replaces same path with latest turn diff`() {
+        val store = ComposerAreaStore()
+        val workingDir = createTempDirectory("edited-files-baseline")
+        val file = workingDir.resolve("Foo.kt")
+
+        Files.writeString(file, "fun a() = 2\n")
+        store.onEvent(
+            AppEvent.TurnDiffUpdated(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                diff = """
+                    diff --git a/${file} b/${file}
+                    --- a/${file}
+                    +++ b/${file}
+                    @@ -1 +1 @@
+                    -fun a() = 1
+                    +fun a() = 2
+                """.trimIndent(),
+            ),
+        )
+
+        Files.writeString(file, "fun a() = 3\n")
+        store.onEvent(
+            AppEvent.TurnDiffUpdated(
+                threadId = "thread-1",
+                turnId = "turn-2",
+                diff = """
+                    diff --git a/${file} b/${file}
+                    --- a/${file}
+                    +++ b/${file}
+                    @@ -1 +1 @@
+                    -fun a() = 2
+                    +fun a() = 3
+                """.trimIndent(),
+            ),
+        )
+
+        val aggregate = store.state.value.editedFiles.single()
+        assertEquals("turn-2", aggregate.turnId)
+        assertEquals("thread-1", aggregate.threadId)
+        assertEquals("fun a() = 2\n", aggregate.parsedDiff.oldContent)
+        assertEquals("fun a() = 3\n", aggregate.parsedDiff.newContent)
+    }
+
+    @Test
+    fun `turn diff remains visible when file change arrives before it`() {
+        val store = ComposerAreaStore()
+        val workingDir = createTempDirectory("edited-files-diff-priority-first")
+        val file = workingDir.resolve("Foo.kt")
+        Files.writeString(file, "fun a() = 2\nfun b() = 3\n")
+
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertFileChange(
+                    sourceId = "request-1:item-1",
+                    title = "File Changes",
+                    changes = listOf(
+                        TimelineFileChange(
+                            sourceScopedId = "request-1:item-1:0",
+                            path = file.toString(),
+                            displayName = "Foo.kt",
+                            kind = TimelineFileChangeKind.UPDATE,
+                            timestamp = 10L,
+                            oldContent = "fun a() = 1\n",
+                            newContent = "fun a() = 2\n",
+                            addedLines = 1,
+                            deletedLines = 1,
+                        ),
+                    ),
+                    status = ItemStatus.SUCCESS,
+                    turnId = "turn-1",
+                ),
+            ),
+        )
+
+        store.onEvent(
+            AppEvent.TurnDiffUpdated(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                diff = """
+                    diff --git a/${file} b/${file}
+                    --- a/${file}
+                    +++ b/${file}
+                    @@ -1 +1,2 @@
+                    -fun a() = 1
+                    +fun a() = 2
+                    +fun b() = 3
+                """.trimIndent(),
+            ),
+        )
+
+        val aggregate = store.state.value.editedFiles.single()
+        assertEquals("turn-1", aggregate.turnId)
+        assertEquals(2, aggregate.latestAddedLines)
+        assertEquals(1, aggregate.latestDeletedLines)
+        assertEquals("fun a() = 2\nfun b() = 3\n", aggregate.parsedDiff.newContent)
+        assertEquals("fun a() = 1\n", aggregate.parsedDiff.oldContent)
+    }
+
+    @Test
+    fun `turn diff remains visible when file change arrives after it`() {
+        val store = ComposerAreaStore()
+        val workingDir = createTempDirectory("edited-files-diff-priority-second")
+        val file = workingDir.resolve("Foo.kt")
+        Files.writeString(file, "fun a() = 2\nfun b() = 3\n")
+
+        store.onEvent(
+            AppEvent.TurnDiffUpdated(
+                threadId = "thread-1",
+                turnId = "turn-1",
+                diff = """
+                    diff --git a/${file} b/${file}
+                    --- a/${file}
+                    +++ b/${file}
+                    @@ -1 +1,2 @@
+                    -fun a() = 1
+                    +fun a() = 2
+                    +fun b() = 3
+                """.trimIndent(),
+            ),
+        )
+
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertFileChange(
+                    sourceId = "request-1:item-2",
+                    title = "File Changes",
+                    changes = listOf(
+                        TimelineFileChange(
+                            sourceScopedId = "request-1:item-2:0",
+                            path = file.toString(),
+                            displayName = "Foo.kt",
+                            kind = TimelineFileChangeKind.UPDATE,
+                            timestamp = 20L,
+                            oldContent = "fun a() = 1\n",
+                            newContent = "fun a() = 2\n",
+                            addedLines = 1,
+                            deletedLines = 1,
+                        ),
+                    ),
+                    status = ItemStatus.SUCCESS,
+                    turnId = "turn-1",
+                ),
+            ),
+        )
+
+        val aggregate = store.state.value.editedFiles.single()
+        assertEquals("turn-1", aggregate.turnId)
+        assertEquals(2, aggregate.latestAddedLines)
+        assertEquals(1, aggregate.latestDeletedLines)
+        assertEquals("fun a() = 2\nfun b() = 3\n", aggregate.parsedDiff.newContent)
+        assertEquals("fun a() = 1\n", aggregate.parsedDiff.oldContent)
     }
 
     @Test
@@ -542,6 +723,61 @@ class ComposerAreaStoreTest {
 
         assertEquals("gpt-4.1-custom", store.state.value.selectedModel)
         assertEquals(com.auracode.assistant.toolwindow.eventing.ComposerReasoning.HIGH, store.state.value.selectedReasoning)
+    }
+
+    @Test
+    fun `settings snapshot restores selected agents from persisted ids`() {
+        val store = ComposerAreaStore()
+        val reviewer = SavedAgentDefinition(
+            id = "agent-1",
+            name = "Reviewer",
+            prompt = "Review the answer before replying.",
+        )
+        val planner = SavedAgentDefinition(
+            id = "agent-2",
+            name = "Planner",
+            prompt = "Create the execution plan first.",
+        )
+
+        store.onEvent(
+            AppEvent.SettingsSnapshotUpdated(
+                codexCliPath = "codex",
+                languageMode = com.auracode.assistant.settings.UiLanguageMode.FOLLOW_IDE,
+                themeMode = com.auracode.assistant.settings.UiThemeMode.FOLLOW_IDE,
+                autoContextEnabled = true,
+                savedAgents = listOf(reviewer, planner),
+                selectedAgentIds = listOf("agent-2", "agent-1"),
+            ),
+        )
+
+        assertEquals(listOf("agent-2", "agent-1"), store.state.value.agentEntries.map { it.id })
+        assertEquals(listOf("Planner", "Reviewer"), store.state.value.agentEntries.map { it.name })
+    }
+
+    @Test
+    fun `conversation reset preserves selected agents restored from settings`() {
+        val store = ComposerAreaStore()
+        val reviewer = SavedAgentDefinition(
+            id = "agent-1",
+            name = "Reviewer",
+            prompt = "Review the answer before replying.",
+        )
+
+        store.onEvent(
+            AppEvent.SettingsSnapshotUpdated(
+                codexCliPath = "codex",
+                languageMode = com.auracode.assistant.settings.UiLanguageMode.FOLLOW_IDE,
+                themeMode = com.auracode.assistant.settings.UiThemeMode.FOLLOW_IDE,
+                autoContextEnabled = true,
+                savedAgents = listOf(reviewer),
+                selectedAgentIds = listOf("agent-1"),
+            ),
+        )
+
+        store.onEvent(AppEvent.ConversationReset)
+
+        assertEquals(listOf("agent-1"), store.state.value.agentEntries.map { it.id })
+        assertEquals(listOf("Reviewer"), store.state.value.agentEntries.map { it.name })
     }
 
     @Test

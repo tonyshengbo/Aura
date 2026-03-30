@@ -1,9 +1,10 @@
-package com.auracode.assistant.provider
+package com.auracode.assistant.provider.codex
 
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
+/** Represents how a required Codex runtime dependency was discovered. */
 internal enum class CodexEnvironmentStatus {
     CONFIGURED,
     DETECTED,
@@ -11,6 +12,7 @@ internal enum class CodexEnvironmentStatus {
     FAILED,
 }
 
+/** Describes the result of checking the Codex runtime environment. */
 internal data class CodexEnvironmentCheckResult(
     val codexPath: String = "",
     val nodePath: String = "",
@@ -20,6 +22,7 @@ internal data class CodexEnvironmentCheckResult(
     val message: String = "",
 )
 
+/** Contains the resolved executables and environment used to launch Codex. */
 internal data class CodexEnvironmentResolution(
     val codexPath: String,
     val nodePath: String?,
@@ -27,6 +30,7 @@ internal data class CodexEnvironmentResolution(
     val environmentOverrides: Map<String, String>,
 )
 
+/** Detects Codex and Node executables and prepares environment overrides for launches. */
 internal class CodexEnvironmentDetector(
     private val shellEnvironmentLoader: () -> Map<String, String> = ::loadShellEnvironment,
     private val commonSearchPaths: List<String> = DEFAULT_SEARCH_PATHS,

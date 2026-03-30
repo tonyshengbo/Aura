@@ -258,6 +258,38 @@ class TimelineRegionLogicTest {
     }
 
     @Test
+    fun `bottom scroll strategy adjusts visible tail when last item already remains on screen`() {
+        val snapshot = TimelineBottomSnapshot(
+            totalItemsCount = 8,
+            lastVisibleItemIndex = 7,
+            lastVisibleItemOffset = 380,
+            lastVisibleItemSize = 320,
+            viewportEndOffset = 600,
+        )
+
+        assertEquals(
+            TimelineBottomScrollStrategy.ADJUST_VISIBLE_TAIL,
+            timelineBottomScrollStrategy(snapshot),
+        )
+    }
+
+    @Test
+    fun `bottom scroll strategy reveals last item when tail is not yet visible`() {
+        val snapshot = TimelineBottomSnapshot(
+            totalItemsCount = 8,
+            lastVisibleItemIndex = 6,
+            lastVisibleItemOffset = 360,
+            lastVisibleItemSize = 180,
+            viewportEndOffset = 600,
+        )
+
+        assertEquals(
+            TimelineBottomScrollStrategy.REVEAL_LAST_ITEM,
+            timelineBottomScrollStrategy(snapshot),
+        )
+    }
+
+    @Test
     fun `bottom overflow reports remaining pixels below the viewport`() {
         val hiddenTail = TimelineBottomSnapshot(
             totalItemsCount = 8,

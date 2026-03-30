@@ -29,6 +29,17 @@ class StatusAreaStoreTest {
     }
 
     @Test
+    fun `non terminal engine errors keep the running turn status while showing toast`() {
+        val store = StatusAreaStore()
+        store.onEvent(AppEvent.PromptAccepted(prompt = "hello"))
+
+        store.onEvent(AppEvent.UnifiedEventPublished(UnifiedEvent.Error("Reconnecting... 1/5", terminal = false)))
+
+        assertEquals(UiText.Raw("Reconnecting... 1/5"), store.state.value.toast?.text)
+        assertEquals(UiText.Bundle("status.running"), store.state.value.turnStatus?.label)
+    }
+
+    @Test
     fun `tool user input toggles turn status between waiting and running`() {
         val store = StatusAreaStore()
         store.onEvent(AppEvent.PromptAccepted(prompt = "hello"))

@@ -101,6 +101,34 @@ class HistoryConversationFormatterTest {
     }
 
     @Test
+    fun `formats web search tool call in export with codex style heading`() {
+        val markdown = formatConversationExportMarkdown(
+            summary = ConversationSummary(
+                remoteConversationId = "thread-2",
+                title = "Web search",
+                createdAt = 1L,
+                updatedAt = 1_710_000_000L,
+                status = "idle",
+            ),
+            events = listOf(
+                UnifiedEvent.ItemUpdated(
+                    UnifiedItem(
+                        id = "tool-web-1",
+                        kind = ItemKind.TOOL_CALL,
+                        status = ItemStatus.SUCCESS,
+                        name = "web_search",
+                        text = "OpenAI Codex latest version official\nsite:github.com/openai/codex/releases latest codex release github",
+                    ),
+                ),
+            ),
+        )
+
+        assertContains(markdown, "## Searched")
+        assertContains(markdown, "OpenAI Codex latest version official")
+        assertContains(markdown, "site:github.com/openai/codex/releases latest codex release github")
+    }
+
+    @Test
     fun `suggests stable markdown export filename`() {
         assertEquals(
             "Refine-timeline-UI.md",

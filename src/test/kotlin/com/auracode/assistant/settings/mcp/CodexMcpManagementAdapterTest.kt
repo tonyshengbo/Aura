@@ -1,7 +1,7 @@
 package com.auracode.assistant.settings.mcp
 
 import com.auracode.assistant.settings.AgentSettingsService
-import com.auracode.assistant.provider.CodexEnvironmentResolution
+import com.auracode.assistant.provider.codex.CodexEnvironmentResolution
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray

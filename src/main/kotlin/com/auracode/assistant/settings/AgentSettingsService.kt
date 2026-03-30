@@ -1,6 +1,6 @@
 package com.auracode.assistant.settings
 
-import com.auracode.assistant.provider.CodexModelCatalog
+import com.auracode.assistant.provider.codex.CodexModelCatalog
 import com.auracode.assistant.toolwindow.eventing.ComposerReasoning
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
@@ -34,6 +34,8 @@ class AgentSettingsService : PersistentStateComponent<AgentSettingsService.State
         var uiTheme: String = UiThemeMode.FOLLOW_IDE.name,
         var autoContextEnabled: Boolean = true,
         var savedAgents: MutableList<SavedAgentDefinition> = mutableListOf(),
+        // Persist selected composer agents independently so selections survive resets and restarts.
+        var selectedAgentIds: LinkedHashSet<String> = linkedSetOf(),
         var disabledSkillNames: MutableSet<String> = linkedSetOf(),
         var customModelIds: MutableList<String> = mutableListOf(),
         var selectedComposerModel: String = CodexModelCatalog.defaultModel,
@@ -106,6 +108,20 @@ class AgentSettingsService : PersistentStateComponent<AgentSettingsService.State
     }
 
     fun savedAgents(): List<SavedAgentDefinition> = state.savedAgents.toList()
+
+    fun selectedAgentIds(): List<String> = state.selectedAgentIds.toList()
+
+    fun selectAgent(id: String) {
+        val normalized = id.trim()
+        if (normalized.isBlank()) return
+        state.selectedAgentIds.add(normalized)
+    }
+
+    fun deselectAgent(id: String) {
+        val normalized = id.trim()
+        if (normalized.isBlank()) return
+        state.selectedAgentIds.remove(normalized)
+    }
 
     fun disabledSkillNames(): Set<String> = state.disabledSkillNames.toSet()
 

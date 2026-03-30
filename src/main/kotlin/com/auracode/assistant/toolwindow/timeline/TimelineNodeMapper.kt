@@ -75,7 +75,10 @@ internal object TimelineNodeMapper {
                 outcome = event.outcome,
             )
 
-            is UnifiedEvent.Error -> TimelineMutation.Error(message = event.message)
+            is UnifiedEvent.Error ->
+                // Retryable app-server errors should not collapse the active timeline into a
+                // terminal failure state. They are surfaced via toast/status only.
+                if (event.terminal) TimelineMutation.Error(message = event.message) else null
             is UnifiedEvent.ItemUpdated -> event.item.toTimelineMutation()
         }
     }
@@ -115,6 +118,7 @@ internal object TimelineNodeMapper {
             ItemKind.TOOL_CALL -> ActivityTitleFormatter.toolPresentation(
                 explicitName = titleTextOrNull(),
                 body = bodyText(),
+                status = status,
             ).let { presentation ->
                 TimelineMutation.UpsertToolCall(
                     sourceId = id,
@@ -225,6 +229,9 @@ internal object TimelineNodeMapper {
 
     private fun UnifiedItem.titleTextOrNull(): String? {
         val candidate = name?.trim().orEmpty()
+        if (ActivityTitleFormatter.isWebSearchTool(explicitName = candidate)) {
+            return candidate
+        }
         if (candidate.isNotBlank()) {
             if (kind == ItemKind.UNKNOWN) {
                 return candidate

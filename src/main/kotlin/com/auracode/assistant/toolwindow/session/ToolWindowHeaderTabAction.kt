@@ -13,6 +13,7 @@ import com.auracode.assistant.toolwindow.shared.currentIdeDarkTheme
 import com.auracode.assistant.toolwindow.shared.EffectiveTheme
 import java.awt.BorderLayout
 import java.awt.Font
+import java.lang.ref.WeakReference
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -20,10 +21,12 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 
 internal open class ToolWindowHeaderTabAction(
-    private val tab: ToolWindowHeaderTab,
+    tab: ToolWindowHeaderTab,
     private val onSelect: (String) -> Unit,
     private val onClose: (String) -> Unit,
 ) : DumbAwareAction(tab.fullTitle), CustomComponentAction {
+    private var tab: ToolWindowHeaderTab = tab
+    private val customComponents = mutableListOf<WeakReference<JComponent>>()
 
     override fun actionPerformed(e: AnActionEvent) {
         onSelect(tab.sessionId)
@@ -50,7 +53,11 @@ internal open class ToolWindowHeaderTabAction(
         titleLabel.font = titleLabel.font.deriveFont(Font.PLAIN, 12f)
         titleLabel.toolTipText = tab.fullTitle
         closeButton.preferredSize = java.awt.Dimension(14, 14)
-        panel.add(titleLabel, BorderLayout.CENTER)
+        val center = JPanel(BorderLayout(4, 0)).apply {
+            isOpaque = false
+            add(titleLabel, BorderLayout.CENTER)
+        }
+        panel.add(center, BorderLayout.CENTER)
         panel.add(closeButton, BorderLayout.EAST)
         panel.putClientProperty("label", titleLabel)
         panel.putClientProperty("close", closeButton)
@@ -62,6 +69,7 @@ internal open class ToolWindowHeaderTabAction(
                 onSelect(tab.sessionId)
             }
         })
+        customComponents += WeakReference(panel)
         return panel
     }
 
@@ -74,6 +82,12 @@ internal open class ToolWindowHeaderTabAction(
         closeButton.isVisible = tab.closable
         panel.toolTipText = tab.fullTitle
         applyStyle(panel, titleLabel, closeButton)
+    }
+
+    fun updateTab(tab: ToolWindowHeaderTab) {
+        this.tab = tab
+        templatePresentation.text = tab.fullTitle
+        refreshCustomComponents()
     }
 
     private fun applyStyle(panel: JPanel, titleLabel: JLabel, closeButton: JButton) {
@@ -92,5 +106,17 @@ internal open class ToolWindowHeaderTabAction(
         )
         titleLabel.foreground = if (tab.active) palette.textPrimary else palette.textSecondary
         closeButton.foreground = if (tab.active) palette.textPrimary else palette.textSecondary
+    }
+
+    private fun refreshCustomComponents() {
+        val iterator = customComponents.iterator()
+        while (iterator.hasNext()) {
+            val component = iterator.next().get()
+            if (component == null) {
+                iterator.remove()
+            } else {
+                updateCustomComponent(component, templatePresentation)
+            }
+        }
     }
 }

@@ -5,14 +5,14 @@ import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.settings.SavedAgentDefinition
 import com.auracode.assistant.settings.UiLanguageMode
 import com.auracode.assistant.settings.UiThemeMode
-import com.auracode.assistant.settings.skills.SkillSummary
+import com.auracode.assistant.settings.skills.SkillRuntimeEntry
 import com.auracode.assistant.settings.mcp.McpBusyState
 import com.auracode.assistant.settings.mcp.McpServerDraft
 import com.auracode.assistant.settings.mcp.McpServerSummary
 import com.auracode.assistant.settings.mcp.McpRuntimeStatus
 import com.auracode.assistant.settings.mcp.McpTestResult
 import com.auracode.assistant.settings.mcp.McpValidationErrors
-import com.auracode.assistant.provider.CodexEnvironmentCheckResult
+import com.auracode.assistant.provider.codex.CodexEnvironmentCheckResult
 import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,8 +57,15 @@ internal data class RightDrawerAreaState(
     val editingAgentId: String? = null,
     val agentDraftName: String = "",
     val agentDraftPrompt: String = "",
-    val skills: List<SkillSummary> = emptyList(),
+    val skillsEngineId: String = "",
+    val skillsCwd: String = "",
+    val skills: List<SkillRuntimeEntry> = emptyList(),
+    val skillsRuntimeSupported: Boolean = true,
+    val skillsStale: Boolean = false,
+    val skillsErrorMessage: String? = null,
     val skillsLoading: Boolean = false,
+    val skillsHasLoadedSnapshot: Boolean = false,
+    val skillsActiveTogglePath: String? = null,
     val mcpSettingsPage: McpSettingsPage = McpSettingsPage.LIST,
     val mcpServers: List<McpServerSummary> = emptyList(),
     val editingMcpName: String? = null,
@@ -211,11 +218,22 @@ internal class RightDrawerAreaStore {
             }
 
             is AppEvent.SkillsLoaded -> {
-                _state.value = _state.value.copy(skills = event.skills)
+                _state.value = _state.value.copy(
+                    skillsEngineId = event.engineId,
+                    skillsCwd = event.cwd,
+                    skills = event.skills,
+                    skillsRuntimeSupported = event.supportsRuntimeSkills,
+                    skillsStale = event.stale,
+                    skillsErrorMessage = event.errorMessage,
+                    skillsHasLoadedSnapshot = true,
+                )
             }
 
             is AppEvent.SkillsLoadingChanged -> {
-                _state.value = _state.value.copy(skillsLoading = event.loading)
+                _state.value = _state.value.copy(
+                    skillsLoading = event.loading,
+                    skillsActiveTogglePath = event.activePath?.takeIf { event.loading },
+                )
             }
 
             is AppEvent.SessionSnapshotUpdated -> {

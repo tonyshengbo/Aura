@@ -23,8 +23,16 @@ import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
+internal data class PlanCompletionHeaderUiModel(
+    val title: String,
+)
+
 internal fun planCompletionActionEmphasisStyle(): ComposerCardActionEmphasisStyle =
     ComposerCardActionEmphasisStyle.SUBTLE_HIGHLIGHT
+
+internal fun planCompletionHeaderUiModel(state: ComposerPlanCompletionState): PlanCompletionHeaderUiModel {
+    return PlanCompletionHeaderUiModel(title = state.planTitle)
+}
 
 internal fun planCompletionInteractionFocusTarget(
     selectedAction: PlanCompletionAction,
@@ -45,6 +53,7 @@ internal fun PlanCompletionComposerSection(
         identityKey = state.turnId,
         text = state.revisionDraft,
     )
+    val headerUiModel = planCompletionHeaderUiModel(state)
 
     LaunchedEffect(state.turnId, state.selectedAction) {
         withFrameNanos { }
@@ -125,14 +134,8 @@ internal fun PlanCompletionComposerSection(
             text = AuraCodeBundle.message("composer.planCompletion.badge"),
             color = p.textSecondary,
         )
-        if (state.planSummary.isNotBlank()) {
-            Text(
-                text = state.planSummary,
-                color = p.textSecondary,
-            )
-        }
         Text(
-            text = state.planTitle,
+            text = headerUiModel.title,
             color = p.textPrimary,
             fontWeight = FontWeight.SemiBold,
         )

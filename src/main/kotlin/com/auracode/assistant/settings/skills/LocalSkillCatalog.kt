@@ -252,7 +252,8 @@ internal class LocalSkillCatalog(
         else -> 100
     }
 
-    private companion object {
-        val SKILL_TOKEN_REGEX = Regex("(?<!\\S)\\$([A-Za-z0-9._-]+)")
+    companion object {
+        /** Matches `$skill-name` references in prompt text for disabled-skill validation. */
+        internal val SKILL_TOKEN_REGEX = Regex("(?<!\\S)\\$([A-Za-z0-9._-]+)")
     }
 }

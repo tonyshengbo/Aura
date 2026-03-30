@@ -4,6 +4,7 @@ import com.auracode.assistant.protocol.FileChangeMetrics
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 
 internal data class TimelineResolvedDiff(
     val oldContent: String?,
@@ -24,28 +25,38 @@ internal data class TimelineParsedTurnDiff(
 )
 
 internal object TimelineFileChangePreview {
+    fun resolve(parsed: TimelineParsedTurnDiff): TimelineResolvedDiff {
+        val diskContent = readFile(parsed.path)
+        val newContent = parsed.newContent ?: when (parsed.kind) {
+            TimelineFileChangeKind.DELETE -> ""
+            else -> diskContent
+        }
+        val oldContent = parsed.oldContent ?: when (parsed.kind) {
+            TimelineFileChangeKind.CREATE -> ""
+            TimelineFileChangeKind.DELETE -> parsed.oldContent
+            TimelineFileChangeKind.UPDATE,
+            TimelineFileChangeKind.UNKNOWN,
+            -> newContent?.let { reverseApplyUnifiedDiff(it, parsed.unifiedDiff) }
+        }
+        val computedStats = FileChangeMetrics.fromContents(oldContent = oldContent, newContent = newContent)
+        return TimelineResolvedDiff(
+            oldContent = oldContent,
+            newContent = newContent,
+            addedLines = parsed.addedLines.takeIf { it > 0 } ?: computedStats?.addedLines,
+            deletedLines = parsed.deletedLines.takeIf { it > 0 } ?: computedStats?.deletedLines,
+        )
+    }
+
     fun resolve(change: TimelineFileChange): TimelineResolvedDiff {
         if (!change.unifiedDiff.isNullOrBlank()) {
             val parsed = parseTurnDiff(change.unifiedDiff)[change.path]
             if (parsed != null) {
-                val diskContent = readFile(change.path)
-                val newContent = change.newContent ?: parsed.newContent ?: when (parsed.kind) {
-                    TimelineFileChangeKind.DELETE -> ""
-                    else -> diskContent
-                }
-                val oldContent = change.oldContent ?: parsed.oldContent ?: when (parsed.kind) {
-                    TimelineFileChangeKind.CREATE -> ""
-                    TimelineFileChangeKind.DELETE -> parsed.oldContent
-                    TimelineFileChangeKind.UPDATE,
-                    TimelineFileChangeKind.UNKNOWN,
-                    -> newContent?.let { reverseApplyUnifiedDiff(it, parsed.unifiedDiff) }
-                }
-                val computedStats = FileChangeMetrics.fromContents(oldContent = oldContent, newContent = newContent)
+                val resolved = resolve(parsed)
                 return TimelineResolvedDiff(
-                    oldContent = oldContent,
-                    newContent = newContent,
-                    addedLines = change.addedLines ?: parsed.addedLines.takeIf { it > 0 } ?: computedStats?.addedLines,
-                    deletedLines = change.deletedLines ?: parsed.deletedLines.takeIf { it > 0 } ?: computedStats?.deletedLines,
+                    oldContent = change.oldContent ?: resolved.oldContent,
+                    newContent = change.newContent ?: resolved.newContent,
+                    addedLines = change.addedLines ?: resolved.addedLines,
+                    deletedLines = change.deletedLines ?: resolved.deletedLines,
                 )
             }
         }
@@ -90,6 +101,52 @@ internal object TimelineFileChangePreview {
         }
         if (current.isNotEmpty()) sections += current.toList()
         return sections.mapNotNull(::parseTurnDiffSection).associateBy { it.path }
+    }
+
+    fun revertParsedDiff(parsed: TimelineParsedTurnDiff): Result<String> {
+        return runCatching {
+            val path = Path.of(parsed.path)
+            when (parsed.kind) {
+                TimelineFileChangeKind.CREATE -> {
+                    Files.deleteIfExists(path)
+                    "Reverted ${parsed.displayName}."
+                }
+
+                TimelineFileChangeKind.DELETE -> {
+                    val oldContent = parsed.oldContent
+                        ?: throw IllegalStateException("No previous content available for ${parsed.displayName}.")
+                    path.parent?.let { Files.createDirectories(it) }
+                    Files.writeString(
+                        path,
+                        oldContent,
+                        StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE,
+                    )
+                    "Reverted ${parsed.displayName}."
+                }
+
+                TimelineFileChangeKind.UPDATE,
+                TimelineFileChangeKind.UNKNOWN,
+                -> {
+                    val current = readFile(parsed.path)
+                        ?: throw IllegalStateException("Current content unavailable for ${parsed.displayName}.")
+                    val reverted = reverseApplyUnifiedDiff(current, parsed.unifiedDiff)
+                        ?: throw IllegalStateException("Unable to reverse diff for ${parsed.displayName}.")
+                    path.parent?.let { Files.createDirectories(it) }
+                    Files.writeString(
+                        path,
+                        reverted,
+                        StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE,
+                        StandardOpenOption.TRUNCATE_EXISTING,
+                        StandardOpenOption.WRITE,
+                    )
+                    "Reverted ${parsed.displayName}."
+                }
+            }
+        }
     }
 
     private fun parseTurnDiffSection(lines: List<String>): TimelineParsedTurnDiff? {
@@ -147,13 +204,11 @@ internal object TimelineFileChangePreview {
             unifiedDiff = lines.joinToString("\n"),
             oldContent = when (kind) {
                 TimelineFileChangeKind.CREATE -> ""
-                TimelineFileChangeKind.DELETE -> oldContentLines.joinToString("\n").withTerminalNewline()
-                else -> null
+                else -> oldContentLines.joinToString("\n").withTerminalNewline()
             },
             newContent = when (kind) {
-                TimelineFileChangeKind.CREATE -> newContentLines.joinToString("\n").withTerminalNewline()
                 TimelineFileChangeKind.DELETE -> ""
-                else -> null
+                else -> newContentLines.joinToString("\n").withTerminalNewline()
             },
         )
     }

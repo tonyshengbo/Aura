@@ -15,7 +15,8 @@ import com.auracode.assistant.context.EditorContextProvider
 import com.auracode.assistant.context.SmartFileSearchService
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.settings.AgentSettingsService
-import com.auracode.assistant.settings.skills.LocalSkillCatalog
+import com.auracode.assistant.settings.skills.SkillsManagementAdapterRegistry
+import com.auracode.assistant.settings.skills.SkillsRuntimeService
 import com.auracode.assistant.toolwindow.approval.ApprovalAreaStore
 import com.auracode.assistant.toolwindow.composer.ComposerAreaStore
 import com.auracode.assistant.toolwindow.drawer.RightDrawerAreaStore
@@ -74,9 +75,16 @@ class ComposeToolWindowPanel(
     private val headerStore = HeaderAreaStore()
     private val statusStore = StatusAreaStore()
     private val timelineStore = TimelineAreaStore()
-    private val skillCatalog = LocalSkillCatalog(settingsService)
+    private val skillsRuntimeService = SkillsRuntimeService(
+        adapterRegistry = SkillsManagementAdapterRegistry(settingsService),
+    )
     private val composerStore = ComposerAreaStore(
-        availableSkillsProvider = { skillCatalog.listEnabledSkills() },
+        availableSkillsProvider = {
+            skillsRuntimeService.enabledSlashSkills(
+                engineId = chatService.defaultEngineId(),
+                cwd = chatService.currentWorkingDirectory(),
+            )
+        },
     )
     private val rightDrawerStore = RightDrawerAreaStore()
     private val approvalStore = ApprovalAreaStore()
@@ -95,27 +103,13 @@ class ComposeToolWindowPanel(
         rightDrawerStore = rightDrawerStore,
         approvalStore = approvalStore,
         toolUserInputPromptStore = toolUserInputPromptStore,
-        skillCatalog = skillCatalog,
+        skillsRuntimeService = skillsRuntimeService,
         pickAttachments = {
             val app = ApplicationManager.getApplication()
             var selected: List<String> = emptyList()
             val chooserAction = Runnable {
                 val descriptor = FileChooserDescriptorFactory.createMultipleFilesNoJarsDescriptor()
                 selected = FileChooser.chooseFiles(descriptor, project, null).map { it.path }
-            }
-            if (app.isDispatchThread) {
-                chooserAction.run()
-            } else {
-                app.invokeAndWait(chooserAction)
-            }
-            selected
-        },
-        pickSkillImportPath = {
-            val app = ApplicationManager.getApplication()
-            var selected: String? = null
-            val chooserAction = Runnable {
-                val descriptor = com.intellij.openapi.fileChooser.FileChooserDescriptor(true, true, false, false, false, false)
-                selected = FileChooser.chooseFile(descriptor, project, null)?.path
             }
             if (app.isDispatchThread) {
                 chooserAction.run()

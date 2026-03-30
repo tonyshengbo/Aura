@@ -144,6 +144,9 @@ class AgentChatService private constructor(
         sessions[currentSessionId]?.usageSnapshot
     }
 
+    /** Returns the working directory currently used for provider requests. */
+    fun currentWorkingDirectory(): String = workingDirectoryProvider()
+
     internal suspend fun loadCurrentConversationHistory(limit: Int): ConversationHistoryPage {
         val session = synchronized(stateLock) { sessions[currentSessionId] }
             ?: return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)

@@ -16,8 +16,9 @@ import com.auracode.assistant.settings.mcp.McpServerSummary
 import com.auracode.assistant.settings.mcp.McpTestResult
 import com.auracode.assistant.settings.mcp.McpTransportType
 import com.auracode.assistant.settings.mcp.McpValidationErrors
-import com.auracode.assistant.provider.CodexEnvironmentCheckResult
-import com.auracode.assistant.provider.CodexEnvironmentStatus
+import com.auracode.assistant.settings.skills.SkillRuntimeEntry
+import com.auracode.assistant.provider.codex.CodexEnvironmentCheckResult
+import com.auracode.assistant.provider.codex.CodexEnvironmentStatus
 import com.auracode.assistant.conversation.ConversationCapabilities
 import com.auracode.assistant.toolwindow.composer.ComposerAreaStore
 import com.auracode.assistant.toolwindow.composer.ContextEntry
@@ -313,6 +314,37 @@ class AreaStoresTest {
 
         assertEquals(RightDrawerKind.SETTINGS, store.state.value.kind)
         assertEquals(SettingsSection.SKILLS, store.state.value.settingsSection)
+    }
+
+    @Test
+    fun `skills loading keeps cached list stable and scopes busy state to one row`() {
+        val store = RightDrawerAreaStore()
+        val skill = SkillRuntimeEntry(
+            engineId = "codex",
+            cwd = ".",
+            name = "brainstorming",
+            description = "Explore requirements.",
+            enabled = true,
+            path = "/runtime/brainstorming/SKILL.md",
+            scopeLabel = "user",
+        )
+
+        store.onEvent(
+            AppEvent.SkillsLoaded(
+                engineId = "codex",
+                cwd = ".",
+                skills = listOf(skill),
+                supportsRuntimeSkills = true,
+                stale = false,
+                errorMessage = null,
+            ),
+        )
+        store.onEvent(AppEvent.SkillsLoadingChanged(loading = true, activePath = skill.path))
+
+        assertTrue(store.state.value.skillsHasLoadedSnapshot)
+        assertTrue(store.state.value.skillsLoading)
+        assertEquals(skill.path, store.state.value.skillsActiveTogglePath)
+        assertEquals(listOf(skill), store.state.value.skills)
     }
 
     @Test

@@ -1,5 +1,7 @@
 package com.auracode.assistant.provider
 
+import com.auracode.assistant.provider.codex.CodexAppServerProvider
+import com.auracode.assistant.provider.codex.CodexModelCatalog
 import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.protocol.UnifiedToolUserInputAnswerDraft
 import com.auracode.assistant.toolwindow.approval.ApprovalAction
@@ -12,6 +14,7 @@ private val codexCapabilities = EngineCapabilities(
     supportsDiffProposal = true,
 )
 
+/** Registers the Codex provider implementation behind the shared provider factory contract. */
 class CodexProviderFactory(private val settings: AgentSettingsService) : AgentProviderFactory {
     override val engineId: String = ENGINE_ID
 
@@ -22,6 +25,7 @@ class CodexProviderFactory(private val settings: AgentSettingsService) : AgentPr
     }
 }
 
+/** Resolves engine descriptors and lazily instantiates provider implementations. */
 class ProviderRegistry(
     descriptors: List<EngineDescriptor>,
     factories: List<AgentProviderFactory>,

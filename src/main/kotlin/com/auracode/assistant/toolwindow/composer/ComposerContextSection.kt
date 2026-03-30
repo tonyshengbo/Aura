@@ -122,7 +122,6 @@ private fun EditedFilesEntry(
                 text = AuraCodeBundle.message(
                     "composer.editedFiles.entry",
                     summary.total.toString(),
-                    summary.totalEdits.toString(),
                 ),
                 color = p.textSecondary,
                 style = androidx.compose.material.MaterialTheme.typography.body2,

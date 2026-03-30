@@ -39,7 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
-import com.auracode.assistant.provider.CodexEnvironmentStatus
+import com.auracode.assistant.provider.codex.CodexEnvironmentStatus
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
@@ -62,8 +62,10 @@ internal fun DrawerHeader(
             fontWeight = FontWeight.Bold,
             style = MaterialTheme.typography.h6,
         )
-        Spacer(Modifier.height(t.spacing.xs))
-        Text(subtitle, color = p.textSecondary, style = MaterialTheme.typography.body2)
+        if (subtitle.isNotBlank()) {
+            Spacer(Modifier.height(t.spacing.xs))
+            Text(subtitle, color = p.textSecondary, style = MaterialTheme.typography.body2)
+        }
     }
 }
 

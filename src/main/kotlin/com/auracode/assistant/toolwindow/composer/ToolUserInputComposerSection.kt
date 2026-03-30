@@ -265,6 +265,9 @@ internal fun ToolUserInputComposerSection(
                     label = AuraCodeBundle.message("toolInput.prompt.back"),
                     emphasized = false,
                     p = p,
+                    // Keep footer actions balanced so the trailing cancel button does not collapse
+                    // into a narrow column when both actions are visible.
+                    modifier = Modifier.weight(1f),
                     compactVerticalPadding = 8.dp,
                     onClick = { onIntent(UiIntent.RetreatToolUserInputPrompt) },
                 )
@@ -273,6 +276,7 @@ internal fun ToolUserInputComposerSection(
                 label = AuraCodeBundle.message("toolInput.prompt.cancel"),
                 emphasized = false,
                 p = p,
+                modifier = Modifier.weight(1f),
                 compactVerticalPadding = 8.dp,
                 onClick = { onIntent(UiIntent.CancelToolUserInputPrompt) },
             )

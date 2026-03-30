@@ -190,5 +190,6 @@ sealed class UnifiedEvent {
 
     data class Error(
         val message: String,
+        val terminal: Boolean = true,
     ) : UnifiedEvent()
 }

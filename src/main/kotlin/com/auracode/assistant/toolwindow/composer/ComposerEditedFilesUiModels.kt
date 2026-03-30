@@ -7,14 +7,12 @@ internal data class EditedFilesPanelUiModel(
 
 internal data class EditedFilesSummaryUiModel(
     val totalFiles: Int,
-    val totalEdits: Int,
 )
 
 internal data class EditedFileRowUiModel(
     val path: String,
     val displayName: String,
     val parentPath: String,
-    val editCount: Int,
     val latestAddedLines: Int?,
     val latestDeletedLines: Int?,
 )
@@ -23,14 +21,12 @@ internal fun ComposerAreaState.toEditedFilesPanelUiModel(): EditedFilesPanelUiMo
     return EditedFilesPanelUiModel(
         summary = EditedFilesSummaryUiModel(
             totalFiles = editedFilesSummary.total,
-            totalEdits = editedFilesSummary.totalEdits,
         ),
         files = editedFiles.map { file ->
             EditedFileRowUiModel(
                 path = file.path,
                 displayName = file.displayName,
                 parentPath = file.path.toParentDisplayPath(),
-                editCount = file.editCount,
                 latestAddedLines = file.latestAddedLines,
                 latestDeletedLines = file.latestDeletedLines,
             )

@@ -33,7 +33,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
@@ -115,7 +114,6 @@ private fun EditedFilesHeader(
                 text = AuraCodeBundle.message(
                     "composer.editedFiles.summary",
                     uiModel.summary.totalFiles.toString(),
-                    uiModel.summary.totalEdits.toString(),
                 ),
                 color = p.textMuted,
                 style = androidx.compose.material.MaterialTheme.typography.caption,
@@ -158,7 +156,7 @@ private fun EditedFileRow(
                 RoundedCornerShape(t.spacing.sm),
             )
             .hoverable(interactionSource)
-            .clickable { onIntent(UiIntent.OpenEditedFileDiff(item.path)) }
+            .clickable { onIntent(UiIntent.OpenTimelineFilePath(item.path)) }
             .padding(horizontal = t.spacing.sm, vertical = t.spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(t.spacing.sm),
@@ -174,8 +172,6 @@ private fun EditedFileRow(
                         overflow = TextOverflow.Ellipsis,
                         style = androidx.compose.material.MaterialTheme.typography.body2,
                         fontWeight = FontWeight.Medium,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable { onIntent(UiIntent.OpenTimelineFilePath(item.path)) },
                     )
                     if (item.parentPath.isNotBlank()) {
                         Spacer(Modifier.size(2.dp))
@@ -194,11 +190,6 @@ private fun EditedFileRow(
                 horizontalArrangement = Arrangement.spacedBy(t.spacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = AuraCodeBundle.message("composer.editedFiles.edits", item.editCount.toString()),
-                    color = p.textMuted,
-                    style = androidx.compose.material.MaterialTheme.typography.caption,
-                )
                 item.latestAddedLines?.takeIf { it > 0 }?.let {
                     Text("+$it", color = p.success, style = androidx.compose.material.MaterialTheme.typography.caption)
                 }
@@ -208,13 +199,7 @@ private fun EditedFileRow(
             }
         }
         EditedFilesToolbarAction(
-            iconPath = "/icons/document.svg",
-            tooltip = AuraCodeBundle.message("composer.editedFiles.openFile"),
-            p = p,
-        ) { onIntent(UiIntent.OpenTimelineFilePath(item.path)) }
-        Spacer(Modifier.width(t.spacing.xs))
-        EditedFilesToolbarAction(
-            iconPath = "/icons/split.svg",
+            iconPath = "/icons/swap-horiz.svg",
             tooltip = AuraCodeBundle.message("composer.editedFiles.viewDiff"),
             p = p,
         ) { onIntent(UiIntent.OpenEditedFileDiff(item.path)) }

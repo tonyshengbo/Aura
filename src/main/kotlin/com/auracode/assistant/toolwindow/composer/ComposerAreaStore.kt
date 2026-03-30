@@ -8,7 +8,7 @@ import com.auracode.assistant.model.FileAttachment
 import com.auracode.assistant.model.ImageAttachment
 import com.auracode.assistant.model.TurnUsageSnapshot
 import com.auracode.assistant.persistence.chat.PersistedMessageAttachment
-import com.auracode.assistant.provider.CodexModelCatalog
+import com.auracode.assistant.provider.codex.CodexModelCatalog
 import com.auracode.assistant.settings.SavedAgentDefinition
 import com.auracode.assistant.toolwindow.approval.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.eventing.AppEvent
@@ -199,6 +199,9 @@ internal data class ComposerAreaState(
     val editedFilesExpanded: Boolean = false,
     val appliedTurnDiffs: Map<String, String> = emptyMap(),
     val usageSnapshot: TurnUsageSnapshot? = null,
+    val sessionIsRunning: Boolean = false,
+    val pendingApprovalCount: Int = 0,
+    val pendingToolInputCount: Int = 0,
     val approvalQueue: List<PendingApprovalRequestUiModel> = emptyList(),
     val approvalPrompt: PendingApprovalRequestUiModel? = null,
     val toolUserInputQueue: List<ToolUserInputPromptUiModel> = emptyList(),
@@ -231,7 +234,6 @@ internal data class ComposerAreaState(
     val editedFilesSummary: EditedFilesSummary
         get() = EditedFilesSummary(
             total = editedFiles.size,
-            totalEdits = editedFiles.sumOf { it.editCount },
         )
 
     val activeInteractionCard: ComposerInteractionCard?
@@ -476,11 +478,7 @@ internal class ComposerAreaStore(
                 )
             }
 
-            is AppEvent.TimelineMutationApplied -> {
-                if (event.mutation is TimelineMutation.UpsertFileChange) {
-                    acceptEditedFileChange(event.mutation)
-                }
-            }
+            is AppEvent.TimelineMutationApplied -> Unit
 
             is AppEvent.TurnDiffUpdated -> {
                 acceptTurnDiffUpdated(event)
@@ -560,7 +558,9 @@ internal class ComposerAreaStore(
 
             is AppEvent.SessionSnapshotUpdated -> {
                 val activeSession = event.sessions.firstOrNull { it.id == event.activeSessionId }
-                _state.value = _state.value.copy(usageSnapshot = activeSession?.usageSnapshot)
+                _state.value = _state.value.copy(
+                    usageSnapshot = activeSession?.usageSnapshot,
+                )
             }
 
             is AppEvent.PendingSubmissionsUpdated -> {
@@ -582,9 +582,14 @@ internal class ComposerAreaStore(
                 val selectedReasoning = ComposerReasoning.entries
                     .firstOrNull { it.effort == event.selectedReasoning }
                     ?: ComposerReasoning.MEDIUM
+                val restoredAgents = restoreSelectedAgents(
+                    savedAgents = event.savedAgents,
+                    selectedAgentIds = event.selectedAgentIds,
+                )
                 _state.value = _state.value.copy(
                     autoContextEnabled = event.autoContextEnabled,
                     focusedContextEntry = if (event.autoContextEnabled) _state.value.focusedContextEntry else null,
+                    agentEntries = restoredAgents,
                     customModelIds = event.customModelIds,
                     selectedModel = selectedModel,
                     selectedReasoning = selectedReasoning,
@@ -605,6 +610,7 @@ internal class ComposerAreaStore(
 
             AppEvent.ConversationReset -> _state.value = ComposerAreaState(
                 autoContextEnabled = _state.value.autoContextEnabled,
+                agentEntries = _state.value.agentEntries,
                 customModelIds = _state.value.customModelIds,
                 selectedModel = _state.value.selectedModel,
                 selectedReasoning = _state.value.selectedReasoning,
@@ -721,6 +727,26 @@ internal class ComposerAreaStore(
             mentionPopupVisible = false,
             mentionQuery = if (findMentionQuery(nextDocument, current.mentionEntries) != null) current.mentionQuery else "",
         )
+    }
+
+    // Restore selected agents strictly from persisted ids so restart and new chat behavior stays deterministic.
+    private fun restoreSelectedAgents(
+        savedAgents: List<SavedAgentDefinition>,
+        selectedAgentIds: List<String>,
+    ): List<AgentContextEntry> {
+        if (selectedAgentIds.isEmpty() || savedAgents.isEmpty()) {
+            return emptyList()
+        }
+        val savedById = savedAgents.associateBy { it.id }
+        return selectedAgentIds.mapNotNull { id ->
+            savedById[id]?.let { agent ->
+                AgentContextEntry(
+                    id = agent.id,
+                    name = agent.name,
+                    prompt = agent.prompt,
+                )
+            }
+        }
     }
 
     private fun dismissSlashPopup() {
@@ -899,49 +925,6 @@ internal class ComposerAreaStore(
         )
     }
 
-    private fun acceptEditedFileChange(mutation: TimelineMutation.UpsertFileChange) {
-        val current = _state.value
-        val updates = current.editedFiles.associateBy { it.path }.toMutableMap()
-        mutation.changes.forEach { change ->
-            val existing = updates[change.path]
-            val resolved = TimelineFileChangePreview.resolve(change)
-            val updateKey = mutation.turnId
-                ?.takeIf { it.isNotBlank() }
-                ?.let { "item:$it:${change.sourceScopedId}" }
-                ?: "item:${change.sourceScopedId}"
-            val updateKeys = buildSet {
-                existing?.let { addAll(it.updateKeys) }
-                add(updateKey)
-            }
-            val isNewChange = existing?.updateKeys?.contains(updateKey) != true
-            val latestTimestamp = when {
-                change.timestamp != null -> change.timestamp
-                isNewChange -> System.currentTimeMillis()
-                else -> existing?.lastUpdatedAt ?: System.currentTimeMillis()
-            }
-            updates[change.path] = EditedFileAggregate(
-                path = change.path,
-                displayName = change.displayName,
-                updateKeys = updateKeys,
-                editCount = updateKeys.size,
-                latestAddedLines = resolved.addedLines,
-                latestDeletedLines = resolved.deletedLines,
-                lastUpdatedAt = latestTimestamp,
-                latestChange = change.copy(
-                    unifiedDiff = change.unifiedDiff,
-                    oldContent = resolved.oldContent,
-                    newContent = resolved.newContent,
-                    addedLines = resolved.addedLines,
-                    deletedLines = resolved.deletedLines,
-                ),
-            )
-        }
-        _state.value = current.copy(
-            editedFiles = updates.values.sortedByDescending { it.lastUpdatedAt },
-            editedFilesExpanded = current.editedFilesExpanded && updates.isNotEmpty(),
-        )
-    }
-
     private fun acceptTurnDiffUpdated(event: AppEvent.TurnDiffUpdated) {
         val current = _state.value
         val snapshotKey = "${event.threadId}:${event.turnId}"
@@ -950,33 +933,16 @@ internal class ComposerAreaStore(
         val updates = current.editedFiles.associateBy { it.path }.toMutableMap()
         val timestamp = System.currentTimeMillis()
         TimelineFileChangePreview.parseTurnDiff(event.diff).entries.forEachIndexed { index, (path, parsed) ->
-            val existing = updates[path]
-            val turnKey = "turn:${event.turnId}"
-            val previousKeys = existing?.updateKeys.orEmpty()
-                .filterNot { it.startsWith("item:${event.turnId}:") }
-                .toSet()
-            val updateKeys = previousKeys + turnKey
             val entryTimestamp = timestamp + index
             updates[path] = EditedFileAggregate(
                 path = path,
                 displayName = parsed.displayName,
-                updateKeys = updateKeys,
-                editCount = updateKeys.size,
+                threadId = event.threadId,
+                turnId = event.turnId,
                 latestAddedLines = parsed.addedLines,
                 latestDeletedLines = parsed.deletedLines,
                 lastUpdatedAt = entryTimestamp,
-                latestChange = TimelineFileChange(
-                    sourceScopedId = turnKey,
-                    path = path,
-                    displayName = parsed.displayName,
-                    kind = parsed.kind,
-                    timestamp = entryTimestamp,
-                    addedLines = parsed.addedLines,
-                    deletedLines = parsed.deletedLines,
-                    unifiedDiff = parsed.unifiedDiff,
-                    oldContent = parsed.oldContent,
-                    newContent = parsed.newContent,
-                ),
+                parsedDiff = parsed,
             )
         }
         _state.value = current.copy(
@@ -1122,6 +1088,21 @@ private fun ComposerAreaState.clearComposerDraft(clearInteractionQueues: Boolean
         toolUserInputQueue = if (clearInteractionQueues) emptyList() else toolUserInputQueue,
         toolUserInputPrompt = if (clearInteractionQueues) null else toolUserInputPrompt,
         planCompletion = if (clearInteractionQueues) null else planCompletion,
+    )
+}
+
+internal fun ComposerAreaState.copySessionConfiguration(): ComposerAreaState {
+    return ComposerAreaState(
+        executionMode = executionMode,
+        planEnabled = planEnabled,
+        planModeAvailable = planModeAvailable,
+        selectedModel = selectedModel,
+        selectedReasoning = selectedReasoning,
+        autoContextEnabled = autoContextEnabled,
+        customModelIds = customModelIds,
+        agentEntries = agentEntries,
+        focusedContextEntry = focusedContextEntry,
+        contextEntries = focusedContextEntry?.let(::listOf).orEmpty(),
     )
 }
 

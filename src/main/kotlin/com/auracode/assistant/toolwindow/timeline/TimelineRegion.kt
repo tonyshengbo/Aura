@@ -71,6 +71,11 @@ internal data class TimelineBottomSnapshot(
     val viewportEndOffset: Int,
 )
 
+internal enum class TimelineBottomScrollStrategy {
+    REVEAL_LAST_ITEM,
+    ADJUST_VISIBLE_TAIL,
+}
+
 internal fun timelineBottomSnapshot(state: LazyListState): TimelineBottomSnapshot {
     val layoutInfo = state.layoutInfo
     val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
@@ -130,20 +135,51 @@ internal fun timelineResolveAutoFollow(
     )
 }
 
+internal fun timelineBottomScrollStrategy(
+    snapshot: TimelineBottomSnapshot,
+): TimelineBottomScrollStrategy {
+    val lastItemIndex = snapshot.totalItemsCount - 1
+    if (lastItemIndex < 0) {
+        return TimelineBottomScrollStrategy.ADJUST_VISIBLE_TAIL
+    }
+
+    // When the last row is already visible, especially during streaming growth, avoid
+    // restarting an index-based animation because it snaps the row back toward its top edge.
+    return if (snapshot.lastVisibleItemIndex == lastItemIndex) {
+        TimelineBottomScrollStrategy.ADJUST_VISIBLE_TAIL
+    } else {
+        TimelineBottomScrollStrategy.REVEAL_LAST_ITEM
+    }
+}
+
 private suspend fun scrollTimelineToBottom(
     listState: LazyListState,
     rowCount: Int,
+    animateReveal: Boolean,
 ) {
     val lastIndex = rowCount - 1
     if (lastIndex < 0) {
         return
     }
 
-    // First ensure the latest row itself is visible.
-    listState.animateScrollToItem(lastIndex)
+    when (timelineBottomScrollStrategy(timelineBottomSnapshot(listState))) {
+        TimelineBottomScrollStrategy.REVEAL_LAST_ITEM -> {
+            // Reveal the newest row only when it is currently out of view.
+            if (animateReveal) {
+                listState.animateScrollToItem(lastIndex)
+            } else {
+                listState.scrollToItem(lastIndex)
+            }
+        }
 
-    // Then compensate for the common streaming case where the last row grows taller
-    // than the remaining viewport and index-based scrolling no longer reaches the true bottom.
+        TimelineBottomScrollStrategy.ADJUST_VISIBLE_TAIL -> {
+            // Preserve the current anchor when the newest row is already visible so
+            // streaming height growth only adds the missing tail pixels.
+        }
+    }
+
+    // Compensate for the common streaming case where the last row grows taller than
+    // the viewport and index-based positioning no longer reaches the true bottom.
     val overflowPx = timelineBottomOverflowPx(timelineBottomSnapshot(listState))
     if (overflowPx > 0) {
         listState.scrollBy(overflowPx.toFloat())
@@ -215,6 +251,7 @@ internal fun TimelineRegion(
                     scrollTimelineToBottom(
                         listState = listState,
                         rowCount = rowCount,
+                        animateReveal = state.renderCause == TimelineRenderCause.HISTORY_RESET,
                     )
                 }
             }
@@ -396,6 +433,7 @@ internal fun TimelineRegion(
                                     scrollTimelineToBottom(
                                         listState = listState,
                                         rowCount = rowCount,
+                                        animateReveal = true,
                                     )
                                 }
                             }

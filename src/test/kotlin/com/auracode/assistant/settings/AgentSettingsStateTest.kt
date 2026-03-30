@@ -56,4 +56,13 @@ class AgentSettingsStateTest {
         assertEquals("Reviewer", state.savedAgents.single().name)
         assertEquals("Review the current implementation.", state.savedAgents.single().prompt)
     }
+
+    @Test
+    fun `state stores selected agent ids separately from saved agent definitions`() {
+        val state = AgentSettingsService.State(
+            selectedAgentIds = linkedSetOf("agent-2", "agent-1"),
+        )
+
+        assertEquals(listOf("agent-2", "agent-1"), state.selectedAgentIds.toList())
+    }
 }

@@ -109,4 +109,28 @@ class TimelineFileChangePreviewTest {
         assertTrue(diff.contains("+fun a() = 2"))
         assertTrue(!diff.contains("Bar2"))
     }
+
+    @Test
+    fun `parsed update diff can be reverted against current disk content`() {
+        val file = Files.createTempFile("timeline-file-change-revert", ".kt")
+        Files.writeString(file, "fun a() = 2\nfun b() = 3\n")
+        val parsed = TimelineFileChangePreview.parseTurnDiff(
+            """
+                diff --git a/${file} b/${file}
+                --- a/${file}
+                +++ b/${file}
+                @@ -1 +1,2 @@
+                -fun a() = 1
+                +fun a() = 2
+                +fun b() = 3
+            """.trimIndent(),
+        )[file.toString()]
+
+        assertNotNull(parsed)
+
+        val result = TimelineFileChangePreview.revertParsedDiff(parsed)
+
+        assertTrue(result.isSuccess)
+        assertEquals("fun a() = 1\n", Files.readString(file))
+    }
 }

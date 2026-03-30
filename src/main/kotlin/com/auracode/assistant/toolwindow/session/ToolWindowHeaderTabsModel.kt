@@ -88,4 +88,5 @@ internal object ToolWindowHeaderTabsModel {
         // instead of relying on platform-specific label ellipsis behavior.
         return title.take(safeLength - 3).trimEnd() + "..."
     }
+
 }

@@ -10,13 +10,14 @@ import com.auracode.assistant.model.MessageRole
 import com.auracode.assistant.context.MentionFileWhitelist
 import com.auracode.assistant.persistence.chat.PersistedAttachmentKind
 import com.auracode.assistant.persistence.chat.PersistedMessageAttachment
-import com.auracode.assistant.provider.CodexModelCatalog
-import com.auracode.assistant.provider.CodexEnvironmentDetector
+import com.auracode.assistant.provider.codex.CodexModelCatalog
+import com.auracode.assistant.provider.codex.CodexEnvironmentDetector
 import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.protocol.UnifiedEvent
 import com.auracode.assistant.settings.SavedAgentDefinition
-import com.auracode.assistant.settings.skills.LocalSkillCatalog
-import com.auracode.assistant.settings.skills.SkillCatalog
+import com.auracode.assistant.settings.skills.LocalSkillInstallPolicy
+import com.auracode.assistant.settings.skills.SkillSelector
+import com.auracode.assistant.settings.skills.SkillsRuntimeService
 import com.auracode.assistant.settings.mcp.McpAuthActionResult
 import com.auracode.assistant.settings.mcp.McpBusyState
 import com.auracode.assistant.settings.mcp.McpManagementAdapter
@@ -48,6 +49,7 @@ import com.auracode.assistant.toolwindow.plan.PlanCompletionPromptUiModel
 import com.auracode.assistant.toolwindow.status.StatusAreaStore
 import com.auracode.assistant.toolwindow.timeline.TimelineAreaStore
 import com.auracode.assistant.toolwindow.timeline.TimelineFileChange
+import com.auracode.assistant.toolwindow.timeline.TimelineFileChangePreview
 import com.auracode.assistant.toolwindow.timeline.TimelineMutation
 import com.auracode.assistant.toolwindow.timeline.TimelineNodeMapper
 import com.auracode.assistant.toolwindow.timeline.TimelineNodeReducer
@@ -94,10 +96,11 @@ internal class ToolWindowCoordinator(
     private val approvalStore: ApprovalAreaStore = ApprovalAreaStore(),
     private val toolUserInputPromptStore: ToolUserInputPromptStore = ToolUserInputPromptStore(),
     private val mcpAdapterRegistry: McpManagementAdapterRegistry = McpManagementAdapterRegistry(settingsService),
-    private val skillCatalog: SkillCatalog = LocalSkillCatalog(settingsService),
+    private val skillsRuntimeService: SkillsRuntimeService = SkillsRuntimeService(
+        adapterRegistry = com.auracode.assistant.settings.skills.SkillsManagementAdapterRegistry(settingsService),
+    ),
     private val codexEnvironmentDetector: CodexEnvironmentDetector = CodexEnvironmentDetector(),
     private val pickAttachments: () -> List<String> = { emptyList() },
-    private val pickSkillImportPath: () -> String? = { null },
     private val pickExportPath: (String) -> String? = { null },
     private val searchProjectFiles: (String, Int) -> List<String> = { _, _ -> emptyList() },
     private val isMentionCandidateFile: (String) -> Boolean = { path -> MentionFileWhitelist.allowPath(path) },
@@ -105,6 +108,7 @@ internal class ToolWindowCoordinator(
     private val openTimelineFileChange: (TimelineFileChange) -> Unit = {},
     private val openTimelineFilePath: (String) -> Unit = {},
     private val revealPathInFileManager: (String) -> Boolean = { false },
+    private val localSkillInstallPolicy: LocalSkillInstallPolicy = LocalSkillInstallPolicy(),
     private val writeExportFile: (String, String) -> Unit = { path, content ->
         val exportPath = Path.of(path)
         exportPath.parent?.let { Files.createDirectories(it) }
@@ -169,7 +173,9 @@ internal class ToolWindowCoordinator(
                         handleUiIntent(event.intent)
                     } else if (event is AppEvent.UnifiedEventPublished) {
                         handleUnifiedEvent(event.event)
-                    } else if (event is AppEvent.TimelineMutationApplied && event.mutation is TimelineMutation.TurnCompleted) {
+                    } else if (event is AppEvent.TimelineMutationApplied &&
+                        event.mutation is TimelineMutation.TurnCompleted
+                    ) {
                         dispatchNextPendingSubmissionIfIdle()
                     }
                 }.onFailure { error ->
@@ -189,6 +195,7 @@ internal class ToolWindowCoordinator(
         publishSettingsSnapshot()
         publishConversationCapabilities()
         restoreCurrentSessionHistory()
+        warmSkillsRuntimeCache()
     }
 
     private fun handleUiIntent(intent: UiIntent) {
@@ -283,6 +290,8 @@ internal class ToolWindowCoordinator(
             UiIntent.SubmitPlanRevision -> submitPlanRevision()
             UiIntent.RequestPlanRevision -> requestPlanRevision()
             UiIntent.DismissPlanCompletionPrompt -> dismissPlanCompletionPrompt()
+            is UiIntent.SelectAgent -> persistSelectedAgent(intent.agent.id)
+            is UiIntent.RemoveSelectedAgent -> persistDeselectedAgent(intent.id)
             is UiIntent.SelectModel -> {
                 settingsService.setSelectedComposerModel(intent.model)
                 publishSettingsSnapshot()
@@ -296,11 +305,15 @@ internal class ToolWindowCoordinator(
             UiIntent.SaveAgentDraft -> saveAgentDraft()
             is UiIntent.DeleteSavedAgent -> deleteSavedAgent(intent.id)
             UiIntent.LoadSkills -> loadSkills()
-            UiIntent.ImportLocalSkill -> importLocalSkill()
-            is UiIntent.ToggleSkillEnabled -> toggleSkillEnabled(intent.name, intent.enabled)
-            is UiIntent.DeleteSkill -> deleteSkill(intent.name)
-            is UiIntent.OpenSkillPath -> openTimelineFilePath(intent.path)
-            is UiIntent.RevealSkillPath -> revealSkill(intent.path)
+            UiIntent.RefreshSkills -> loadSkills(forceReload = true)
+            is UiIntent.ToggleSkillEnabled -> toggleSkillEnabled(
+                name = intent.name,
+                path = intent.path,
+                enabled = intent.enabled,
+            )
+            is UiIntent.OpenSkillPath -> openSkillPath(intent.path)
+            is UiIntent.RevealSkillPath -> revealSkillPath(intent.path)
+            is UiIntent.UninstallSkill -> uninstallSkill(intent.name, intent.path)
             UiIntent.CreateNewMcpDraft -> loadMcpEditorDraft()
             is UiIntent.SelectMcpServerForEdit -> loadMcpEditorDraft()
             UiIntent.SaveMcpDraft -> saveMcpDraft()
@@ -327,7 +340,7 @@ internal class ToolWindowCoordinator(
                 eventHub.publish(AppEvent.ToolUserInputRequested(prompt))
                 eventHub.publish(
                     AppEvent.TimelineMutationApplied(
-                        TimelineMutation.UpsertUserInput(
+                        mutation = TimelineMutation.UpsertUserInput(
                             sourceId = toolUserInputSourceId(prompt),
                             title = AuraCodeBundle.message("timeline.userInput.title"),
                             body = AuraCodeBundle.message("timeline.userInput.waiting"),
@@ -342,7 +355,7 @@ internal class ToolWindowCoordinator(
                 toolUserInputPromptStore.state.value.queue.firstOrNull { it.requestId == event.requestId }?.let { prompt ->
                     eventHub.publish(
                         AppEvent.TimelineMutationApplied(
-                            TimelineMutation.UpsertUserInput(
+                            mutation = TimelineMutation.UpsertUserInput(
                                 sourceId = toolUserInputSourceId(prompt),
                                 title = AuraCodeBundle.message("timeline.userInput.title"),
                                 body = AuraCodeBundle.message("timeline.userInput.cancelled"),
@@ -358,14 +371,14 @@ internal class ToolWindowCoordinator(
             is UnifiedEvent.ThreadStarted -> {
                 activePlanRunContext = activePlanRunContext?.apply {
                     threadId = event.threadId
-                }
+                } ?: return
             }
 
             is UnifiedEvent.TurnStarted -> {
                 activePlanRunContext = activePlanRunContext?.apply {
                     remoteTurnId = event.turnId
                     threadId = event.threadId ?: threadId
-                }
+                } ?: return
             }
 
             is UnifiedEvent.ThreadTokenUsageUpdated -> {
@@ -387,10 +400,10 @@ internal class ToolWindowCoordinator(
                     latestPlanBody = event.body.trim().takeIf { it.isNotBlank() } ?: latestPlanBody
                     threadId = event.threadId ?: threadId
                     remoteTurnId = event.turnId.takeIf { it.isNotBlank() } ?: remoteTurnId
-                }
+                } ?: return
                 eventHub.publish(
                     AppEvent.RunningPlanUpdated(
-                        ComposerRunningPlanState(
+                        plan = ComposerRunningPlanState(
                             threadId = event.threadId ?: activePlanRunContext?.threadId,
                             turnId = event.turnId,
                             explanation = event.explanation,
@@ -409,7 +422,7 @@ internal class ToolWindowCoordinator(
                 if (event.item.kind == com.auracode.assistant.protocol.ItemKind.PLAN_UPDATE) {
                     activePlanRunContext = activePlanRunContext?.apply {
                         latestPlanBody = event.item.text?.trim()?.takeIf { it.isNotBlank() } ?: latestPlanBody
-                    }
+                    } ?: return
                 }
             }
 
@@ -419,6 +432,14 @@ internal class ToolWindowCoordinator(
                 handlePlanTurnCompleted(event)
             }
 
+            else -> Unit
+        }
+        when (event) {
+            is UnifiedEvent.ApprovalRequested,
+            is UnifiedEvent.ToolUserInputRequested,
+            is UnifiedEvent.ToolUserInputResolved,
+            is UnifiedEvent.TurnCompleted,
+            -> publishSessionSnapshot()
             else -> Unit
         }
     }
@@ -567,50 +588,88 @@ internal class ToolWindowCoordinator(
         val updated = state.savedAgents.filterNot { it.id == id }.toMutableList()
         if (updated.size == state.savedAgents.size) return
         state.savedAgents = updated
+        settingsService.deselectAgent(id)
         publishSettingsSnapshot()
     }
 
-    private fun loadSkills() {
-        eventHub.publish(AppEvent.SkillsLoadingChanged(true))
+    private fun persistSelectedAgent(id: String) {
+        settingsService.selectAgent(id)
+        publishSettingsSnapshot()
+    }
+
+    private fun persistDeselectedAgent(id: String) {
+        settingsService.deselectAgent(id)
+        publishSettingsSnapshot()
+    }
+
+    private fun loadSkills(forceReload: Boolean = false) {
+        eventHub.publish(AppEvent.SkillsLoadingChanged(loading = true))
         launchLogged("loadSkills") {
             runCatching {
-                eventHub.publish(AppEvent.SkillsLoaded(skillCatalog.listSkills()))
+                publishSkillsSnapshot(forceReload = forceReload)
             }.onFailure { error ->
                 eventHub.publish(
                     AppEvent.StatusTextUpdated(
-                        UiText.raw(error.message ?: "Failed to load local skills."),
+                        UiText.raw(error.message ?: "Failed to load runtime skills."),
                     ),
                 )
             }
-            eventHub.publish(AppEvent.SkillsLoadingChanged(false))
+            eventHub.publish(AppEvent.SkillsLoadingChanged(loading = false))
         }
     }
 
-    private fun importLocalSkill() {
-        val selected = pickSkillImportPath()?.trim().orEmpty()
-        if (selected.isBlank()) return
-        eventHub.publish(AppEvent.SkillsLoadingChanged(true))
-        launchLogged("importLocalSkill") {
+    /**
+     * Preloads runtime skills in the background so composer suggestions can rely
+     * on the same engine-backed cache without requiring the settings page first.
+     */
+    private fun warmSkillsRuntimeCache() {
+        launchLogged("warmSkillsRuntimeCache") {
             runCatching {
-                val result = skillCatalog.importSkill(selected)
-                eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw(result.message)))
-                if (result.success) {
-                    eventHub.publish(AppEvent.SkillsLoaded(skillCatalog.listSkills()))
-                }
-            }.onFailure { error ->
-                eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw(error.message ?: "Failed to import local skill.")))
+                publishSkillsSnapshot(forceReload = false)
             }
-            eventHub.publish(AppEvent.SkillsLoadingChanged(false))
         }
     }
 
-    private fun toggleSkillEnabled(name: String, enabled: Boolean) {
-        if (name.isBlank()) return
-        eventHub.publish(AppEvent.SkillsLoadingChanged(true))
+    /** Reads the current runtime snapshot and publishes the unified skills page state. */
+    private suspend fun publishSkillsSnapshot(forceReload: Boolean) {
+        val snapshot = skillsRuntimeService.getSkills(
+            engineId = chatService.defaultEngineId(),
+            cwd = chatService.currentWorkingDirectory(),
+            forceReload = forceReload,
+        )
+        eventHub.publish(
+            AppEvent.SkillsLoaded(
+                engineId = snapshot.engineId,
+                cwd = snapshot.cwd,
+                skills = snapshot.skills,
+                supportsRuntimeSkills = snapshot.supportsRuntimeSkills,
+                stale = snapshot.stale,
+                errorMessage = snapshot.errorMessage,
+            ),
+        )
+    }
+
+    private fun toggleSkillEnabled(name: String, path: String, enabled: Boolean) {
+        if (name.isBlank() || path.isBlank()) return
+        eventHub.publish(AppEvent.SkillsLoadingChanged(loading = true, activePath = path))
         launchLogged("toggleSkillEnabled($name,$enabled)") {
             runCatching {
-                skillCatalog.setSkillEnabled(name, enabled)
-                eventHub.publish(AppEvent.SkillsLoaded(skillCatalog.listSkills()))
+                val snapshot = skillsRuntimeService.setSkillEnabled(
+                    engineId = chatService.defaultEngineId(),
+                    cwd = chatService.currentWorkingDirectory(),
+                    selector = SkillSelector.ByPath(path),
+                    enabled = enabled,
+                )
+                eventHub.publish(
+                    AppEvent.SkillsLoaded(
+                        engineId = snapshot.engineId,
+                        cwd = snapshot.cwd,
+                        skills = snapshot.skills,
+                        supportsRuntimeSkills = snapshot.supportsRuntimeSkills,
+                        stale = snapshot.stale,
+                        errorMessage = snapshot.errorMessage,
+                    ),
+                )
                 eventHub.publish(
                     AppEvent.StatusTextUpdated(
                         UiText.raw(
@@ -621,35 +680,42 @@ internal class ToolWindowCoordinator(
             }.onFailure { error ->
                 eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw(error.message ?: "Failed to update skill '$name'.")))
             }
-            eventHub.publish(AppEvent.SkillsLoadingChanged(false))
+            eventHub.publish(AppEvent.SkillsLoadingChanged(loading = false))
         }
     }
 
-    private fun deleteSkill(name: String) {
-        if (name.isBlank()) return
-        eventHub.publish(AppEvent.SkillsLoadingChanged(true))
-        launchLogged("deleteSkill($name)") {
-            runCatching {
-                val deleted = skillCatalog.deleteSkill(name)
-                eventHub.publish(
-                    AppEvent.StatusTextUpdated(
-                        UiText.raw(
-                            if (deleted) "Deleted skill '$name'." else "Skill '$name' cannot be deleted.",
-                        ),
-                    ),
-                )
-                eventHub.publish(AppEvent.SkillsLoaded(skillCatalog.listSkills()))
-            }.onFailure { error ->
-                eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw(error.message ?: "Failed to delete skill '$name'.")))
-            }
-            eventHub.publish(AppEvent.SkillsLoadingChanged(false))
-        }
+    private fun openSkillPath(path: String) {
+        if (path.isBlank()) return
+        openTimelineFilePath(path)
     }
 
-    private fun revealSkill(path: String) {
+    private fun revealSkillPath(path: String) {
         if (path.isBlank()) return
         if (!revealPathInFileManager(path)) {
-            eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw("Failed to reveal skill path.")))
+            eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw("Failed to reveal skill location.")))
+        }
+    }
+
+    private fun uninstallSkill(name: String, path: String) {
+        if (name.isBlank() || path.isBlank()) return
+        eventHub.publish(AppEvent.SkillsLoadingChanged(loading = true, activePath = path))
+        launchLogged("uninstallSkill($name)") {
+            runCatching {
+                localSkillInstallPolicy.uninstall(path).getOrThrow()
+                publishSkillsSnapshot(forceReload = true)
+                eventHub.publish(
+                    AppEvent.StatusTextUpdated(
+                        UiText.raw("Uninstalled local skill '$name'."),
+                    ),
+                )
+            }.onFailure { error ->
+                eventHub.publish(
+                    AppEvent.StatusTextUpdated(
+                        UiText.raw(error.message ?: "Failed to uninstall skill '$name'."),
+                    ),
+                )
+            }
+            eventHub.publish(AppEvent.SkillsLoadingChanged(loading = false))
         }
     }
 
@@ -1015,24 +1081,21 @@ internal class ToolWindowCoordinator(
 
     private fun deleteSession(sessionId: String) {
         if (!chatService.deleteSession(sessionId)) return
-        resetPlanFlowState()
         publishSessionSnapshot()
         restoreCurrentSessionHistory()
     }
 
     private fun switchSession(sessionId: String) {
         if (!chatService.switchSession(sessionId)) return
-        resetPlanFlowState()
         publishSessionSnapshot()
         restoreCurrentSessionHistory()
     }
 
     private fun openRemoteConversation(remoteConversationId: String, title: String) {
-        val sessionId = chatService.openRemoteConversation(
+        chatService.openRemoteConversation(
             remoteConversationId = remoteConversationId,
             suggestedTitle = title,
         ) ?: return
-        resetPlanFlowState()
         publishSessionSnapshot()
         restoreCurrentSessionHistory()
         eventHub.publishUiIntent(UiIntent.CloseRightDrawer)
@@ -1052,7 +1115,7 @@ internal class ToolWindowCoordinator(
     private fun submitPromptIfAllowed() {
         val composerState = composerStore.state.value
         val submission = buildPendingSubmission(composerState) ?: return
-        if (timelineStore.state.value.isRunning) {
+        if (composerState.sessionIsRunning || timelineStore.state.value.isRunning) {
             enqueuePendingSubmission(submission)
         } else {
             dispatchSubmission(submission)
@@ -1083,7 +1146,11 @@ internal class ToolWindowCoordinator(
     }
 
     private fun buildPendingSubmission(composerState: com.auracode.assistant.toolwindow.composer.ComposerAreaState): PendingComposerSubmission? {
-        val disabledSkills = skillCatalog.findDisabledSkillMentions(composerState.inputText)
+        val disabledSkills = skillsRuntimeService.findDisabledSkillMentions(
+            engineId = chatService.defaultEngineId(),
+            cwd = chatService.currentWorkingDirectory(),
+            text = composerState.inputText,
+        )
         if (disabledSkills.isNotEmpty()) {
             eventHub.publish(
                 AppEvent.StatusTextUpdated(
@@ -1101,7 +1168,7 @@ internal class ToolWindowCoordinator(
             attachments = composerState.attachments,
         )
         return PendingComposerSubmission(
-            id = "pending-${System.currentTimeMillis()}-${pendingSubmissions.size}",
+            id = "pending-${System.currentTimeMillis()}-${composerState.pendingSubmissions.size}",
             prompt = prompt,
             systemInstructions = systemInstructions,
             contextFiles = buildContextFiles(
@@ -1129,9 +1196,8 @@ internal class ToolWindowCoordinator(
 
     private fun removePendingSubmission(id: String) {
         val removed = pendingSubmissions.removeAll { it.id == id }
-        if (removed) {
-            publishPendingSubmissions()
-        }
+        if (!removed) return
+        publishPendingSubmissions()
     }
 
     private fun dispatchNextPendingSubmissionIfIdle() {
@@ -1161,21 +1227,21 @@ internal class ToolWindowCoordinator(
                 attachments = submission.stagedAttachments,
             )
         }
-        activePlanRunContext = if (submission.planEnabled) {
-            ActivePlanRunContext(
+        if (submission.planEnabled) {
+            activePlanRunContext = ActivePlanRunContext(
                 localTurnId = localTurnId,
                 preferredExecutionMode = submission.executionMode,
             )
         } else {
-            null
+            activePlanRunContext = null
         }
-        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(null))
+        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(prompt = null))
         eventHub.publish(AppEvent.ClearToolUserInputs)
         eventHub.publish(AppEvent.PromptAccepted(prompt = submission.prompt, localTurnId = localTurnId))
         localMessage?.let { message ->
             eventHub.publish(
                 AppEvent.TimelineMutationApplied(
-                    TimelineNodeMapper.localUserMessageMutation(
+                    mutation = TimelineNodeMapper.localUserMessageMutation(
                         sourceId = message.sourceId,
                         text = message.prompt,
                         timestamp = message.timestamp,
@@ -1200,7 +1266,7 @@ internal class ToolWindowCoordinator(
             approvalMode = submission.executionMode.toApprovalMode(),
             collaborationMode = if (submission.planEnabled) AgentCollaborationMode.PLAN else AgentCollaborationMode.DEFAULT,
             onTurnPersisted = { publishSessionSnapshot() },
-            onUnifiedEvent = ::publishUnifiedEvent,
+            onUnifiedEvent = { event -> publishUnifiedEvent(event) },
         )
     }
 
@@ -1214,6 +1280,7 @@ internal class ToolWindowCoordinator(
                 themeMode = settingsService.uiThemeMode(),
                 autoContextEnabled = settingsService.autoContextEnabled(),
                 savedAgents = state.savedAgents.toList(),
+                selectedAgentIds = settingsService.selectedAgentIds(),
                 customModelIds = settingsService.customModelIds(),
                 selectedModel = settingsService.selectedComposerModel(),
                 selectedReasoning = settingsService.selectedComposerReasoning(),
@@ -1233,13 +1300,13 @@ internal class ToolWindowCoordinator(
         val context = activePlanRunContext ?: return
         if (context.remoteTurnId != null && context.remoteTurnId != event.turnId) return
         activePlanRunContext = null
-        eventHub.publish(AppEvent.RunningPlanUpdated(null))
+        eventHub.publish(AppEvent.RunningPlanUpdated(plan = null))
         if (event.outcome != TurnOutcome.SUCCESS) return
         val body = context.latestPlanBody?.trim().orEmpty()
         if (body.isBlank()) return
         eventHub.publish(
             AppEvent.PlanCompletionPromptUpdated(
-                PlanCompletionPromptUiModel(
+                prompt = PlanCompletionPromptUiModel(
                     turnId = event.turnId,
                     threadId = context.threadId,
                     body = body,
@@ -1251,7 +1318,7 @@ internal class ToolWindowCoordinator(
 
     private fun executeApprovedPlan() {
         val prompt = composerStore.state.value.planCompletion ?: return
-        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(null))
+        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(prompt = null))
         eventHub.publishUiIntent(UiIntent.SelectMode(prompt.preferredExecutionMode))
         if (composerStore.state.value.planEnabled) {
             eventHub.publishUiIntent(UiIntent.TogglePlanMode)
@@ -1274,7 +1341,7 @@ internal class ToolWindowCoordinator(
             preferredExecutionMode = planCompletion.preferredExecutionMode,
             threadId = planCompletion.threadId,
         )
-        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(null))
+        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(prompt = null))
         startProgrammaticTurn(
             prompt = revision,
             approvalMode = planCompletion.preferredExecutionMode.toApprovalMode(),
@@ -1284,18 +1351,18 @@ internal class ToolWindowCoordinator(
     }
 
     private fun requestPlanRevision() {
-        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(null))
+        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(prompt = null))
     }
 
     private fun dismissPlanCompletionPrompt() {
-        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(null))
+        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(prompt = null))
     }
 
     private fun resetPlanFlowState() {
         activePlanRunContext = null
         eventHub.publish(AppEvent.ClearToolUserInputs)
-        eventHub.publish(AppEvent.RunningPlanUpdated(null))
-        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(null))
+        eventHub.publish(AppEvent.RunningPlanUpdated(plan = null))
+        eventHub.publish(AppEvent.PlanCompletionPromptUpdated(prompt = null))
     }
 
     private fun String.toComposerRunningPlanStepStatus(): ComposerRunningPlanStepStatus {
@@ -1319,7 +1386,7 @@ internal class ToolWindowCoordinator(
         )?.let { message ->
             eventHub.publish(
                 AppEvent.TimelineMutationApplied(
-                    TimelineNodeMapper.localUserMessageMutation(
+                    mutation = TimelineNodeMapper.localUserMessageMutation(
                         sourceId = message.sourceId,
                         text = message.prompt,
                         timestamp = message.timestamp,
@@ -1343,7 +1410,7 @@ internal class ToolWindowCoordinator(
             approvalMode = approvalMode,
             collaborationMode = collaborationMode,
             onTurnPersisted = { publishSessionSnapshot() },
-            onUnifiedEvent = ::publishUnifiedEvent,
+            onUnifiedEvent = { event -> publishUnifiedEvent(event) },
         )
     }
 
@@ -1441,7 +1508,20 @@ internal class ToolWindowCoordinator(
     }
 
     private fun openEditedFileDiff(path: String) {
-        val change = composerStore.state.value.editedFiles.firstOrNull { it.path == path }?.latestChange ?: return
+        val aggregate = composerStore.state.value.editedFiles.firstOrNull { it.path == path } ?: return
+        val resolved = TimelineFileChangePreview.resolve(aggregate.parsedDiff)
+        val change = TimelineFileChange(
+            sourceScopedId = "turn:${aggregate.turnId}",
+            path = aggregate.path,
+            displayName = aggregate.displayName,
+            kind = aggregate.parsedDiff.kind,
+            timestamp = aggregate.lastUpdatedAt,
+            addedLines = aggregate.latestAddedLines,
+            deletedLines = aggregate.latestDeletedLines,
+            unifiedDiff = aggregate.parsedDiff.unifiedDiff,
+            oldContent = resolved.oldContent,
+            newContent = resolved.newContent,
+        )
         openTimelineFileChange(change)
     }
 
@@ -1484,34 +1564,7 @@ internal class ToolWindowCoordinator(
     }
 
     private fun revertAggregate(aggregate: com.auracode.assistant.toolwindow.composer.EditedFileAggregate): Result<String> {
-        return runCatching {
-            val change = aggregate.latestChange
-            val path = Path.of(aggregate.path)
-            when (change.kind) {
-                com.auracode.assistant.toolwindow.timeline.TimelineFileChangeKind.CREATE -> {
-                    Files.deleteIfExists(path)
-                    "Reverted ${aggregate.displayName}."
-                }
-
-                com.auracode.assistant.toolwindow.timeline.TimelineFileChangeKind.UPDATE,
-                com.auracode.assistant.toolwindow.timeline.TimelineFileChangeKind.DELETE,
-                com.auracode.assistant.toolwindow.timeline.TimelineFileChangeKind.UNKNOWN,
-                -> {
-                    val oldContent = com.auracode.assistant.toolwindow.timeline.TimelineFileChangePreview.resolve(change).oldContent
-                        ?: throw IllegalStateException("No previous content available for ${aggregate.displayName}.")
-                    path.parent?.let { Files.createDirectories(it) }
-                    Files.writeString(
-                        path,
-                        oldContent,
-                        StandardCharsets.UTF_8,
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.TRUNCATE_EXISTING,
-                        StandardOpenOption.WRITE,
-                    )
-                    "Reverted ${aggregate.displayName}."
-                }
-            }
-        }
+        return TimelineFileChangePreview.revertParsedDiff(aggregate.parsedDiff)
     }
 
     private fun readImageFromClipboard(): BufferedImage? {
@@ -1541,7 +1594,7 @@ internal class ToolWindowCoordinator(
     }
 
     private fun restoreCurrentSessionHistory() {
-        activePlanRunContext = null
+        resetPlanFlowState()
         eventHub.publish(AppEvent.ConversationReset)
         launchLogged("restoreCurrentSessionHistory") {
             val page = chatService.loadCurrentConversationHistory(limit = historyPageSize)
@@ -1580,7 +1633,7 @@ internal class ToolWindowCoordinator(
     private fun publishUnifiedEvent(event: UnifiedEvent) {
         eventHub.publishUnifiedEvent(event)
         TimelineNodeMapper.fromUnifiedEvent(event)?.let { mutation ->
-            eventHub.publish(AppEvent.TimelineMutationApplied(mutation))
+            eventHub.publish(AppEvent.TimelineMutationApplied(mutation = mutation))
         }
     }
 
@@ -1588,10 +1641,11 @@ internal class ToolWindowCoordinator(
         val current = approvalStore.state.value.current ?: return
         val action = explicitAction ?: approvalStore.state.value.selectedAction
         if (!chatService.submitApprovalDecision(current.requestId, action)) return
-        eventHub.publish(AppEvent.ApprovalResolved(current.requestId))
+        publishSessionSnapshot()
+        eventHub.publish(AppEvent.ApprovalResolved(requestId = current.requestId))
         eventHub.publish(
             AppEvent.TimelineMutationApplied(
-                TimelineMutation.UpsertApproval(
+                mutation = TimelineMutation.UpsertApproval(
                     sourceId = current.itemId,
                     title = current.title,
                     body = buildResolvedApprovalBody(current.body, action),
@@ -1617,10 +1671,11 @@ internal class ToolWindowCoordinator(
             submission
         }
         if (!chatService.submitToolUserInput(prompt.requestId, answers)) return
-        eventHub.publish(AppEvent.ToolUserInputResolved(prompt.requestId))
+        publishSessionSnapshot()
+        eventHub.publish(AppEvent.ToolUserInputResolved(requestId = prompt.requestId))
         eventHub.publish(
             AppEvent.TimelineMutationApplied(
-                TimelineMutation.UpsertUserInput(
+                mutation = TimelineMutation.UpsertUserInput(
                     sourceId = toolUserInputSourceId(prompt),
                     title = AuraCodeBundle.message("timeline.userInput.title"),
                     body = buildResolvedToolUserInputBody(prompt, answers, cancelled),

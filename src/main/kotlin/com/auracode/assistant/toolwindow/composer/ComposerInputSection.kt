@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.DropdownMenu
@@ -22,6 +25,7 @@ import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Text
 import androidx.compose.material.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -51,6 +55,7 @@ import com.auracode.assistant.toolwindow.shared.FileTypeIcon
 import com.auracode.assistant.toolwindow.shared.ToolWindowUiText
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun ComposerInputSection(
     p: DesignPalette,
@@ -226,8 +231,32 @@ internal fun ComposerInputSection(
             ),
         )
         BoxWithConstraints {
-            val scrollState = rememberScrollState()
             val maxPopupHeight = maxHeight * 0.52f
+            val popupMode = when {
+                state.slashPopupVisible -> ComposerPopupMode.SLASH
+                state.agentPopupVisible -> ComposerPopupMode.AGENT
+                state.mentionPopupVisible -> ComposerPopupMode.MENTION
+                else -> ComposerPopupMode.NONE
+            }
+            val popupContent = buildComposerPopupContent(
+                slashSuggestions = state.slashSuggestions,
+                activeSlashIndex = state.activeSlashIndex,
+                mentionSuggestions = state.mentionSuggestions,
+                activeMentionIndex = state.activeMentionIndex,
+                agentSuggestions = state.agentSuggestions,
+                activeAgentIndex = state.activeAgentIndex,
+                mode = popupMode,
+            )
+            val popupScrollState = rememberScrollState()
+            val popupRowRequesters = popupContent.rows.map { remember { BringIntoViewRequester() } }
+
+            LaunchedEffect(popupMode, popupContent.selectedRowIndex) {
+                if (popupMode != ComposerPopupMode.NONE) {
+                    popupContent.selectedRowIndex?.let { selectedRowIndex ->
+                        popupRowRequesters.getOrNull(selectedRowIndex)?.bringIntoView()
+                    }
+                }
+            }
             DropdownMenu(
                 expanded = state.slashPopupVisible || state.mentionPopupVisible || state.agentPopupVisible,
                 onDismissRequest = {
@@ -244,68 +273,58 @@ internal fun ComposerInputSection(
             ) {
                 Column(
                     modifier = Modifier
+                        .width(360.dp)
                         .heightIn(max = maxPopupHeight)
-                        .verticalScroll(scrollState),
+                        .verticalScroll(popupScrollState),
                 ) {
-                    if (state.slashPopupVisible) {
-                        val commandItems = state.slashSuggestions.filterIsInstance<SlashSuggestionItem.Command>()
-                        val skillItems = state.slashSuggestions.filterIsInstance<SlashSuggestionItem.Skill>()
-                        if (commandItems.isNotEmpty()) {
-                            SlashSectionHeader(
-                                title = AuraCodeBundle.message("composer.slash.section.commands"),
-                                p = p,
-                            )
-                            commandItems.forEachIndexed { index, item ->
+                    popupContent.rows.forEachIndexed { index, row ->
+                        when (row) {
+                            is ComposerPopupRow.Header -> Box(
+                                modifier = Modifier.bringIntoViewRequester(popupRowRequesters[index]),
+                            ) {
+                                SlashSectionHeader(
+                                    title = row.title,
+                                    p = p,
+                                )
+                            }
+                            is ComposerPopupRow.SlashItem -> {
                                 DropdownMenuItem(
-                                    enabled = item.enabled,
-                                    onClick = { onIntent(UiIntent.SelectSlashCommand(item.command)) },
+                                    modifier = Modifier.bringIntoViewRequester(popupRowRequesters[index]),
+                                    enabled = row.item.isEnabled(),
+                                    onClick = { row.item.dispatch(onIntent) },
                                 ) {
                                     SlashSuggestionRow(
-                                        title = item.title,
-                                        description = item.description,
-                                        selected = index == state.activeSlashIndex,
-                                        enabled = item.enabled,
+                                        title = row.item.title,
+                                        description = row.item.description,
+                                        selected = index == popupContent.selectedRowIndex,
+                                        enabled = row.item.isEnabled(),
                                         p = p,
                                     )
                                 }
                             }
-                        }
-                        if (skillItems.isNotEmpty()) {
-                            SlashSectionHeader(
-                                title = AuraCodeBundle.message("composer.slash.section.skills"),
-                                p = p,
-                            )
-                            skillItems.forEachIndexed { index, item ->
-                                val overallIndex = commandItems.size + index
-                                DropdownMenuItem(onClick = { onIntent(UiIntent.SelectSlashSkill(item.name)) }) {
-                                    SlashSuggestionRow(
-                                        title = item.title,
-                                        description = item.description,
-                                        selected = overallIndex == state.activeSlashIndex,
-                                        enabled = true,
+                            is ComposerPopupRow.AgentItem -> {
+                                DropdownMenuItem(
+                                    modifier = Modifier.bringIntoViewRequester(popupRowRequesters[index]),
+                                    onClick = { onIntent(UiIntent.SelectAgent(row.agent)) },
+                                ) {
+                                    AgentSuggestionRow(
+                                        name = row.agent.name,
+                                        selected = index == popupContent.selectedRowIndex,
                                         p = p,
                                     )
                                 }
                             }
-                        }
-                    } else if (state.agentPopupVisible) {
-                        state.agentSuggestions.forEachIndexed { index, agent ->
-                            DropdownMenuItem(onClick = { onIntent(UiIntent.SelectAgent(agent)) }) {
-                                AgentSuggestionRow(
-                                    name = agent.name,
-                                    selected = index == state.activeAgentIndex,
-                                    p = p,
-                                )
-                            }
-                        }
-                    } else {
-                        state.mentionSuggestions.forEachIndexed { index, entry ->
-                            DropdownMenuItem(onClick = { onIntent(UiIntent.SelectMentionFile(entry.path)) }) {
-                                MentionSuggestionRow(
-                                    entry = entry,
-                                    selected = index == state.activeMentionIndex,
-                                    p = p,
-                                )
+                            is ComposerPopupRow.MentionItem -> {
+                                DropdownMenuItem(
+                                    modifier = Modifier.bringIntoViewRequester(popupRowRequesters[index]),
+                                    onClick = { onIntent(UiIntent.SelectMentionFile(row.entry.path)) },
+                                ) {
+                                    MentionSuggestionRow(
+                                        entry = row.entry,
+                                        selected = index == popupContent.selectedRowIndex,
+                                        p = p,
+                                    )
+                                }
                             }
                         }
                     }
@@ -451,5 +470,99 @@ private fun AgentSuggestionRow(
             color = if (selected) p.textPrimary else p.textSecondary,
             maxLines = 1,
         )
+    }
+}
+
+internal enum class ComposerPopupMode {
+    NONE,
+    SLASH,
+    MENTION,
+    AGENT,
+}
+
+internal data class ComposerPopupContent(
+    val rows: List<ComposerPopupRow>,
+    val selectedRowIndex: Int?,
+)
+
+internal sealed interface ComposerPopupRow {
+    data class Header(val title: String) : ComposerPopupRow
+    data class SlashItem(val item: SlashSuggestionItem) : ComposerPopupRow
+    data class MentionItem(val entry: ContextEntry) : ComposerPopupRow
+    data class AgentItem(val agent: com.auracode.assistant.settings.SavedAgentDefinition) : ComposerPopupRow
+}
+
+/** Builds one popup row model so slash, mention, and agent menus share navigation behavior. */
+internal fun buildComposerPopupContent(
+    slashSuggestions: List<SlashSuggestionItem>,
+    activeSlashIndex: Int,
+    mentionSuggestions: List<ContextEntry>,
+    activeMentionIndex: Int,
+    agentSuggestions: List<com.auracode.assistant.settings.SavedAgentDefinition>,
+    activeAgentIndex: Int,
+    mode: ComposerPopupMode,
+): ComposerPopupContent {
+    return when (mode) {
+        ComposerPopupMode.SLASH -> {
+            val rows = mutableListOf<ComposerPopupRow>()
+            var selectedRowIndex: Int? = null
+            val commandItems = slashSuggestions.filterIsInstance<SlashSuggestionItem.Command>()
+            val skillItems = slashSuggestions.filterIsInstance<SlashSuggestionItem.Skill>()
+            if (commandItems.isNotEmpty()) {
+                rows += ComposerPopupRow.Header(AuraCodeBundle.message("composer.slash.section.commands"))
+                commandItems.forEachIndexed { index, item ->
+                    if (index == activeSlashIndex) {
+                        selectedRowIndex = rows.size
+                    }
+                    rows += ComposerPopupRow.SlashItem(item)
+                }
+            }
+            if (skillItems.isNotEmpty()) {
+                rows += ComposerPopupRow.Header(AuraCodeBundle.message("composer.slash.section.skills"))
+                skillItems.forEachIndexed { index, item ->
+                    val overallIndex = commandItems.size + index
+                    if (overallIndex == activeSlashIndex) {
+                        selectedRowIndex = rows.size
+                    }
+                    rows += ComposerPopupRow.SlashItem(item)
+                }
+            }
+            ComposerPopupContent(rows = rows, selectedRowIndex = selectedRowIndex)
+        }
+        ComposerPopupMode.MENTION -> ComposerPopupContent(
+            rows = mentionSuggestions.map { ComposerPopupRow.MentionItem(it) },
+            selectedRowIndex = mentionSuggestions.indices.firstOrNull { it == activeMentionIndex },
+        )
+        ComposerPopupMode.AGENT -> ComposerPopupContent(
+            rows = agentSuggestions.map { ComposerPopupRow.AgentItem(it) },
+            selectedRowIndex = agentSuggestions.indices.firstOrNull { it == activeAgentIndex },
+        )
+        ComposerPopupMode.NONE -> ComposerPopupContent(rows = emptyList(), selectedRowIndex = null)
+    }
+}
+
+/** Routes popup row clicks back through the existing slash selection intents. */
+private fun SlashSuggestionItem.dispatch(onIntent: (UiIntent) -> Unit) {
+    when (this) {
+        is SlashSuggestionItem.Command -> onIntent(UiIntent.SelectSlashCommand(command))
+        is SlashSuggestionItem.Skill -> onIntent(UiIntent.SelectSlashSkill(name))
+    }
+}
+
+/** Exposes the enabled flag for command rows while keeping skill rows always selectable. */
+private fun SlashSuggestionItem.isEnabled(): Boolean {
+    return when (this) {
+        is SlashSuggestionItem.Command -> enabled
+        is SlashSuggestionItem.Skill -> true
+    }
+}
+
+/** Provides stable keys so the popup list keeps its scroll position while selection changes. */
+private fun ComposerPopupRow.stableKey(index: Int): String {
+    return when (this) {
+        is ComposerPopupRow.Header -> "header:$title:$index"
+        is ComposerPopupRow.SlashItem -> "slash:${item.title}"
+        is ComposerPopupRow.MentionItem -> "mention:${entry.path}"
+        is ComposerPopupRow.AgentItem -> "agent:${agent.id}"
     }
 }

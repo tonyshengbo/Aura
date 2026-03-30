@@ -1,6 +1,7 @@
 package com.auracode.assistant.toolwindow.drawer
 
 import com.auracode.assistant.conversation.ConversationSummary
+import com.auracode.assistant.protocol.ActivityTitleFormatter
 import com.auracode.assistant.protocol.ItemKind
 import com.auracode.assistant.protocol.UnifiedEvent
 import com.auracode.assistant.protocol.UnifiedFileChange
@@ -55,7 +56,7 @@ private fun UnifiedItem.toMarkdownSection(): String? {
         ItemKind.NARRATIVE -> narrativeSection()
         ItemKind.COMMAND_EXEC -> commandSection()
         ItemKind.DIFF_APPLY -> diffSection()
-        ItemKind.TOOL_CALL -> genericSection("Tool", text ?: command)
+        ItemKind.TOOL_CALL -> toolSection()
         ItemKind.CONTEXT_COMPACTION -> genericSection("Context", text)
         ItemKind.PLAN_UPDATE -> genericSection("Plan", text)
         ItemKind.APPROVAL_REQUEST -> genericSection("Approval", text)
@@ -115,6 +116,17 @@ private fun UnifiedItem.diffSection(): String? {
             }
         }
     }
+}
+
+private fun UnifiedItem.toolSection(): String? {
+    val normalized = (text ?: command)?.trim().orEmpty()
+    if (normalized.isBlank()) return null
+    val heading = if (ActivityTitleFormatter.isWebSearchTool(explicitName = name)) {
+        ActivityTitleFormatter.webSearchTitle(status)
+    } else {
+        "Tool"
+    }
+    return "## $heading\n\n$normalized\n"
 }
 
 private fun UnifiedItem.genericSection(title: String, body: String?): String? {

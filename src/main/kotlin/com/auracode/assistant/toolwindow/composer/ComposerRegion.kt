@@ -26,7 +26,7 @@ internal fun ComposerRegion(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    val running = conversationState.isRunning
+    val running = state.sessionIsRunning || conversationState.isRunning
 
     ComposerAttachmentPreviewDialog(
         p = p,

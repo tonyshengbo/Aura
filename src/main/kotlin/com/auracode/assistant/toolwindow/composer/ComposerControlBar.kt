@@ -41,6 +41,50 @@ import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
+/** Represents the trailing composer button state derived from engine activity. */
+internal data class ComposerTrailingActionState(
+    val iconPath: String,
+    val tooltip: String,
+    val contentDescription: String,
+    val enabled: Boolean,
+    val running: Boolean,
+    val intent: UiIntent,
+)
+
+/**
+ * Resolves the trailing composer button from engine state first.
+ *
+ * While the engine is running, the bottom-right action must stay bound to
+ * cancellation so the user can always stop the active run. New prompt content
+ * can still be submitted with Enter and queued separately by existing flow.
+ */
+internal fun resolveComposerTrailingActionState(
+    running: Boolean,
+    hasPromptContent: Boolean,
+): ComposerTrailingActionState {
+    if (running) {
+        val stopLabel = AuraCodeBundle.message("composer.stop")
+        return ComposerTrailingActionState(
+            iconPath = "/icons/stop.svg",
+            tooltip = stopLabel,
+            contentDescription = stopLabel,
+            enabled = true,
+            running = true,
+            intent = UiIntent.CancelRun,
+        )
+    }
+
+    val sendLabel = AuraCodeBundle.message("composer.send")
+    return ComposerTrailingActionState(
+        iconPath = "/icons/send.svg",
+        tooltip = sendLabel,
+        contentDescription = sendLabel,
+        enabled = hasPromptContent,
+        running = false,
+        intent = UiIntent.SendPrompt,
+    )
+}
+
 @Composable
 internal fun ComposerControlBar(
     p: DesignPalette,
@@ -49,9 +93,10 @@ internal fun ComposerControlBar(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    val canSend = state.hasPromptContent()
-    val sendModeWhileRunning = running && canSend
-    val showStop = running && !canSend
+    val trailingActionState = resolveComposerTrailingActionState(
+        running = running,
+        hasPromptContent = state.hasPromptContent(),
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -153,29 +198,15 @@ internal fun ComposerControlBar(
         }
         Spacer(Modifier.weight(1f))
         HoverTooltip(
-            text = when {
-                showStop -> AuraCodeBundle.message("composer.stop")
-                sendModeWhileRunning -> AuraCodeBundle.message("composer.pending.enqueue")
-                else -> AuraCodeBundle.message("composer.send")
-            },
+            text = trailingActionState.tooltip,
         ) {
             TrailingActionChip(
-                iconPath = if (showStop) "/icons/stop.svg" else "/icons/send.svg",
-                contentDescription = when {
-                    showStop -> AuraCodeBundle.message("composer.stop")
-                    sendModeWhileRunning -> AuraCodeBundle.message("composer.pending.enqueue")
-                    else -> AuraCodeBundle.message("composer.send")
-                },
-                enabled = showStop || canSend,
-                running = showStop,
+                iconPath = trailingActionState.iconPath,
+                contentDescription = trailingActionState.contentDescription,
+                enabled = trailingActionState.enabled,
+                running = trailingActionState.running,
                 p = p,
-                onClick = {
-                    if (showStop) {
-                        onIntent(UiIntent.CancelRun)
-                    } else {
-                        onIntent(UiIntent.SendPrompt)
-                    }
-                },
+                onClick = { onIntent(trailingActionState.intent) },
             )
         }
     }

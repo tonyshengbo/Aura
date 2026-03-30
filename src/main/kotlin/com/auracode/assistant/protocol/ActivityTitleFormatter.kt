@@ -56,15 +56,20 @@ internal object ActivityTitleFormatter {
     fun toolTitle(
         explicitName: String? = null,
         body: String? = null,
+        status: ItemStatus? = null,
     ): String {
-        return toolPresentation(explicitName = explicitName, body = body).title
+        return toolPresentation(explicitName = explicitName, body = body, status = status).title
     }
 
     fun toolPresentation(
         explicitName: String? = null,
         body: String? = null,
+        status: ItemStatus? = null,
     ): TitlePresentation {
         val candidate = explicitName?.trim().orEmpty()
+        if (isWebSearchTool(explicitName = candidate)) {
+            return TitlePresentation(title = webSearchTitle(status))
+        }
         if (candidate.isShellLikeToolName()) {
             return commandPresentation(
                 explicitName = null,
@@ -79,6 +84,21 @@ internal object ActivityTitleFormatter {
         }
 
         return TitlePresentation(title = candidate.ifBlank { "Tool Call" })
+    }
+
+    internal fun isWebSearchTool(
+        explicitName: String? = null,
+    ): Boolean {
+        val normalizedName = explicitName?.trim()?.lowercase().orEmpty()
+        return normalizedName == "web_search" || normalizedName == "websearch" || normalizedName == "web-search"
+    }
+
+    internal fun webSearchTitle(status: ItemStatus?): String {
+        return if (status == ItemStatus.SUCCESS) {
+            "Searched"
+        } else {
+            "Searching the web"
+        }
     }
 
     private fun summarizeCommandPresentation(normalizedCommand: String): TitlePresentation? {

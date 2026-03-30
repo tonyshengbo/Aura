@@ -134,7 +134,13 @@ internal fun SettingsOverlay(
                     }
 
                     SettingsSection.SKILLS -> {
-                        SkillsSettingsPage(p = p, state = state, onIntent = onIntent)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            SkillsSettingsPage(p = p, state = state, onIntent = onIntent)
+                        }
                     }
 
                     SettingsSection.MCP -> {

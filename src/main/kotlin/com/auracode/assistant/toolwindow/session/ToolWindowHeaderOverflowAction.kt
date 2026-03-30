@@ -16,6 +16,7 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupFactory.ActionSelectionAid
 import java.awt.BorderLayout
 import java.awt.Font
+import java.lang.ref.WeakReference
 import javax.swing.BorderFactory
 import javax.swing.JButton
 import javax.swing.JComponent
@@ -23,9 +24,11 @@ import javax.swing.JLabel
 import javax.swing.JPanel
 
 internal class ToolWindowHeaderOverflowAction(
-    private val overflowTabs: List<ToolWindowHeaderTab>,
+    overflowTabs: List<ToolWindowHeaderTab>,
     private val onSelect: (String) -> Unit,
 ) : DumbAwareAction(AuraCodeBundle.message("common.more")), CustomComponentAction {
+    private var overflowTabs: List<ToolWindowHeaderTab> = overflowTabs
+    private val customComponents = mutableListOf<WeakReference<JComponent>>()
 
     override fun actionPerformed(e: AnActionEvent) = Unit
 
@@ -58,6 +61,7 @@ internal class ToolWindowHeaderOverflowAction(
             }
         })
         applyStyle(panel, label, arrow)
+        customComponents += WeakReference(panel)
         return panel
     }
 
@@ -67,6 +71,11 @@ internal class ToolWindowHeaderOverflowAction(
         val arrow = panel.getClientProperty("arrow") as? JButton ?: return
         label.text = AuraCodeBundle.message("common.more")
         applyStyle(panel, label, arrow)
+    }
+
+    fun updateOverflowTabs(overflowTabs: List<ToolWindowHeaderTab>) {
+        this.overflowTabs = overflowTabs
+        refreshCustomComponents()
     }
 
     private fun showOverflowPopup(anchor: JComponent) {
@@ -107,5 +116,17 @@ internal class ToolWindowHeaderOverflowAction(
         )
         label.foreground = palette.textSecondary
         arrow.foreground = palette.textSecondary
+    }
+
+    private fun refreshCustomComponents() {
+        val iterator = customComponents.iterator()
+        while (iterator.hasNext()) {
+            val component = iterator.next().get()
+            if (component == null) {
+                iterator.remove()
+            } else {
+                updateCustomComponent(component, templatePresentation)
+            }
+        }
     }
 }

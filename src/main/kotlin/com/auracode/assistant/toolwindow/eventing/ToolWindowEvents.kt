@@ -9,14 +9,14 @@ import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.settings.SavedAgentDefinition
 import com.auracode.assistant.settings.UiLanguageMode
 import com.auracode.assistant.settings.UiThemeMode
-import com.auracode.assistant.settings.skills.SkillSummary
+import com.auracode.assistant.settings.skills.SkillRuntimeEntry
 import com.auracode.assistant.settings.mcp.McpBusyState
 import com.auracode.assistant.settings.mcp.McpRuntimeStatus
 import com.auracode.assistant.settings.mcp.McpServerDraft
 import com.auracode.assistant.settings.mcp.McpServerSummary
 import com.auracode.assistant.settings.mcp.McpTestResult
 import com.auracode.assistant.settings.mcp.McpValidationErrors
-import com.auracode.assistant.provider.CodexEnvironmentCheckResult
+import com.auracode.assistant.provider.codex.CodexEnvironmentCheckResult
 import com.auracode.assistant.toolwindow.approval.ApprovalAction
 import com.auracode.assistant.toolwindow.composer.ComposerRunningPlanState
 import com.auracode.assistant.toolwindow.composer.PlanCompletionAction
@@ -136,11 +136,11 @@ internal sealed interface UiIntent {
     data object SaveAgentDraft : UiIntent
     data class DeleteSavedAgent(val id: String) : UiIntent
     data object LoadSkills : UiIntent
-    data object ImportLocalSkill : UiIntent
-    data class ToggleSkillEnabled(val name: String, val enabled: Boolean) : UiIntent
-    data class DeleteSkill(val name: String) : UiIntent
+    data object RefreshSkills : UiIntent
+    data class ToggleSkillEnabled(val name: String, val path: String, val enabled: Boolean) : UiIntent
     data class OpenSkillPath(val path: String) : UiIntent
     data class RevealSkillPath(val path: String) : UiIntent
+    data class UninstallSkill(val name: String, val path: String) : UiIntent
     data object LoadMcpServers : UiIntent
     data object RefreshMcpStatuses : UiIntent
     data object CreateNewMcpDraft : UiIntent
@@ -215,8 +215,9 @@ internal sealed interface AppEvent {
         val themeMode: UiThemeMode,
         val autoContextEnabled: Boolean,
         val savedAgents: List<SavedAgentDefinition>,
+        val selectedAgentIds: List<String> = emptyList(),
         val customModelIds: List<String> = emptyList(),
-        val selectedModel: String = com.auracode.assistant.provider.CodexModelCatalog.defaultModel,
+        val selectedModel: String = com.auracode.assistant.provider.codex.CodexModelCatalog.defaultModel,
         val selectedReasoning: String = ComposerReasoning.MEDIUM.effort,
     ) : AppEvent
     data class CodexEnvironmentCheckRunning(
@@ -229,8 +230,18 @@ internal sealed interface AppEvent {
     data class ConversationCapabilitiesUpdated(
         val capabilities: ConversationCapabilities,
     ) : AppEvent
-    data class SkillsLoaded(val skills: List<SkillSummary>) : AppEvent
-    data class SkillsLoadingChanged(val loading: Boolean) : AppEvent
+    data class SkillsLoaded(
+        val engineId: String,
+        val cwd: String,
+        val skills: List<SkillRuntimeEntry>,
+        val supportsRuntimeSkills: Boolean,
+        val stale: Boolean,
+        val errorMessage: String? = null,
+    ) : AppEvent
+    data class SkillsLoadingChanged(
+        val loading: Boolean,
+        val activePath: String? = null,
+    ) : AppEvent
     data class McpServersLoaded(val servers: List<McpServerSummary>) : AppEvent
     data class McpDraftLoaded(val draft: McpServerDraft) : AppEvent
     data class McpStatusesUpdated(val statuses: Map<String, McpRuntimeStatus>) : AppEvent

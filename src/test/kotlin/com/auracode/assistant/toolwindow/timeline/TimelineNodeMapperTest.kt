@@ -282,21 +282,37 @@ class TimelineNodeMapperTest {
 
     @Test
     fun `web search tool item maps to tool call instead of unknown activity`() {
-        val mutation = TimelineNodeMapper.fromUnifiedEvent(
+        val runningMutation = TimelineNodeMapper.fromUnifiedEvent(
             UnifiedEvent.ItemUpdated(
                 UnifiedItem(
-                    id = "request-1:item-web",
+                    id = "request-1:item-web-running",
+                    kind = ItemKind.TOOL_CALL,
+                    status = ItemStatus.RUNNING,
+                    name = "web_search",
+                    text = "OpenAI Codex latest version official",
+                ),
+            ),
+        )
+        val successMutation = TimelineNodeMapper.fromUnifiedEvent(
+            UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "request-1:item-web-success",
                     kind = ItemKind.TOOL_CALL,
                     status = ItemStatus.SUCCESS,
+                    name = "web_search",
                     text = "kotlin compose ime",
                 ),
             ),
         )
 
-        val tool = assertIs<TimelineMutation.UpsertToolCall>(mutation)
-        assertEquals("Tool Call", tool.title)
-        assertNull(tool.titleTargetLabel)
-        assertNull(tool.titleTargetPath)
+        val runningTool = assertIs<TimelineMutation.UpsertToolCall>(runningMutation)
+        val successTool = assertIs<TimelineMutation.UpsertToolCall>(successMutation)
+        assertEquals("Searching the web", runningTool.title)
+        assertEquals("Searched", successTool.title)
+        assertEquals("OpenAI Codex latest version official", runningTool.body)
+        assertEquals("kotlin compose ime", successTool.body)
+        assertNull(runningTool.titleTargetLabel)
+        assertNull(runningTool.titleTargetPath)
     }
 
     @Test

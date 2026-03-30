@@ -85,7 +85,9 @@ internal class StatusAreaStore {
     private fun mapUnifiedState(event: UnifiedEvent, current: StatusAreaState): StatusAreaState {
         return when (event) {
             is UnifiedEvent.Error -> current.copy(
-                turnStatus = null,
+                // Non-terminal errors are retry notices from the app-server. We still show the
+                // toast, but we keep the running turn alive so automatic recovery can continue.
+                turnStatus = if (event.terminal) null else current.turnStatus,
                 toast = ToastUiState(
                     id = System.currentTimeMillis(),
                     text = UiText.Raw(event.message),

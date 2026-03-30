@@ -394,6 +394,145 @@ class ToolWindowCoordinatorSubmitTest {
     }
 
     @Test
+    fun `switching to another session while first run is active keeps both sessions sending independently`() {
+        val workingDir = createTempDirectory("coordinator-multi-session-submit")
+        val provider = BlockingProvider()
+        val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
+        val service = AgentChatService(
+            repository = SQLiteChatSessionRepository(workingDir.resolve("chat.db")),
+            registry = registry(provider),
+            settings = settings,
+        )
+        val eventHub = ToolWindowEventHub()
+        val composerStore = ComposerAreaStore()
+        val coordinator = ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = eventHub,
+            headerStore = HeaderAreaStore(),
+            statusStore = StatusAreaStore(),
+            timelineStore = TimelineAreaStore(),
+            composerStore = composerStore,
+            rightDrawerStore = RightDrawerAreaStore(),
+        )
+
+        val sessionA = service.getCurrentSessionId()
+        eventHub.publishUiIntent(UiIntent.InputChanged("first"))
+        eventHub.publishUiIntent(UiIntent.SendPrompt)
+
+        waitUntil(timeoutMs = 2_000) {
+            provider.requests.size == 1 &&
+                service.listSessions().firstOrNull { it.id == sessionA }?.isRunning == true &&
+                composerStore.state.value.sessionIsRunning
+        }
+
+        val sessionB = service.createSession()
+        eventHub.publishUiIntent(UiIntent.SwitchSession(sessionB))
+        waitUntil(timeoutMs = 2_000) {
+            coordinator.currentVisibleSessionId() == sessionB &&
+                !composerStore.state.value.sessionIsRunning &&
+                composerStore.state.value.document.text.isBlank()
+        }
+
+        eventHub.publishUiIntent(UiIntent.InputChanged("second"))
+        eventHub.publishUiIntent(UiIntent.SendPrompt)
+
+        waitUntil(timeoutMs = 2_000) {
+            provider.requests.size == 2 && service.listSessions().count { it.isRunning } == 2
+        }
+        assertEquals(listOf("first", "second"), provider.requests.map { it.prompt })
+        assertEquals(sessionB, coordinator.currentVisibleSessionId())
+
+        provider.completeNext()
+        waitUntil(timeoutMs = 2_000) { service.listSessions().count { it.isRunning } == 1 }
+        provider.completeNext()
+        waitUntil(timeoutMs = 2_000) { service.listSessions().none { it.isRunning } }
+
+        coordinator.dispose()
+        service.dispose()
+    }
+
+    @Test
+    fun `new session keeps composer configuration but starts with a clean draft`() {
+        val workingDir = createTempDirectory("coordinator-session-init")
+        val provider = RecordingProvider()
+        val settings = AgentSettingsService().apply {
+            loadState(
+                AgentSettingsService.State(
+                    savedAgents = mutableListOf(
+                        SavedAgentDefinition(
+                            id = "agent-1",
+                            name = "Reviewer",
+                            prompt = "Review the answer before replying.",
+                        ),
+                    ),
+                ),
+            )
+        }
+        val service = AgentChatService(
+            repository = SQLiteChatSessionRepository(workingDir.resolve("chat.db")),
+            registry = registry(provider),
+            settings = settings,
+        )
+        val eventHub = ToolWindowEventHub()
+        val composerStore = ComposerAreaStore()
+        val coordinator = ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = eventHub,
+            headerStore = HeaderAreaStore(),
+            statusStore = StatusAreaStore(),
+            timelineStore = TimelineAreaStore(),
+            composerStore = composerStore,
+            rightDrawerStore = RightDrawerAreaStore(),
+        )
+
+        val sessionA = service.getCurrentSessionId()
+        eventHub.publishUiIntent(UiIntent.SelectModel("gpt-5.4"))
+        eventHub.publishUiIntent(UiIntent.SelectReasoning(ComposerReasoning.HIGH))
+        eventHub.publishUiIntent(
+            UiIntent.SelectAgent(
+                SavedAgentDefinition(
+                    id = "agent-1",
+                    name = "Reviewer",
+                    prompt = "Review the answer before replying.",
+                ),
+            ),
+        )
+        eventHub.publishUiIntent(UiIntent.InputChanged("draft on session A"))
+
+        waitUntil(timeoutMs = 2_000) {
+            composerStore.state.value.selectedModel == "gpt-5.4" &&
+                composerStore.state.value.selectedReasoning == ComposerReasoning.HIGH &&
+                composerStore.state.value.agentEntries.map { it.id } == listOf("agent-1") &&
+                composerStore.state.value.document.text == "draft on session A"
+        }
+
+        val sessionB = service.createSession()
+        eventHub.publishUiIntent(UiIntent.SwitchSession(sessionB))
+        waitUntil(timeoutMs = 2_000) {
+            coordinator.currentVisibleSessionId() == sessionB &&
+                composerStore.state.value.selectedModel == "gpt-5.4" &&
+                composerStore.state.value.selectedReasoning == ComposerReasoning.HIGH &&
+                composerStore.state.value.agentEntries.map { it.id } == listOf("agent-1") &&
+                composerStore.state.value.document.text.isBlank() &&
+                !composerStore.state.value.sessionIsRunning
+        }
+
+        eventHub.publishUiIntent(UiIntent.InputChanged("draft on session B"))
+        waitUntil(timeoutMs = 2_000) { composerStore.state.value.document.text == "draft on session B" }
+
+        eventHub.publishUiIntent(UiIntent.SwitchSession(sessionA))
+        waitUntil(timeoutMs = 2_000) {
+            coordinator.currentVisibleSessionId() == sessionA &&
+                composerStore.state.value.document.text == "draft on session A"
+        }
+
+        coordinator.dispose()
+        service.dispose()
+    }
+
+    @Test
     fun `selecting model and reasoning persists to settings snapshot`() {
         val workingDir = createTempDirectory("coordinator-model-settings")
         val provider = RecordingProvider()
@@ -425,6 +564,111 @@ class ToolWindowCoordinatorSubmitTest {
                 composerStore.state.value.selectedModel == "gpt-5.4" &&
                 composerStore.state.value.selectedReasoning == ComposerReasoning.HIGH
         }
+
+        coordinator.dispose()
+        service.dispose()
+    }
+
+    @Test
+    fun `selecting and removing agents persists selected ids in settings`() {
+        val workingDir = createTempDirectory("coordinator-agent-selection-settings")
+        val provider = RecordingProvider()
+        val settings = AgentSettingsService().apply {
+            loadState(
+                AgentSettingsService.State(
+                    savedAgents = mutableListOf(
+                        SavedAgentDefinition(
+                            id = "agent-1",
+                            name = "Reviewer",
+                            prompt = "Review the answer before replying.",
+                        ),
+                    ),
+                ),
+            )
+        }
+        val service = AgentChatService(
+            repository = SQLiteChatSessionRepository(workingDir.resolve("chat.db")),
+            registry = registry(provider),
+            settings = settings,
+        )
+        val eventHub = ToolWindowEventHub()
+        val composerStore = ComposerAreaStore()
+        val coordinator = ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = eventHub,
+            headerStore = HeaderAreaStore(),
+            statusStore = StatusAreaStore(),
+            timelineStore = TimelineAreaStore(),
+            composerStore = composerStore,
+            rightDrawerStore = RightDrawerAreaStore(),
+        )
+
+        eventHub.publishUiIntent(
+            UiIntent.SelectAgent(
+                SavedAgentDefinition(
+                    id = "agent-1",
+                    name = "Reviewer",
+                    prompt = "Review the answer before replying.",
+                ),
+            ),
+        )
+
+        waitUntil(timeoutMs = 2_000) { settings.selectedAgentIds() == listOf("agent-1") }
+        assertEquals(listOf("agent-1"), composerStore.state.value.agentEntries.map { it.id })
+
+        eventHub.publishUiIntent(UiIntent.RemoveSelectedAgent("agent-1"))
+
+        waitUntil(timeoutMs = 2_000) { settings.selectedAgentIds().isEmpty() }
+        assertTrue(composerStore.state.value.agentEntries.isEmpty())
+
+        coordinator.dispose()
+        service.dispose()
+    }
+
+    @Test
+    fun `coordinator restores selected agents from persisted settings on startup`() {
+        val workingDir = createTempDirectory("coordinator-agent-selection-restore")
+        val provider = RecordingProvider()
+        val settings = AgentSettingsService().apply {
+            loadState(
+                AgentSettingsService.State(
+                    savedAgents = mutableListOf(
+                        SavedAgentDefinition(
+                            id = "agent-1",
+                            name = "Reviewer",
+                            prompt = "Review the answer before replying.",
+                        ),
+                        SavedAgentDefinition(
+                            id = "agent-2",
+                            name = "Planner",
+                            prompt = "Create the execution plan first.",
+                        ),
+                    ),
+                    selectedAgentIds = linkedSetOf("agent-2", "agent-1"),
+                ),
+            )
+        }
+        val service = AgentChatService(
+            repository = SQLiteChatSessionRepository(workingDir.resolve("chat.db")),
+            registry = registry(provider),
+            settings = settings,
+        )
+        val eventHub = ToolWindowEventHub()
+        val composerStore = ComposerAreaStore()
+        val coordinator = ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = eventHub,
+            headerStore = HeaderAreaStore(),
+            statusStore = StatusAreaStore(),
+            timelineStore = TimelineAreaStore(),
+            composerStore = composerStore,
+            rightDrawerStore = RightDrawerAreaStore(),
+        )
+
+        waitUntil(timeoutMs = 2_000) { composerStore.state.value.agentEntries.size == 2 }
+        assertEquals(listOf("agent-2", "agent-1"), composerStore.state.value.agentEntries.map { it.id })
 
         coordinator.dispose()
         service.dispose()

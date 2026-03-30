@@ -20,8 +20,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
-import com.auracode.assistant.provider.CodexEnvironmentCheckResult
-import com.auracode.assistant.provider.CodexEnvironmentStatus
+import com.auracode.assistant.provider.codex.CodexEnvironmentCheckResult
+import com.auracode.assistant.provider.codex.CodexEnvironmentStatus
 import com.auracode.assistant.settings.UiLanguageMode
 import com.auracode.assistant.settings.UiThemeMode
 import com.auracode.assistant.toolwindow.drawer.RightDrawerAreaState

@@ -1,8 +1,8 @@
 package com.auracode.assistant.settings.mcp
 
 import com.auracode.assistant.provider.CodexProviderFactory
-import com.auracode.assistant.provider.CodexEnvironmentDetector
-import com.auracode.assistant.provider.CodexEnvironmentResolution
+import com.auracode.assistant.provider.codex.CodexEnvironmentDetector
+import com.auracode.assistant.provider.codex.CodexEnvironmentResolution
 import com.auracode.assistant.settings.AgentSettingsService
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler

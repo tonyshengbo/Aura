@@ -3,7 +3,6 @@ package com.auracode.assistant.toolwindow.session
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.toolwindow.shared.UiText
-import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.wm.ex.ToolWindowEx
 
@@ -15,6 +14,10 @@ internal class SessionTabCoordinator(
     private val onSessionActivated: () -> Unit,
 ) {
     private val openSessionTabs = linkedSetOf<String>()
+    private val headerActionCache = ToolWindowHeaderActionCache(
+        onSelect = { sessionId -> switchToSession(sessionId) },
+        onClose = { sessionId -> closeSessionTab(sessionId) },
+    )
     private var activeSessionTabId: String = ""
 
     fun initialize() {
@@ -136,22 +139,10 @@ internal class SessionTabCoordinator(
             activeSessionId = activeSessionTabId,
             sessions = sessions,
         )
-        val actions = layout.visibleTabs.map { tab ->
-            ToolWindowHeaderTabAction(
-                tab = tab,
-                onSelect = { sessionId -> switchToSession(sessionId) },
-                onClose = { sessionId -> closeSessionTab(sessionId) },
-            )
-        }.toMutableList<AnAction>()
-        if (layout.hasOverflow) {
-            // Overflow stays accessible from a dedicated entry so the tool window header
-            // remains compact even when the session list grows.
-            actions += ToolWindowHeaderOverflowAction(
-                overflowTabs = layout.overflowTabs,
-                onSelect = { sessionId -> switchToSession(sessionId) },
-            )
+        val update = headerActionCache.update(layout)
+        if (update.structureChanged) {
+            toolWindowEx.setTabActions(*update.actions.toTypedArray())
         }
-        toolWindowEx.setTabActions(*actions.toTypedArray())
     }
 
     companion object {

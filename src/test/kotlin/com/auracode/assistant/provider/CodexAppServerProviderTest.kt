@@ -1,12 +1,18 @@
-package com.auracode.assistant.provider
+package com.auracode.assistant.provider.codex
 
 import com.auracode.assistant.model.AgentCollaborationMode
 import com.auracode.assistant.model.AgentRequest
 import com.auracode.assistant.model.ContextFile
+import com.auracode.assistant.model.AgentApprovalMode
 import com.auracode.assistant.protocol.ItemKind
 import com.auracode.assistant.protocol.ItemStatus
+import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.protocol.UnifiedToolUserInputAnswerDraft
 import com.auracode.assistant.protocol.UnifiedEvent
+import com.auracode.assistant.settings.skills.RuntimeSkillRecord
+import com.auracode.assistant.settings.skills.SkillSelector
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -24,13 +30,40 @@ import kotlin.test.assertTrue
 
 class CodexAppServerProviderTest {
     @Test
-    fun `thread start sandbox mode uses kebab case protocol enum`() {
-        assertEquals("workspace-write", APP_SERVER_THREAD_SANDBOX_MODE)
+    fun `thread start sandbox mode defaults to full access protocol enum`() {
+        assertEquals("danger-full-access", buildThreadSandboxMode())
     }
 
     @Test
-    fun `turn start sandbox policy uses camel case protocol enum`() {
-        assertEquals("workspaceWrite", APP_SERVER_TURN_SANDBOX_TYPE)
+    fun `turn start sandbox policy defaults to full access payload`() {
+        val payload = buildTurnSandboxPolicy("/tmp/project")
+
+        assertEquals("dangerFullAccess", payload.getValue("type").jsonPrimitive.content)
+        assertFalse("writableRoots" in payload)
+        assertFalse("networkAccess" in payload)
+    }
+
+    @Test
+    fun `workspace write turn sandbox policy keeps writable roots payload`() {
+        val payload = buildTurnSandboxPolicy(
+            workingDirectory = "/tmp/project",
+            mode = CodexAppServerSandboxMode.WORKSPACE_WRITE,
+        )
+
+        assertEquals("workspaceWrite", payload.getValue("type").jsonPrimitive.content)
+        assertEquals(true, payload.getValue("networkAccess").jsonPrimitive.content.toBoolean())
+        assertEquals(listOf("/tmp/project"), payload.getValue("writableRoots").jsonArray.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun `skill config write payload omits path when using name selector`() {
+        val payload = buildSkillConfigWriteParams(
+            CodexSkillConfigSyncEntry(name = "brainstorming", enabled = false),
+        )
+
+        assertFalse("path" in payload)
+        assertEquals("brainstorming", payload.getValue("name").jsonPrimitive.content)
+        assertEquals(false, payload.getValue("enabled").jsonPrimitive.content.toBoolean())
     }
 
     @Test
@@ -267,6 +300,32 @@ class CodexAppServerProviderTest {
     }
 
     @Test
+    fun `retryable app server error is parsed as non terminal unified error`() {
+        val parser = CodexAppServerProvider.AppServerNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+
+        val events = parser.parseNotification(
+            method = "error",
+            params = buildJsonObject {
+                put("willRetry", true)
+                put(
+                    "error",
+                    buildJsonObject {
+                        put("message", "Reconnecting... 1/5")
+                        put("additionalDetails", "stream disconnected before completion")
+                    },
+                )
+            },
+        )
+
+        val error = assertIs<UnifiedEvent.Error>(events.single())
+        assertEquals("Reconnecting... 1/5", error.message)
+        assertFalse(error.terminal)
+    }
+
+    @Test
     fun `context compaction lifecycle notifications map to dedicated item kind`() {
         val parser = CodexAppServerProvider.AppServerNotificationParser(
             requestId = "req-1",
@@ -366,6 +425,109 @@ class CodexAppServerProviderTest {
         assertEquals(ItemKind.CONTEXT_COMPACTION, compactedItem.kind)
         assertEquals(ItemStatus.SUCCESS, compactedItem.status)
         assertEquals("Context compacted", compactedItem.text)
+    }
+
+    @Test
+    fun `web search lifecycle notifications map to tool call with codex detail text`() {
+        val parser = CodexAppServerProvider.AppServerNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+
+        val started = parser.parseNotification(
+            method = "item/started",
+            params = buildJsonObject {
+                put(
+                    "item",
+                    buildJsonObject {
+                        put("type", "webSearch")
+                        put("id", "ws_1")
+                        put("query", "OpenAI Codex latest version official")
+                    },
+                )
+            },
+        )
+        val completed = parser.parseNotification(
+            method = "item/completed",
+            params = buildJsonObject {
+                put(
+                    "item",
+                    buildJsonObject {
+                        put("type", "webSearch")
+                        put("id", "ws_1")
+                        put("query", "OpenAI Codex latest version official")
+                        put(
+                            "action",
+                            buildJsonObject {
+                                put("type", "search")
+                                put("query", "OpenAI Codex latest version official")
+                                put(
+                                    "queries",
+                                    buildJsonArray {
+                                        add(JsonPrimitive("OpenAI Codex latest version official"))
+                                        add(JsonPrimitive("site:github.com openai codex releases latest version"))
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+            },
+        )
+
+        val startedItem = assertIs<UnifiedEvent.ItemUpdated>(started.single()).item
+        val completedItem = assertIs<UnifiedEvent.ItemUpdated>(completed.single()).item
+        assertEquals(ItemKind.TOOL_CALL, startedItem.kind)
+        assertEquals(ItemKind.TOOL_CALL, completedItem.kind)
+        assertEquals(ItemStatus.RUNNING, startedItem.status)
+        assertEquals(ItemStatus.SUCCESS, completedItem.status)
+        assertEquals("web_search", startedItem.name)
+        assertEquals("web_search", completedItem.name)
+        assertEquals("OpenAI Codex latest version official", startedItem.text)
+        assertTrue(completedItem.text.orEmpty().contains("OpenAI Codex latest version official"))
+        assertTrue(completedItem.text.orEmpty().contains("site:github.com openai codex releases latest version"))
+    }
+
+    @Test
+    fun `historical web search item restores as tool call instead of unknown activity`() {
+        val parser = CodexAppServerProvider.AppServerNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+
+        val events = parser.parseHistoricalTurn(
+            buildJsonObject {
+                put("id", "turn-history-1")
+                put("threadId", "thread-history-1")
+                put("status", "completed")
+                put(
+                    "items",
+                    buildJsonArray {
+                        add(
+                            buildJsonObject {
+                                put("type", "webSearch")
+                                put("id", "ws_history_1")
+                                put("status", "completed")
+                                put("query", "kotlin compose ime")
+                                put(
+                                    "action",
+                                    buildJsonObject {
+                                        put("type", "search")
+                                    },
+                                )
+                            },
+                        )
+                    },
+                )
+            },
+        )
+
+        val restored = events.filterIsInstance<UnifiedEvent.ItemUpdated>()
+            .single { it.item.id == "req-1:ws_history_1" }
+            .item
+        assertEquals(ItemKind.TOOL_CALL, restored.kind)
+        assertEquals("web_search", restored.name)
+        assertTrue(restored.text.orEmpty().contains("kotlin compose ime"))
     }
 
     @Test
@@ -570,5 +732,250 @@ class CodexAppServerProviderTest {
         assertTrue(prompt.contains("FILE: /tmp/Foo.kt:10-12\nfun selected() = true"))
         assertTrue(prompt.contains("Context files (read by path):"))
         assertTrue(prompt.contains("- /tmp/Bar.kt"))
+    }
+
+    @Test
+    fun `silent app server exit after turn start synthesizes successful turn completion`() {
+        val event = syntheticTurnCompletionForSilentExit(
+            turnId = "turn-1",
+            turnAlreadyCompleted = false,
+            cancelledLocally = false,
+        )
+
+        val completion = assertIs<UnifiedEvent.TurnCompleted>(event)
+        assertEquals("turn-1", completion.turnId)
+        assertEquals(TurnOutcome.SUCCESS, completion.outcome)
+    }
+
+    @Test
+    fun `silent app server exit does not synthesize completion when turn already completed or cancelled`() {
+        assertEquals(
+            null,
+            syntheticTurnCompletionForSilentExit(
+                turnId = "turn-1",
+                turnAlreadyCompleted = true,
+                cancelledLocally = false,
+            ),
+        )
+        assertEquals(
+            null,
+            syntheticTurnCompletionForSilentExit(
+                turnId = "turn-1",
+                turnAlreadyCompleted = false,
+                cancelledLocally = true,
+            ),
+        )
+        assertEquals(
+            null,
+            syntheticTurnCompletionForSilentExit(
+                turnId = "",
+                turnAlreadyCompleted = false,
+                cancelledLocally = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `shared codex client starts a new thread when no remote conversation id exists`() {
+        val session = FakeCodexAppServerSession().apply {
+            response(
+                "thread/start",
+                buildJsonObject {
+                    put(
+                        "thread",
+                        buildJsonObject {
+                            put("id", "thread-new")
+                        },
+                    )
+                },
+            )
+        }
+        val client = CodexAppServerClient(session = session, diagnosticLogger = {})
+
+        val threadId = runBlockingTest {
+            client.ensureThread(
+                AgentRequest(
+                    engineId = "codex",
+                    prompt = "hello",
+                    contextFiles = emptyList(),
+                    workingDirectory = "/tmp/project",
+                    approvalMode = AgentApprovalMode.REQUIRE_CONFIRMATION,
+                ),
+            )
+        }
+
+        assertEquals("thread-new", threadId)
+        assertEquals("thread/start", session.requestMethods.single())
+    }
+
+    @Test
+    fun `shared codex client maps runtime skills from skills list response`() {
+        val session = FakeCodexAppServerSession().apply {
+            response(
+                "skills/list",
+                buildJsonObject {
+                    put(
+                        "data",
+                        buildJsonArray {
+                            add(
+                                buildJsonObject {
+                                    put(
+                                        "skills",
+                                        buildJsonArray {
+                                            add(
+                                                buildJsonObject {
+                                                    put("name", "brainstorming")
+                                                    put("description", "Explore requirements.")
+                                                    put("enabled", false)
+                                                    put("path", "/tmp/brainstorming/SKILL.md")
+                                                    put("scope", "user")
+                                                },
+                                            )
+                                        },
+                                    )
+                                },
+                            )
+                        },
+                    )
+                },
+            )
+        }
+        val client = CodexAppServerClient(session = session, diagnosticLogger = {})
+
+        val skills = runBlockingTest {
+            client.listSkills(cwd = "/tmp/project", forceReload = true)
+        }
+
+        assertEquals(
+            listOf(
+                RuntimeSkillRecord(
+                    name = "brainstorming",
+                    description = "Explore requirements.",
+                    enabled = false,
+                    path = "/tmp/brainstorming/SKILL.md",
+                    scopeLabel = "user",
+                ),
+            ),
+            skills,
+        )
+        assertEquals("skills/list", session.requestMethods.single())
+    }
+
+    @Test
+    fun `conversation history page returns latest turns first when cursor is empty`() {
+        val page = buildConversationHistoryPage(
+            turns = listOf(
+                historicalTurn(id = "turn-1", message = "first"),
+                historicalTurn(id = "turn-2", message = "second"),
+                historicalTurn(id = "turn-3", message = "third"),
+            ),
+            pageSize = 2,
+            cursor = null,
+            providerId = "codex",
+            diagnosticLogger = {},
+        )
+
+        assertTrue(page.hasOlder)
+        assertEquals("1", page.olderCursor)
+        val items = page.events.filterIsInstance<UnifiedEvent.ItemUpdated>()
+        assertEquals(listOf("second", "third"), items.map { it.item.text })
+    }
+
+    @Test
+    fun `conversation history page respects cursor boundaries`() {
+        val page = buildConversationHistoryPage(
+            turns = listOf(
+                historicalTurn(id = "turn-1", message = "first"),
+                historicalTurn(id = "turn-2", message = "second"),
+                historicalTurn(id = "turn-3", message = "third"),
+            ),
+            pageSize = 2,
+            cursor = "2",
+            providerId = "codex",
+            diagnosticLogger = {},
+        )
+
+        assertFalse(page.hasOlder)
+        assertEquals(null, page.olderCursor)
+        val items = page.events.filterIsInstance<UnifiedEvent.ItemUpdated>()
+        assertEquals(listOf("first", "second"), items.map { it.item.text })
+    }
+}
+
+private fun buildCollaborationModePayloadForTest(
+    mode: AgentCollaborationMode,
+    model: String?,
+    reasoningEffort: String?,
+) = buildCollaborationModePayloadForMode(mode, model, reasoningEffort)
+
+private fun extractFileChangeKindForTest(json: kotlinx.serialization.json.JsonObject) =
+    extractFileChangeKind(json)
+
+private fun parseAppServerNotificationForTest(
+    requestId: String,
+    method: String,
+    params: kotlinx.serialization.json.JsonObject,
+): List<UnifiedEvent> {
+    return CodexAppServerProvider.AppServerNotificationParser(
+        requestId = requestId,
+        diagnosticLogger = {},
+    ).parseNotification(method, params)
+}
+
+private fun buildRequestUserInputResponseForTest(serverRequestId: JsonPrimitive) =
+    buildRequestUserInputResponse(serverRequestId)
+
+private fun buildToolUserInputPromptForTest(
+    serverRequestId: JsonPrimitive,
+    params: kotlinx.serialization.json.JsonObject,
+) = buildToolUserInputPrompt(serverRequestId, params)
+
+private fun buildToolUserInputResponseForTest(
+    serverRequestId: JsonPrimitive,
+    submission: Map<String, UnifiedToolUserInputAnswerDraft>,
+) = buildToolUserInputResponse(serverRequestId, submission)
+
+private fun buildPromptForTest(request: AgentRequest) = buildPrompt(request)
+
+private fun runBlockingTest(block: suspend () -> Any?): Any? = kotlinx.coroutines.runBlocking { block() }
+
+private fun historicalTurn(id: String, message: String) = buildJsonObject {
+    put("id", id)
+    put("threadId", "thread-1")
+    put("status", "completed")
+    put(
+        "items",
+        buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("type", "message")
+                    put("id", "msg-$id")
+                    put("status", "completed")
+                    put("text", message)
+                },
+            )
+        },
+    )
+}
+
+private class FakeCodexAppServerSession : CodexAppServerSession {
+    val requestMethods = mutableListOf<String>()
+    private val responses = mutableMapOf<String, JsonObject>()
+
+    override fun start() = Unit
+
+    override suspend fun initialize() = Unit
+
+    override suspend fun request(method: String, params: JsonObject): JsonObject {
+        requestMethods += method
+        return responses.getValue(method)
+    }
+
+    override suspend fun notify(method: String, params: JsonObject) = Unit
+
+    override suspend fun respond(serverRequestId: JsonElement, result: JsonObject) = Unit
+
+    fun response(method: String, result: JsonObject) {
+        responses[method] = result
     }
 }
