@@ -106,6 +106,9 @@ class AgentChatService private constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stateLock = Any()
+    private val engineLaunchErrorPresenter = EngineLaunchErrorPresenter(
+        registry = registry,
+    )
 
     private val sessions = linkedMapOf<String, SessionData>()
     private val sessionRuns = SessionRunRegistry()
@@ -472,18 +475,19 @@ class AgentChatService private constructor(
             try {
                 runCatching {
                     provider.stream(request).collect { unified ->
-                        collectAssistantOutput(unified, assistantBuffer)
+                        val normalizedEvent = normalizeUnifiedEvent(engineId, unified)
+                        collectAssistantOutput(normalizedEvent, assistantBuffer)
                         val persistResult = persistUnifiedEvent(
                             sessionId = sessionId,
                             activeTurnId = activeTurnId,
-                            event = unified,
+                            event = normalizedEvent,
                         )
                         activeTurnId = persistResult.turnId
-                        if (unified is UnifiedEvent.ItemUpdated &&
-                            unified.item.kind == ItemKind.NARRATIVE &&
-                            narrativeRole(unified.item) == MessageRole.ASSISTANT &&
+                        if (normalizedEvent is UnifiedEvent.ItemUpdated &&
+                            normalizedEvent.item.kind == ItemKind.NARRATIVE &&
+                            narrativeRole(normalizedEvent.item) == MessageRole.ASSISTANT &&
                             assistantBuffer.isNotBlank() &&
-                            countedAssistantItems.add(unified.item.id)
+                            countedAssistantItems.add(normalizedEvent.item.id)
                         ) {
                             synchronized(stateLock) {
                                 sessions[sessionId]?.applyMessage(
@@ -496,29 +500,31 @@ class AgentChatService private constructor(
                             }
                             persistSessionSnapshot(sessionId)
                         }
-                        if (unified is UnifiedEvent.ThreadTokenUsageUpdated) {
+                        if (normalizedEvent is UnifiedEvent.ThreadTokenUsageUpdated) {
                             updateCurrentUsageSnapshot(
                                 sessionId = sessionId,
                                 model = resolvedModel ?: model,
-                                contextWindow = unified.contextWindow,
-                                inputTokens = unified.inputTokens,
-                                cachedInputTokens = unified.cachedInputTokens,
-                                outputTokens = unified.outputTokens,
+                                contextWindow = normalizedEvent.contextWindow,
+                                inputTokens = normalizedEvent.inputTokens,
+                                cachedInputTokens = normalizedEvent.cachedInputTokens,
+                                outputTokens = normalizedEvent.outputTokens,
                                 engineId = engineId,
                             )
                         }
-                        onUnifiedEvent(unified)
+                        onUnifiedEvent(normalizedEvent)
                     }
                     onTurnPersisted()
                 }.onFailure { error ->
                     if (error is CancellationException) {
                         return@onFailure
                     }
-                    LOG.error(
-                        "AgentChatService stream coroutine failed: requestId=${request.requestId} engineId=$engineId sessionId=$sessionId",
-                        error,
-                    )
-                    throw error
+                    runCatching {
+                        LOG.error(
+                            "AgentChatService stream coroutine failed: requestId=${request.requestId} engineId=$engineId sessionId=$sessionId",
+                            error,
+                        )
+                    }
+                    onUnifiedEvent(normalizeThrowableAsUnifiedError(engineId, error))
                 }
             } finally {
                 synchronized(stateLock) {
@@ -736,6 +742,20 @@ class AgentChatService private constructor(
     private fun resolveModel(engineId: String, selectedModel: String): String? {
         val trimmed = selectedModel.trim()
         return if (engineId == "codex") trimmed.ifBlank { null } else trimmed.ifBlank { null }
+    }
+
+    private fun normalizeUnifiedEvent(engineId: String, event: UnifiedEvent): UnifiedEvent {
+        if (event is UnifiedEvent.Error) {
+            val normalizedMessage = engineLaunchErrorPresenter.present(engineId, event.message) ?: event.message
+            return event.copy(message = normalizedMessage)
+        }
+        return event
+    }
+
+    private fun normalizeThrowableAsUnifiedError(engineId: String, error: Throwable): UnifiedEvent.Error {
+        val rawMessage = error.message.orEmpty().ifBlank { error::class.java.simpleName }
+        val normalizedMessage = engineLaunchErrorPresenter.present(engineId, rawMessage) ?: rawMessage
+        return UnifiedEvent.Error(normalizedMessage)
     }
 
     private fun PersistedChatSession.toSessionData(): SessionData {

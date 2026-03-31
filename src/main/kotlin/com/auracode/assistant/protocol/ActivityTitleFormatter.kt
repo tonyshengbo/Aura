@@ -141,23 +141,28 @@ internal object ActivityTitleFormatter {
     }
 
     private fun summarizeFileRead(command: String): TitlePresentation? {
-        val trimmed = command.trim()
-        val readPath = when {
-            trimmed.startsWith("sed ", ignoreCase = true) ->
-                Regex("""\s([^\s]+)$""").find(trimmed)?.groupValues?.getOrNull(1)
-            trimmed.startsWith("head ", ignoreCase = true) ->
-                Regex("""\s([^\s]+)$""").find(trimmed)?.groupValues?.getOrNull(1)
-            trimmed.startsWith("tail ", ignoreCase = true) ->
-                Regex("""\s([^\s]+)$""").find(trimmed)?.groupValues?.getOrNull(1)
-            trimmed.startsWith("cat ", ignoreCase = true) ->
-                Regex("""^cat\s+([^\s]+)$""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)
-            trimmed.startsWith("type ", ignoreCase = true) ->
-                Regex("""^type\s+([^\s]+)$""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)
-            trimmed.startsWith("nl ", ignoreCase = true) ->
-                Regex("""\s([^\s]+)$""", RegexOption.IGNORE_CASE).find(trimmed)?.groupValues?.getOrNull(1)
+        val subCommands = command
+            .split("|", "&&", "||", ";")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        val readPath = subCommands
+            .asSequence()
+            .mapNotNull { parseReadPathFromSegment(it) }
+            .firstOrNull()
+        return readPath?.let { fileTitle("Read", it) }
+    }
+
+    private fun parseReadPathFromSegment(segment: String): String? {
+        val tokens = segment.tokenizeShellLike()
+        if (tokens.isEmpty()) return null
+        val executable = tokens.first().commandLeaf()
+        val args = tokens.drop(1)
+        return when (executable) {
+            "sed" -> args.lastOrNull { token -> token.isLikelyReadablePathToken() }
+            "head", "tail", "nl" -> args.lastOrNull { token -> token.isLikelyReadablePathToken() }
+            "cat", "type" -> args.singleOrNull()?.takeIf { it.isLikelyReadablePathToken() }
             else -> null
         }?.trim('"', '\'')
-        return readPath?.let { fileTitle("Read", it) }
     }
 
     private fun summarizeFileWrite(command: String): TitlePresentation? {
@@ -362,6 +367,15 @@ internal object ActivityTitleFormatter {
         if (startsWith("-")) return false
         if (contains('*') || contains('|')) return false
         return contains('/') || contains('\\') || Regex("""^[A-Za-z]:\\""").containsMatchIn(this) || contains('.')
+    }
+
+    private fun String.isLikelyReadablePathToken(): Boolean {
+        val normalized = trim().trim('"', '\'')
+        if (normalized.isBlank()) return false
+        if (normalized.startsWith("-")) return false
+        if (normalized.contains('*') || normalized.contains('|')) return false
+        if (normalized.matches(Regex("""^\d+(,\d+)?p$""", RegexOption.IGNORE_CASE))) return false
+        return normalized.isLikelyFilePath()
     }
 
     private fun String.isAbsoluteFilePath(): Boolean {

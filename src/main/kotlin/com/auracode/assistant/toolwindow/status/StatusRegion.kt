@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -27,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.toolwindow.shared.DesignPalette
@@ -45,6 +47,7 @@ internal fun TurnStatusRegion(
 ) {
     val turnStatus = state.turnStatus ?: return
     val t = assistantUiTokens()
+    val appearance = turnStatusAppearanceSpec()
     val infiniteTransition = rememberInfiniteTransition(label = "turn-status-loading")
     val rotation by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -67,8 +70,9 @@ internal fun TurnStatusRegion(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(p.topStripBg.copy(alpha = 0.95f))
-            .padding(horizontal = t.spacing.md, vertical = t.spacing.xs + t.spacing.xs),
+            .background(p.topStripBg.copy(alpha = appearance.containerAlpha))
+            .defaultMinSize(minHeight = appearance.minHeight)
+            .padding(horizontal = t.spacing.md, vertical = t.spacing.sm),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(t.spacing.sm),
     ) {
@@ -77,20 +81,35 @@ internal fun TurnStatusRegion(
             contentDescription = null,
             tint = p.accent,
             modifier = Modifier
-                .size(12.dp)
+                .size(appearance.indicatorSize)
                 .rotate(rotation),
         )
         Text(
             text = turnStatus.label.resolve(),
-            color = p.textSecondary,
-            style = MaterialTheme.typography.caption,
+            color = p.textPrimary,
+            style = MaterialTheme.typography.subtitle1.copy(
+                fontSize = appearance.labelFontSize,
+                fontWeight = FontWeight.Medium,
+            ),
             modifier = Modifier.weight(1f),
         )
-        Text(
-            text = ToolWindowUiText.formatDuration(nowMs - turnStatus.startedAtMs),
-            color = p.textMuted,
-            style = MaterialTheme.typography.caption,
-        )
+        Box(
+            modifier = Modifier
+                .background(
+                    color = p.accent.copy(alpha = appearance.elapsedChipAlpha),
+                    shape = RoundedCornerShape(999.dp),
+                )
+                .padding(horizontal = t.spacing.sm, vertical = t.spacing.xs),
+        ) {
+            Text(
+                text = ToolWindowUiText.formatDuration(nowMs - turnStatus.startedAtMs),
+                color = p.textSecondary,
+                style = MaterialTheme.typography.overline.copy(
+                    fontSize = appearance.elapsedFontSize,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+            )
+        }
     }
 }
 

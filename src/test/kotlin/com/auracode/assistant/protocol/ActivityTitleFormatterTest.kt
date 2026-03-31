@@ -27,6 +27,17 @@ class ActivityTitleFormatterTest {
     }
 
     @Test
+    fun `formats piped nl and sed file probes as read target file`() {
+        val presentation = ActivityTitleFormatter.commandPresentation(
+            command = "/bin/zsh -lc \"nl -ba src/main/kotlin/com/auracode/assistant/service/AgentChatService.kt | sed -n '95,175p'\"",
+        )
+
+        assertEquals("Read AgentChatService.kt", presentation.title)
+        assertEquals("AgentChatService.kt", presentation.targetLabel)
+        assertEquals("src/main/kotlin/com/auracode/assistant/service/AgentChatService.kt", presentation.targetPath)
+    }
+
+    @Test
     fun `formats file writes as edit`() {
         val presentation = ActivityTitleFormatter.commandPresentation(
             command = "/bin/zsh -lc \"cat > /Users/tonysheng/DataGripProjects/HelloTest.java <<'EOF'\nhello\nEOF\"",
