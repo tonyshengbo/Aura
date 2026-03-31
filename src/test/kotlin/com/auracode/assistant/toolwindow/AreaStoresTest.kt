@@ -733,6 +733,44 @@ class AreaStoresTest {
     }
 
     @Test
+    fun `timeline store keeps empty running tool collapsed until detail arrives`() {
+        val store = TimelineAreaStore()
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.TurnStarted(turnId = "turn_1", threadId = "th"),
+            ),
+        )
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertToolCall(
+                    sourceId = "web_1",
+                    title = "Searching the web",
+                    body = "",
+                    status = ItemStatus.RUNNING,
+                    turnId = "turn_1",
+                ),
+            ),
+        )
+
+        val node = assertIs<TimelineNode.ToolCallNode>(store.state.value.nodes.single())
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+
+        store.onEvent(
+            AppEvent.TimelineMutationApplied(
+                TimelineMutation.UpsertToolCall(
+                    sourceId = "web_1",
+                    title = "Searching the web",
+                    body = "Opened openai.com",
+                    status = ItemStatus.RUNNING,
+                    turnId = "turn_1",
+                ),
+            ),
+        )
+
+        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
+    }
+
+    @Test
     fun `timeline store keeps edited node collapsed by default and lets user expand it`() {
         val store = TimelineAreaStore()
         store.onEvent(
@@ -1228,7 +1266,12 @@ class AreaStoresTest {
 
         assertTrue(store.state.value.slashPopupVisible)
         assertEquals("", store.state.value.slashQuery)
-        assertTrue(store.state.value.slashSuggestions.any { it is com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Command })
+        assertEquals(
+            listOf("/plan", "/auto", "/new"),
+            store.state.value.slashSuggestions.mapNotNull {
+                (it as? com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Command)?.command
+            },
+        )
         assertTrue(store.state.value.slashSuggestions.any { it is com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Skill })
     }
 
@@ -1246,6 +1289,26 @@ class AreaStoresTest {
         assertEquals("pl", store.state.value.slashQuery)
         assertEquals(
             listOf("/plan"),
+            store.state.value.slashSuggestions.mapNotNull {
+                (it as? com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Command)?.command
+            },
+        )
+    }
+
+    @Test
+    fun `slash popup filters auto command by query`() {
+        val store = ComposerAreaStore()
+
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/au", TextRange(3))),
+            ),
+        )
+
+        assertTrue(store.state.value.slashPopupVisible)
+        assertEquals("au", store.state.value.slashQuery)
+        assertEquals(
+            listOf("/auto"),
             store.state.value.slashSuggestions.mapNotNull {
                 (it as? com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Command)?.command
             },
@@ -1278,6 +1341,105 @@ class AreaStoresTest {
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSlashCommand("plan")))
 
         assertTrue(store.state.value.planEnabled)
+        assertEquals("", store.state.value.document.text)
+        assertFalse(store.state.value.slashPopupVisible)
+    }
+
+    @Test
+    fun `selecting slash plan toggles plan mode off when already enabled`() {
+        val store = ComposerAreaStore()
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.TogglePlanMode))
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/plan", TextRange(5))),
+            ),
+        )
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSlashCommand("plan")))
+
+        assertFalse(store.state.value.planEnabled)
+        assertEquals("", store.state.value.document.text)
+        assertFalse(store.state.value.slashPopupVisible)
+    }
+
+    @Test
+    fun `selecting slash auto toggles execution mode and clears trigger text`() {
+        val store = ComposerAreaStore()
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/auto", TextRange(5))),
+            ),
+        )
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSlashCommand("auto")))
+
+        assertEquals(ComposerMode.APPROVAL, store.state.value.executionMode)
+        assertEquals("", store.state.value.document.text)
+        assertFalse(store.state.value.slashPopupVisible)
+
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/auto", TextRange(5))),
+            ),
+        )
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSlashCommand("auto")))
+
+        assertEquals(ComposerMode.AUTO, store.state.value.executionMode)
+    }
+
+    @Test
+    fun `slash command descriptions reflect current toggle state`() {
+        val store = ComposerAreaStore()
+
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/", TextRange(1))),
+            ),
+        )
+
+        val initialDescriptions = store.state.value.slashSuggestions
+            .mapNotNull { suggestion ->
+                (suggestion as? com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Command)
+                    ?.let { it.command to it.description }
+            }
+            .toMap()
+        assertEquals("Switch the composer into plan mode.", initialDescriptions["/plan"])
+        assertEquals("Switch execution mode to approval.", initialDescriptions["/auto"])
+        assertEquals("Start a new session.", initialDescriptions["/new"])
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.TogglePlanMode))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleExecutionMode))
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/", TextRange(1))),
+            ),
+        )
+
+        val toggledDescriptions = store.state.value.slashSuggestions
+            .mapNotNull { suggestion ->
+                (suggestion as? com.auracode.assistant.toolwindow.composer.SlashSuggestionItem.Command)
+                    ?.let { it.command to it.description }
+            }
+            .toMap()
+        assertEquals("Turn plan mode off.", toggledDescriptions["/plan"])
+        assertEquals("Switch execution mode to auto.", toggledDescriptions["/auto"])
+    }
+
+    @Test
+    fun `selecting slash new clears trigger text without changing local mode state`() {
+        val store = ComposerAreaStore()
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.TogglePlanMode))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleExecutionMode))
+        store.onEvent(
+            AppEvent.UiIntentPublished(
+                UiIntent.UpdateDocument(TextFieldValue("/new", TextRange(4))),
+            ),
+        )
+
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSlashCommand("new")))
+
+        assertTrue(store.state.value.planEnabled)
+        assertEquals(ComposerMode.APPROVAL, store.state.value.executionMode)
         assertEquals("", store.state.value.document.text)
         assertFalse(store.state.value.slashPopupVisible)
     }

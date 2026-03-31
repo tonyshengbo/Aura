@@ -270,12 +270,7 @@ internal class ComposerAreaStore(
                     is UiIntent.InputChanged -> applyDocumentUpdate(
                         TextFieldValue(intent.value, TextRange(intent.value.length)),
                     )
-                    UiIntent.ToggleExecutionMode -> _state.value = _state.value.copy(
-                        executionMode = when (_state.value.executionMode) {
-                            ComposerMode.AUTO -> ComposerMode.APPROVAL
-                            ComposerMode.APPROVAL -> ComposerMode.AUTO
-                        },
-                    )
+                    UiIntent.ToggleExecutionMode -> _state.value = _state.value.toggleExecutionMode()
                     is UiIntent.SelectMode -> _state.value = _state.value.copy(
                         executionMode = intent.mode,
                     )
@@ -760,22 +755,29 @@ internal class ComposerAreaStore(
 
     private fun applySlashCommand(command: String) {
         val current = _state.value
-        val normalized = command.trim().removePrefix("/")
-        if (normalized != "plan" || !current.planModeAvailable) {
-            dismissSlashPopup()
-            return
-        }
+        val normalized = normalizeSlashCommand(command)
         val nextDocument = replaceSlashQuery(current.document, current.mentionEntries, "") ?: return
-        _state.value = current.nextDocumentState(
+        val nextState = current.nextDocumentState(
             document = nextDocument,
             mentionEntries = current.mentionEntries,
         ).copy(
-            planEnabled = true,
             slashQuery = "",
             slashSuggestions = emptyList(),
             slashPopupVisible = false,
             activeSlashIndex = 0,
         )
+        _state.value = when (normalized) {
+            "plan" -> {
+                if (!current.planModeAvailable) {
+                    nextState
+                } else {
+                    nextState.copy(planEnabled = !current.planEnabled)
+                }
+            }
+            "auto" -> nextState.toggleExecutionMode()
+            "new" -> nextState
+            else -> nextState
+        }
     }
 
     private fun applySlashSkill(name: String) {
@@ -798,30 +800,16 @@ internal class ComposerAreaStore(
 
     private fun buildSlashSuggestions(
         query: String,
-        planModeAvailable: Boolean,
+        state: ComposerAreaState,
     ): List<SlashSuggestionItem> {
-        val normalized = query.trim()
-        val commands = listOf(
-            SlashSuggestionItem.Command(
-                command = "/plan",
-                title = "/plan",
-                description = AuraCodeBundle.message("composer.slash.plan.description"),
-                enabled = planModeAvailable,
-            ),
-        )
         return buildList {
-            addAll(
-                commands.filter { suggestion ->
-                    normalized.isBlank() ||
-                        suggestion.command.removePrefix("/").contains(normalized, ignoreCase = true)
-                },
-            )
+            addAll(buildSlashCommandSuggestions(query, state))
             addAll(
                 availableSkillsProvider()
                     .filter { skill ->
-                        normalized.isBlank() ||
-                            skill.name.contains(normalized, ignoreCase = true) ||
-                            skill.description.contains(normalized, ignoreCase = true)
+                        query.trim().isBlank() ||
+                            skill.name.contains(query.trim(), ignoreCase = true) ||
+                            skill.description.contains(query.trim(), ignoreCase = true)
                     }
                     .map { skill ->
                         SlashSuggestionItem.Skill(
@@ -872,7 +860,7 @@ internal class ComposerAreaStore(
         val slashMatch = findSlashQuery(document, mentionEntries)
         val slashQuery = slashMatch?.query.orEmpty()
         val slashSuggestions = if (slashMatch != null) {
-            buildSlashSuggestions(slashQuery, planModeAvailable)
+            buildSlashSuggestions(slashQuery, this)
         } else {
             emptyList()
         }
@@ -1088,6 +1076,16 @@ private fun ComposerAreaState.clearComposerDraft(clearInteractionQueues: Boolean
         toolUserInputQueue = if (clearInteractionQueues) emptyList() else toolUserInputQueue,
         toolUserInputPrompt = if (clearInteractionQueues) null else toolUserInputPrompt,
         planCompletion = if (clearInteractionQueues) null else planCompletion,
+    )
+}
+
+/** Keeps execution-mode flipping in one place so button and slash toggles cannot drift apart. */
+private fun ComposerAreaState.toggleExecutionMode(): ComposerAreaState {
+    return copy(
+        executionMode = when (executionMode) {
+            ComposerMode.AUTO -> ComposerMode.APPROVAL
+            ComposerMode.APPROVAL -> ComposerMode.AUTO
+        },
     )
 }
 

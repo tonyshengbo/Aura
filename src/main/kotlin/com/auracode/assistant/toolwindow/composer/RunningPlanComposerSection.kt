@@ -86,7 +86,7 @@ internal fun RunningPlanComposerSection(
                     shape = if (expanded) RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp) else containerShape,
                 )
                 .clickable { onIntent(UiIntent.ToggleRunningPlanExpanded) }
-                .padding(horizontal = t.spacing.md - 1.dp, vertical = 6.dp)
+                .padding(horizontal = t.spacing.md - 1.dp, vertical = 2.dp)
                 .defaultMinSize(minHeight = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,

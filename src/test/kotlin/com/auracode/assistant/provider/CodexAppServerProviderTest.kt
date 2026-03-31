@@ -428,7 +428,7 @@ class CodexAppServerProviderTest {
     }
 
     @Test
-    fun `web search lifecycle notifications map to tool call with codex detail text`() {
+    fun `web search lifecycle notifications keep started body empty and summarize completion`() {
         val parser = CodexAppServerProvider.AppServerNotificationParser(
             requestId = "req-1",
             diagnosticLogger = {},
@@ -442,7 +442,13 @@ class CodexAppServerProviderTest {
                     buildJsonObject {
                         put("type", "webSearch")
                         put("id", "ws_1")
-                        put("query", "OpenAI Codex latest version official")
+                        put("query", "")
+                        put(
+                            "action",
+                            buildJsonObject {
+                                put("type", "other")
+                            },
+                        )
                     },
                 )
             },
@@ -455,19 +461,12 @@ class CodexAppServerProviderTest {
                     buildJsonObject {
                         put("type", "webSearch")
                         put("id", "ws_1")
-                        put("query", "OpenAI Codex latest version official")
+                        put("query", "https://openai.com/index/introducing-the-codex-app/")
                         put(
                             "action",
                             buildJsonObject {
-                                put("type", "search")
-                                put("query", "OpenAI Codex latest version official")
-                                put(
-                                    "queries",
-                                    buildJsonArray {
-                                        add(JsonPrimitive("OpenAI Codex latest version official"))
-                                        add(JsonPrimitive("site:github.com openai codex releases latest version"))
-                                    },
-                                )
+                                put("type", "openPage")
+                                put("url", "https://openai.com/index/introducing-the-codex-app/")
                             },
                         )
                     },
@@ -483,9 +482,8 @@ class CodexAppServerProviderTest {
         assertEquals(ItemStatus.SUCCESS, completedItem.status)
         assertEquals("web_search", startedItem.name)
         assertEquals("web_search", completedItem.name)
-        assertEquals("OpenAI Codex latest version official", startedItem.text)
-        assertTrue(completedItem.text.orEmpty().contains("OpenAI Codex latest version official"))
-        assertTrue(completedItem.text.orEmpty().contains("site:github.com openai codex releases latest version"))
+        assertEquals(null, startedItem.text)
+        assertEquals("Opened openai.com", completedItem.text)
     }
 
     @Test
@@ -527,7 +525,7 @@ class CodexAppServerProviderTest {
             .item
         assertEquals(ItemKind.TOOL_CALL, restored.kind)
         assertEquals("web_search", restored.name)
-        assertTrue(restored.text.orEmpty().contains("kotlin compose ime"))
+        assertEquals("kotlin compose ime", restored.text)
     }
 
     @Test

@@ -24,6 +24,7 @@ import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.ToolWindowCoordinator
 import com.auracode.assistant.toolwindow.eventing.ToolWindowEventHub
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.external.ToolWindowExternalRequestBridge
 import com.auracode.assistant.toolwindow.header.HeaderAreaStore
 import com.auracode.assistant.toolwindow.toolinput.ToolUserInputPromptStore
 import com.auracode.assistant.toolwindow.session.SessionTabCoordinator
@@ -89,6 +90,10 @@ class ComposeToolWindowPanel(
     private val rightDrawerStore = RightDrawerAreaStore()
     private val approvalStore = ApprovalAreaStore()
     private val toolUserInputPromptStore = ToolUserInputPromptStore()
+    private val externalRequestBridge = project.getService(ToolWindowExternalRequestBridge::class.java)
+    private val externalRequestRegistration = externalRequestBridge.registerBuildErrorHandler { request ->
+        eventHub.publishUiIntent(UiIntent.SubmitBuildErrorRequest(request))
+    }
 
     private lateinit var sessionTabCoordinator: SessionTabCoordinator
 
@@ -287,6 +292,16 @@ class ComposeToolWindowPanel(
                     }
                 }
             }
+            is UiIntent.SelectSlashCommand -> {
+                when (resolveSlashCommandDispatch(intent.command)) {
+                    SlashCommandDispatch.PUBLISH_ONLY -> eventHub.publishUiIntent(intent)
+                    SlashCommandDispatch.START_NEW_SESSION -> {
+                        // Reuse the existing new-session entrypoint so slash and header behavior stay identical.
+                        eventHub.publishUiIntent(intent)
+                        sessionTabCoordinator.startNewSession()
+                    }
+                }
+            }
             UiIntent.NewSession -> sessionTabCoordinator.startNewSession()
             UiIntent.NewTab -> sessionTabCoordinator.startNewWindowTab()
             is UiIntent.SwitchSession -> sessionTabCoordinator.switchToSession(intent.sessionId)
@@ -295,6 +310,7 @@ class ComposeToolWindowPanel(
     }
 
     override fun dispose() {
+        externalRequestRegistration.dispose()
         coordinator.dispose()
     }
 

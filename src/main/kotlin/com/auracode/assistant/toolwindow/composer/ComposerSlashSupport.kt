@@ -2,6 +2,8 @@ package com.auracode.assistant.toolwindow.composer
 
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import com.auracode.assistant.i18n.AuraCodeBundle
+import com.auracode.assistant.toolwindow.eventing.ComposerMode
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Locale
@@ -35,6 +37,61 @@ internal sealed interface SlashSuggestionItem {
         override val description: String,
     ) : SlashSuggestionItem {
         override val title: String = "\$$name"
+    }
+}
+
+/**
+ * Centralizes slash command metadata so the store can stay focused on state transitions
+ * while command titles, enablement, and descriptions remain easy to evolve.
+ */
+internal enum class ComposerSlashCommand(
+    val token: String,
+) {
+    PLAN("/plan"),
+    AUTO("/auto"),
+    NEW("/new"),
+}
+
+internal fun normalizeSlashCommand(command: String): String = command.trim().removePrefix("/")
+
+internal fun buildSlashCommandSuggestions(
+    query: String,
+    state: ComposerAreaState,
+): List<SlashSuggestionItem.Command> {
+    val normalizedQuery = query.trim()
+    return ComposerSlashCommand.entries
+        .map { command -> command.toSuggestion(state) }
+        .filter { suggestion ->
+            normalizedQuery.isBlank() || suggestion.command.removePrefix("/").contains(normalizedQuery, ignoreCase = true)
+        }
+}
+
+private fun ComposerSlashCommand.toSuggestion(state: ComposerAreaState): SlashSuggestionItem.Command {
+    return when (this) {
+        ComposerSlashCommand.PLAN -> SlashSuggestionItem.Command(
+            command = token,
+            title = token,
+            description = if (state.planEnabled) {
+                AuraCodeBundle.message("composer.slash.plan.disable")
+            } else {
+                AuraCodeBundle.message("composer.slash.plan.enable")
+            },
+            enabled = state.planModeAvailable,
+        )
+        ComposerSlashCommand.AUTO -> SlashSuggestionItem.Command(
+            command = token,
+            title = token,
+            description = if (state.executionMode == ComposerMode.AUTO) {
+                AuraCodeBundle.message("composer.slash.auto.disable")
+            } else {
+                AuraCodeBundle.message("composer.slash.auto.enable")
+            },
+        )
+        ComposerSlashCommand.NEW -> SlashSuggestionItem.Command(
+            command = token,
+            title = token,
+            description = AuraCodeBundle.message("composer.slash.new.description"),
+        )
     }
 }
 

@@ -4,7 +4,7 @@ For Chinese documentation, see: [README.zh.md](README.zh.md)
 
 ## Overview
 
-Aura Code is an IntelliJ IDEA plugin powered by the Aura Code runtime. It provides a native chat tool window inside IDEA, keeps project-local conversation history, and reuses the stored session `thread_id` for multi-turn continuation.
+Aura Code is an IntelliJ IDEA plugin powered by the local Codex runtime. It provides a native chat tool window inside IDEA, keeps project-local conversation history, and reuses the stored session `thread_id` for multi-turn continuation.
 
 ## Current Features
 
@@ -33,12 +33,12 @@ Aura Code is an IntelliJ IDEA plugin powered by the Aura Code runtime. It provid
 ```
 2. Find the ZIP in `build/distributions/`.
 3. Install ZIP in IntelliJ IDEA.
-4. Configure the Aura Code runtime path in `Settings -> Tools -> Aura Code` if the executable is not already on `PATH`.
+4. Configure the Codex runtime path in `Settings -> Tools -> Aura Code` if the executable is not already on `PATH`.
 
 ## Usage
 
 1. Open `View -> Tool Windows -> Aura Code`
-2. Configure the local Aura Code runtime path if needed
+2. Configure the local Codex runtime path if needed
 3. Enter a prompt and send
 4. Optionally add context files or attachments
 5. Continue in the same session to reuse native conversation state
@@ -67,10 +67,10 @@ Check:
 - Local JDK version (must be 17)
 - Network access to JetBrains Maven repositories
 
-### 3) Aura Code runtime diagnostics
+### 3) Codex runtime diagnostics
 
 Verify in plugin settings:
-- Aura Code runtime path is correct
+- Codex runtime path is correct
 - `codex exec --help` works in your local environment
 - The CLI account/session is already authenticated outside the plugin
 

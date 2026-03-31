@@ -28,4 +28,14 @@ class ToolWindowUiTextTest {
         assertEquals("Auto", ToolWindowUiText.selectionChipLabel("Approvals: Auto"))
         assertEquals("Auto", ToolWindowUiText.selectionChipLabel("Auto"))
     }
+
+    @Test
+    fun `settings environment copy reflects codex runtime branding`() {
+        assertEquals("Codex Runtime Path", AuraCodeBundle.message("settings.codexPath.label"))
+        assertEquals(
+            "Path to the local Codex runtime executable used for requests and session resume.",
+            AuraCodeBundle.message("settings.codexPath.hint"),
+        )
+        assertEquals("Codex App Server", AuraCodeBundle.message("settings.environment.appServer"))
+    }
 }

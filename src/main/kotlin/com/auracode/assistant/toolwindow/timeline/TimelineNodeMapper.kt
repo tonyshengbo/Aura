@@ -259,11 +259,22 @@ internal object TimelineNodeMapper {
     private fun UnifiedItem.titleText(): String = titleTextOrNull().orEmpty()
 
     private fun UnifiedItem.bodyText(): String {
-        return listOfNotNull(
+        val content = listOfNotNull(
             text?.takeIf { it.isNotBlank() },
             command?.takeIf { it.isNotBlank() },
             filePath?.takeIf { it.isNotBlank() },
-        ).joinToString("\n").ifBlank { id }
+        ).joinToString("\n")
+        if (content.isNotBlank()) {
+            return content
+        }
+
+        // Web search and other tool-call activities can start without user-facing detail.
+        // Falling back to opaque ids leaks transport-level noise into the timeline.
+        if (kind == ItemKind.TOOL_CALL) {
+            return ""
+        }
+
+        return id
     }
 
     internal fun parseFileChanges(body: String): List<TimelineFileChange> {

@@ -781,6 +781,40 @@ class ComposerAreaStoreTest {
     }
 
     @Test
+    fun `conversation reset preserves configuration but restores default mode flags`() {
+        val store = ComposerAreaStore()
+        val reviewer = SavedAgentDefinition(
+            id = "agent-1",
+            name = "Reviewer",
+            prompt = "Review the answer before replying.",
+        )
+
+        store.onEvent(
+            AppEvent.SettingsSnapshotUpdated(
+                codexCliPath = "codex",
+                languageMode = com.auracode.assistant.settings.UiLanguageMode.FOLLOW_IDE,
+                themeMode = com.auracode.assistant.settings.UiThemeMode.FOLLOW_IDE,
+                autoContextEnabled = true,
+                savedAgents = listOf(reviewer),
+                selectedAgentIds = listOf("agent-1"),
+                customModelIds = listOf("gpt-4.1-custom"),
+                selectedModel = "gpt-4.1-custom",
+                selectedReasoning = "high",
+            ),
+        )
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.TogglePlanMode))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleExecutionMode))
+        store.onEvent(AppEvent.ConversationReset)
+
+        assertEquals("gpt-4.1-custom", store.state.value.selectedModel)
+        assertEquals(com.auracode.assistant.toolwindow.eventing.ComposerReasoning.HIGH, store.state.value.selectedReasoning)
+        assertEquals(listOf("agent-1"), store.state.value.agentEntries.map { it.id })
+        assertTrue(store.state.value.autoContextEnabled)
+        assertFalse(store.state.value.planEnabled)
+        assertEquals(ComposerMode.AUTO, store.state.value.executionMode)
+    }
+
+    @Test
     fun `custom model add state edits and cancels cleanly`() {
         val store = ComposerAreaStore()
 

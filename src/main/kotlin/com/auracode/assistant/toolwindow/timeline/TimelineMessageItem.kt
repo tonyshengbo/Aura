@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.auracode.assistant.model.MessageRole
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
+import com.auracode.assistant.toolwindow.shared.rememberAttachmentPreviewBitmap
 
 @Composable
 internal fun TimelineMessageItem(
@@ -50,12 +51,17 @@ internal fun TimelineMessageItem(
                     .background(palette.userBubbleBg, RoundedCornerShape(t.spacing.sm + t.spacing.xs))
                     .padding(horizontal = t.spacing.md, vertical = t.spacing.xs + t.spacing.xs),
             ) {
-                TimelineMessageContent(
-                    node = node,
+                TimelineCollapsibleMessageContent(
+                    messageId = node.id,
                     palette = palette,
-                    onPreviewAttachment = onPreviewAttachment,
-                    onOpenMarkdownFilePath = onOpenMarkdownFilePath,
-                )
+                ) {
+                    TimelineMessageContent(
+                        node = node,
+                        palette = palette,
+                        onPreviewAttachment = onPreviewAttachment,
+                        onOpenMarkdownFilePath = onOpenMarkdownFilePath,
+                    )
+                }
             }
         }
     } else {
@@ -144,7 +150,7 @@ private fun TimelineAttachmentCard(
 ) {
     val t = assistantUiTokens()
     val bitmap = if (attachment.kind == TimelineAttachmentKind.IMAGE) {
-        rememberTimelineAttachmentBitmap(attachment.assetPath)
+        rememberAttachmentPreviewBitmap(attachment.assetPath)
     } else {
         null
     }

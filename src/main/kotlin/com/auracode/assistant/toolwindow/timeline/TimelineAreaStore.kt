@@ -111,6 +111,7 @@ internal class TimelineAreaStore {
             val wasRunning = previousNode?.status == ItemStatus.RUNNING
             when {
                 previousNode == null && shouldAutoExpandOnArrival(node, isRunning) -> expanded = expanded + node.id
+                shouldAutoExpandAfterContentArrives(previousNode, node, isRunning) -> expanded = expanded + node.id
                 wasRunning && shouldAutoCollapseOnCompletion(node, isRunning) -> expanded = expanded - node.id
             }
         }
@@ -121,7 +122,21 @@ internal class TimelineAreaStore {
     }
 
     private fun shouldAutoExpandOnArrival(node: TimelineNode, isRunning: Boolean): Boolean {
-        return isRunning && node !is TimelineNode.FileChangeNode
+        return isRunning && node !is TimelineNode.FileChangeNode && node.hasAutoExpandableContent()
+    }
+
+    private fun shouldAutoExpandAfterContentArrives(
+        previousNode: TimelineNode?,
+        node: TimelineNode,
+        isRunning: Boolean,
+    ): Boolean {
+        if (!isRunning || node is TimelineNode.FileChangeNode) {
+            return false
+        }
+        if (previousNode == null) {
+            return false
+        }
+        return !previousNode.hasAutoExpandableContent() && node.hasAutoExpandableContent()
     }
 
     private fun shouldAutoCollapseOnCompletion(node: TimelineNode, isRunning: Boolean): Boolean {
@@ -130,5 +145,17 @@ internal class TimelineAreaStore {
 
     private fun shouldExpandByDefault(node: TimelineNode, previousNode: TimelineNode?): Boolean {
         return previousNode == null && node is TimelineNode.PlanNode
+    }
+}
+
+/**
+ * Keeps streaming process nodes collapsed until they have meaningful body content to show.
+ */
+private fun TimelineNode.hasAutoExpandableContent(): Boolean {
+    return when (this) {
+        is TimelineNode.ToolCallNode -> body.isNotBlank()
+        is TimelineNode.CommandNode -> body.isNotBlank()
+        is TimelineNode.FileChangeNode -> changes.isNotEmpty()
+        else -> false
     }
 }

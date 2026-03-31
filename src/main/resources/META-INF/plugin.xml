@@ -39,5 +39,11 @@
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl K"/>
             <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta K"/>
         </action>
+        <action id="com.auracode.assistant.AskAuraBuildProblem"
+                class="com.auracode.assistant.actions.AskAuraBuildProblemAction"
+                text="%action.ask.aura.build.problem.text"
+                description="%action.ask.aura.build.problem.description">
+            <add-to-group group-id="ProblemsView.ToolWindow.TreePopup" anchor="before" relative-to-action="ProblemsView.CopyProblemDescription"/>
+        </action>
     </actions>
 </idea-plugin>

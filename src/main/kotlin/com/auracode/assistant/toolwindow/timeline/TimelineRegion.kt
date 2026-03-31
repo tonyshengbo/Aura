@@ -4,7 +4,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,11 +21,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
-import androidx.compose.material.Text
-import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -38,16 +34,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.shared.AttachmentPreviewOverlay
+import com.auracode.assistant.toolwindow.shared.AttachmentPreviewPayload
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
-import java.io.FileInputStream
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -307,9 +301,14 @@ internal fun TimelineRegion(
         hadProgrammaticScroll = resolution.hadProgrammaticScroll
     }
 
-    TimelineAttachmentPreviewDialog(
-        attachment = previewAttachment,
+    AttachmentPreviewOverlay(
         palette = p,
+        preview = previewAttachment?.let { attachment ->
+            AttachmentPreviewPayload(
+                assetPath = attachment.assetPath,
+                isImage = attachment.kind == TimelineAttachmentKind.IMAGE,
+            )
+        },
         onDismiss = { previewAttachment = null },
     )
 
@@ -512,58 +511,5 @@ private fun TimelineQuickScrollButton(
                 modifier = Modifier.size(t.controls.iconMd),
             )
         }
-    }
-}
-
-@Composable
-private fun TimelineAttachmentPreviewDialog(
-    attachment: TimelineMessageAttachment?,
-    palette: DesignPalette,
-    onDismiss: () -> Unit,
-) {
-    val t = assistantUiTokens()
-    attachment ?: return
-    val bitmap = rememberTimelineAttachmentBitmap(attachment.assetPath)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(attachment.displayName) },
-        text = {
-            Box(
-                modifier = Modifier
-                    .size(420.dp)
-                    .background(palette.topBarBg, RoundedCornerShape(t.spacing.sm)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (attachment.kind == TimelineAttachmentKind.IMAGE && bitmap != null) {
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = null,
-                        modifier = Modifier.size(400.dp),
-                        contentScale = ContentScale.Fit,
-                    )
-                } else {
-                    Icon(
-                        painter = painterResource("/icons/attach-file.svg"),
-                        contentDescription = null,
-                        tint = palette.textMuted,
-                        modifier = Modifier.size(48.dp),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(AuraCodeBundle.message("common.close"))
-            }
-        },
-    )
-}
-
-@Composable
-internal fun rememberTimelineAttachmentBitmap(path: String): ImageBitmap? {
-    return remember(path) {
-        runCatching {
-            FileInputStream(path).use { loadImageBitmap(it) }
-        }.getOrNull()
     }
 }

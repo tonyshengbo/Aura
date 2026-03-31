@@ -335,6 +335,25 @@ class TimelineNodeMapperTest {
     }
 
     @Test
+    fun `empty web search tool body does not fall back to item id`() {
+        val runningMutation = TimelineNodeMapper.fromUnifiedEvent(
+            UnifiedEvent.ItemUpdated(
+                UnifiedItem(
+                    id = "ws_opaque_id",
+                    kind = ItemKind.TOOL_CALL,
+                    status = ItemStatus.RUNNING,
+                    name = "web_search",
+                    text = null,
+                ),
+            ),
+        )
+
+        val runningTool = assertIs<TimelineMutation.UpsertToolCall>(runningMutation)
+        assertEquals("Searching the web", runningTool.title)
+        assertEquals("", runningTool.body)
+    }
+
+    @Test
     fun `unknown activity keeps raw type name without humanization`() {
         val mutation = TimelineNodeMapper.fromUnifiedEvent(
             UnifiedEvent.ItemUpdated(

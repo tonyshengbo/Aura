@@ -14,25 +14,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.AlertDialog
 import androidx.compose.material.Icon
-import androidx.compose.material.Text
-import androidx.compose.material.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.loadImageBitmap
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.shared.AttachmentPreviewOverlay
+import com.auracode.assistant.toolwindow.shared.AttachmentPreviewPayload
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
-import java.io.FileInputStream
+import com.auracode.assistant.toolwindow.shared.rememberAttachmentPreviewBitmap
 
 @Composable
 internal fun ComposerAttachmentPreviewDialog(
@@ -40,47 +36,14 @@ internal fun ComposerAttachmentPreviewDialog(
     state: ComposerAreaState,
     onIntent: (UiIntent) -> Unit,
 ) {
-    val t = assistantUiTokens()
     val previewAttachment = state.attachments.firstOrNull { it.id == state.previewAttachmentId } ?: return
-    val bitmap = rememberAttachmentBitmap(previewAttachment.path)
-
-    AlertDialog(
-        onDismissRequest = { onIntent(UiIntent.CloseAttachmentPreview) },
-        title = { Text(previewAttachment.displayName) },
-        text = {
-            Box(
-                modifier = Modifier
-                    .size(420.dp)
-                    .background(p.topBarBg, RoundedCornerShape(t.spacing.sm)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (previewAttachment.kind == AttachmentKind.IMAGE && bitmap != null) {
-                    Image(
-                        bitmap = bitmap,
-                        contentDescription = null,
-                        modifier = Modifier.size(400.dp),
-                        contentScale = ContentScale.Fit,
-                    )
-                } else {
-                    Icon(
-                        painter = painterResource("/icons/attach-file.svg"),
-                        contentDescription = null,
-                        tint = p.textMuted,
-                        modifier = Modifier.size(48.dp),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onIntent(UiIntent.CloseAttachmentPreview) }) {
-                Text(AuraCodeBundle.message("common.close"))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { onIntent(UiIntent.RemoveAttachment(previewAttachment.id)) }) {
-                Text(AuraCodeBundle.message("common.delete"))
-            }
-        },
+    AttachmentPreviewOverlay(
+        palette = p,
+        preview = AttachmentPreviewPayload(
+            assetPath = previewAttachment.path,
+            isImage = previewAttachment.kind == AttachmentKind.IMAGE,
+        ),
+        onDismiss = { onIntent(UiIntent.CloseAttachmentPreview) },
     )
 }
 
@@ -114,7 +77,7 @@ private fun AttachmentCard(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    val bitmap = rememberAttachmentBitmap(attachment.path)
+    val bitmap = rememberAttachmentPreviewBitmap(attachment.path)
     Box(
         modifier = Modifier
             .size(58.dp)
@@ -161,14 +124,5 @@ private fun AttachmentCard(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun rememberAttachmentBitmap(path: String): ImageBitmap? {
-    return remember(path) {
-        runCatching {
-            FileInputStream(path).use(::loadImageBitmap)
-        }.getOrNull()
     }
 }
