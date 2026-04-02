@@ -7,6 +7,13 @@ import kotlin.test.assertTrue
 
 class AttachmentPreviewOverlayTest {
     @Test
+    fun `image preview only preserves clicks on image content`() {
+        assertFalse(shouldDismissAttachmentPreview(AttachmentPreviewClickTarget.PREVIEW_CONTENT))
+        assertTrue(shouldDismissAttachmentPreview(AttachmentPreviewClickTarget.CONTENT_PADDING))
+        assertTrue(shouldDismissAttachmentPreview(AttachmentPreviewClickTarget.SCRIM))
+    }
+
+    @Test
     fun `image attachments use image-first preview presentation`() {
         val presentation = attachmentPreviewPresentation(isImage = true)
 

@@ -9,6 +9,12 @@ import git4idea.commands.GitLineHandler
 
 @Service(Service.Level.PROJECT)
 class GitContextProvider(private val project: Project) {
+    fun getCurrentBranchName(): String? {
+        val repoManager = GitRepositoryManager.getInstance(project)
+        val repo = repoManager.repositories.firstOrNull() ?: return null
+        return repo.currentBranch?.name
+    }
+
     fun getUncommittedChanges(): String? {
         val repoManager = GitRepositoryManager.getInstance(project)
         val repo = repoManager.repositories.firstOrNull() ?: return null

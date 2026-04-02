@@ -3,6 +3,7 @@ package com.auracode.assistant.toolwindow.eventing
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.auracode.assistant.integration.build.BuildErrorAuraRequest
+import com.auracode.assistant.integration.ide.IdeExternalRequest
 import com.auracode.assistant.model.AgentApprovalMode
 import com.auracode.assistant.model.AgentCollaborationMode
 import com.auracode.assistant.model.ChatMessage
@@ -228,7 +229,8 @@ internal class ToolWindowCoordinator(
             }
 
             UiIntent.SendPrompt -> submitPromptIfAllowed()
-            is UiIntent.SubmitBuildErrorRequest -> submitBuildErrorRequest(intent.request)
+            is UiIntent.SubmitBuildErrorRequest -> submitExternalRequest(intent.request.toIdeExternalRequest())
+            is UiIntent.SubmitExternalRequest -> submitExternalRequest(intent.request)
             UiIntent.CancelRun -> cancelPromptRun()
             is UiIntent.RemovePendingSubmission -> removePendingSubmission(intent.id)
             is UiIntent.DeleteSession -> deleteSession(intent.sessionId)
@@ -1174,15 +1176,15 @@ internal class ToolWindowCoordinator(
     }
 
     /**
-     * Routes build-error requests through the same submission pipeline as composer prompts.
+     * Routes IDE-originated requests through the same submission pipeline as composer prompts.
      */
-    private fun submitBuildErrorRequest(request: BuildErrorAuraRequest) {
+    private fun submitExternalRequest(request: IdeExternalRequest) {
         composerStore.onEvent(
             AppEvent.UiIntentPublished(
                 UiIntent.UpdateDocument(TextFieldValue(request.prompt, TextRange(request.prompt.length))),
             ),
         )
-        val submission = buildBuildErrorSubmission(request) ?: return
+        val submission = buildExternalSubmission(request)
         if (composerStore.state.value.sessionIsRunning || timelineStore.state.value.isRunning) {
             enqueuePendingSubmission(submission)
         } else {
@@ -1310,15 +1312,15 @@ internal class ToolWindowCoordinator(
     }
 
     /**
-     * Build-error submissions intentionally avoid auto-attaching files in the first version.
+     * IDE entrypoints may supply their own explicit context files, while still reusing the active composer settings.
      */
-    private fun buildBuildErrorSubmission(request: BuildErrorAuraRequest): PendingComposerSubmission {
+    private fun buildExternalSubmission(request: IdeExternalRequest): PendingComposerSubmission {
         val composerState = composerStore.state.value
         return PendingComposerSubmission(
-            id = "build-error-${System.currentTimeMillis()}-${pendingSubmissionQueue(activeSessionId()).size}",
+            id = "ide-request-${System.currentTimeMillis()}-${pendingSubmissionQueue(activeSessionId()).size}",
             prompt = request.prompt,
             systemInstructions = composerState.serializedSystemInstructions(),
-            contextFiles = emptyList(),
+            contextFiles = request.contextFiles,
             imageAttachments = emptyList(),
             fileAttachments = emptyList(),
             stagedAttachments = emptyList(),

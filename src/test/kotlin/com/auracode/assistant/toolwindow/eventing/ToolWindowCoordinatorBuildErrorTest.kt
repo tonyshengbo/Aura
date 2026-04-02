@@ -2,6 +2,9 @@ package com.auracode.assistant.toolwindow.eventing
 
 import com.auracode.assistant.integration.build.BuildErrorAuraRequest
 import com.auracode.assistant.integration.build.BuildErrorSnapshot
+import com.auracode.assistant.integration.ide.IdeExternalRequest
+import com.auracode.assistant.integration.ide.IdeRequestSource
+import com.auracode.assistant.model.ContextFile
 import com.auracode.assistant.model.AgentRequest
 import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.protocol.UnifiedEvent
@@ -78,6 +81,36 @@ class ToolWindowCoordinatorBuildErrorTest {
         harness.provider.completeTurn("turn-1")
         harness.waitUntil { harness.provider.requests.size == 2 }
         assertEquals("Analyze this queued build error", harness.provider.requests.last().prompt)
+
+        harness.dispose()
+    }
+
+    @Test
+    fun `external request forwards explicit context files to provider`() {
+        val harness = CoordinatorHarness()
+
+        harness.eventHub.publishUiIntent(
+            UiIntent.SubmitExternalRequest(
+                IdeExternalRequest(
+                    source = IdeRequestSource.EDITOR_SELECTION,
+                    title = "Explain Selected Code",
+                    prompt = "Explain this selection",
+                    contextFiles = listOf(
+                        ContextFile(
+                            path = "/src/Main.kt:8-12",
+                            content = "fun answer() = 42",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        harness.waitUntil { harness.provider.requests.isNotEmpty() }
+        val request = harness.provider.requests.single()
+        assertEquals("Explain this selection", request.prompt)
+        assertEquals(1, request.contextFiles.size)
+        assertEquals("/src/Main.kt:8-12", request.contextFiles.single().path)
+        assertEquals("fun answer() = 42", request.contextFiles.single().content)
 
         harness.dispose()
     }

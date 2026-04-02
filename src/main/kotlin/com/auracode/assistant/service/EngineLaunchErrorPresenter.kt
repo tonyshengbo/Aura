@@ -22,7 +22,7 @@ internal class EngineLaunchErrorPresenter(
 
         val engineName = registry.engine(engineId)?.displayName?.trim().orEmpty().ifBlank { engineId }
         val pathHint = "Install the CLI for this engine first, or configure a valid executable path in Settings."
-        return "The selected engine is unavailable because its CLI or executable could not be found. $pathHint Current engine: $engineName"
+        return "The selected e ngine is unavailable because its CLI or executable could not be found. $pathHint Current engine: $engineName"
     }
 
     private fun looksLikeMissingExecutable(message: String): Boolean {

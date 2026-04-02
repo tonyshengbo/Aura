@@ -97,8 +97,8 @@ class ComposeToolWindowPanel(
     private val toolUserInputPromptStore = ToolUserInputPromptStore()
     private val sessionAttentionStore = SessionAttentionStore()
     private val externalRequestBridge = project.getService(ToolWindowExternalRequestBridge::class.java)
-    private val externalRequestRegistration = externalRequestBridge.registerBuildErrorHandler { request ->
-        eventHub.publishUiIntent(UiIntent.SubmitBuildErrorRequest(request))
+    private val externalRequestRegistration = externalRequestBridge.registerHandler { request ->
+        eventHub.publishUiIntent(UiIntent.SubmitExternalRequest(request))
     }
 
     private lateinit var sessionTabCoordinator: SessionTabCoordinator

@@ -4,6 +4,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import com.auracode.assistant.conversation.ConversationCapabilities
 import com.auracode.assistant.conversation.ConversationSummary
 import com.auracode.assistant.integration.build.BuildErrorAuraRequest
+import com.auracode.assistant.integration.ide.IdeExternalRequest
 import com.auracode.assistant.model.EngineEvent
 import com.auracode.assistant.protocol.UnifiedEvent
 import com.auracode.assistant.service.AgentChatService
@@ -54,6 +55,7 @@ internal sealed interface UiIntent {
     data class UpdateDocument(val value: TextFieldValue) : UiIntent
     data class InputChanged(val value: String) : UiIntent
     data class SubmitBuildErrorRequest(val request: BuildErrorAuraRequest) : UiIntent
+    data class SubmitExternalRequest(val request: IdeExternalRequest) : UiIntent
     data object SendPrompt : UiIntent
     data object CancelRun : UiIntent
     data class RemovePendingSubmission(val id: String) : UiIntent
