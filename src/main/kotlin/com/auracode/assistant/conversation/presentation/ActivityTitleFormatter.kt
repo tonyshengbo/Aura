@@ -190,7 +190,7 @@ internal object ActivityTitleFormatter {
 
     private fun summarizeFileRead(command: String): TitlePresentation? {
         val subCommands = command
-            .split("|", "&&", "||", ";")
+            .splitShellCommandSegments()
             .map { it.trim() }
             .filter { it.isNotBlank() }
         val readPath = subCommands
@@ -216,7 +216,7 @@ internal object ActivityTitleFormatter {
     private fun summarizeFileWrite(command: String): TitlePresentation? {
         val trimmed = command.trim()
         val subCommands = trimmed
-            .split("|", "&&", "||", ";")
+            .splitShellCommandSegments()
             .map { it.trim() }
             .filter { it.isNotBlank() }
         subCommands
@@ -392,7 +392,7 @@ internal object ActivityTitleFormatter {
         val candidates = command
             .replace("{", " ")
             .replace("}", " ")
-            .split("&&", ";", "||")
+            .splitShellCommandSegments(splitPipes = false)
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .map { it.removeSuffix("|| true").removeSuffix("||true").trim() }
@@ -492,10 +492,188 @@ internal object ActivityTitleFormatter {
     }
 
     private fun String.tokenizeShellLike(): List<String> {
-        return trim()
-            .split(Regex("\\s+"))
-            .map { it.trim('\'', '"') }
-            .filter { it.isNotBlank() }
+        return parseShellWords().repairUnquotedReadPath()
+    }
+
+    private fun String.splitShellCommandSegments(splitPipes: Boolean = true): List<String> {
+        val segments = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var index = 0
+
+        while (index < length) {
+            val char = this[index]
+            if (char == '\\' && quote != '\'') {
+                current.append(char)
+                val next = getOrNull(index + 1)
+                if (next != null) {
+                    current.append(next)
+                    index += 2
+                    continue
+                }
+                index += 1
+                continue
+            }
+
+            when {
+                quote != null -> {
+                    if (char == quote) quote = null
+                    current.append(char)
+                    index += 1
+                }
+
+                char == '\'' || char == '"' -> {
+                    quote = char
+                    current.append(char)
+                    index += 1
+                }
+
+                char == ';' || char == '|' && (splitPipes || getOrNull(index + 1) == '|') -> {
+                    segments += current.toString()
+                    current.clear()
+                    if (char == '|' && getOrNull(index + 1) == '|') {
+                        index += 2
+                    } else {
+                        index += 1
+                    }
+                }
+
+                char == '&' && getOrNull(index + 1) == '&' -> {
+                    segments += current.toString()
+                    current.clear()
+                    index += 2
+                }
+
+                else -> {
+                    current.append(char)
+                    index += 1
+                }
+            }
+        }
+
+        segments += current.toString()
+        return segments
+    }
+
+    private fun String.parseShellWords(): List<String> {
+        val words = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var wordStarted = false
+        var index = 0
+
+        val source = trim()
+        while (index < source.length) {
+            val char = source[index]
+            if (char == '\\' && quote != '\'') {
+                val next = source.getOrNull(index + 1)
+                if (next != null && (next.isWhitespace() || next == '\'' || next == '"' || next == '\\')) {
+                    current.append(next)
+                    wordStarted = true
+                    index += 2
+                    continue
+                }
+                current.append(char)
+                wordStarted = true
+                index += 1
+                continue
+            }
+
+            when {
+                quote != null -> {
+                    if (char == quote) {
+                        quote = null
+                    } else {
+                        current.append(char)
+                        wordStarted = true
+                    }
+                }
+
+                char == '\'' || char == '"' -> {
+                    quote = char
+                    wordStarted = true
+                }
+
+                char.isWhitespace() -> {
+                    if (wordStarted) {
+                        words += current.toString()
+                        current.clear()
+                        wordStarted = false
+                    }
+                }
+
+                else -> {
+                    current.append(char)
+                    wordStarted = true
+                }
+            }
+            index += 1
+        }
+
+        if (wordStarted) {
+            words += current.toString()
+        }
+        return words
+    }
+
+    private fun List<String>.repairUnquotedReadPath(): List<String> {
+        if (size <= 2) return this
+        val executable = first().commandLeaf()
+        if (executable !in setOf("cat", "type", "head", "tail", "nl")) return this
+
+        val firstPathIndex = indexOfFirstLikelyAbsoluteReadPath(startIndex = 1)
+        if (firstPathIndex == -1) return this
+
+        val merged = mutableListOf<String>()
+        merged += take(firstPathIndex)
+        val pathParts = mutableListOf(this[firstPathIndex])
+        var nextIndex = firstPathIndex + 1
+        while (nextIndex < size && this[nextIndex].isLikelyUnquotedPathContinuation()) {
+            pathParts += this[nextIndex]
+            nextIndex += 1
+        }
+        if (pathParts.size <= 1) return this
+
+        merged += pathParts.joinToString(" ")
+        merged += drop(nextIndex)
+        return merged
+    }
+
+    private fun List<String>.indexOfFirstLikelyAbsoluteReadPath(startIndex: Int): Int {
+        for (index in startIndex until size) {
+            val token = this[index]
+            if (
+                token.isLikelyReadablePathToken() &&
+                token.isAbsoluteFilePath() &&
+                token.endsWithIncompletePathSegment()
+            ) return index
+        }
+        return -1
+    }
+
+    private fun String.endsWithIncompletePathSegment(): Boolean {
+        val leaf = trim().trim('"', '\'').replace('\\', '/').substringAfterLast('/')
+        return leaf.isNotBlank() &&
+            !leaf.contains('.') &&
+            !leaf.isLikelyExtensionlessFileName()
+    }
+
+    private fun String.isLikelyExtensionlessFileName(): Boolean {
+        val normalized = trim()
+        if (normalized.isBlank()) return false
+        val commonNames = setOf("README", "LICENSE", "Makefile", "Dockerfile", "Gemfile", "Rakefile")
+        if (normalized in commonNames) return true
+        return normalized.any(Char::isLetter) && normalized.all { !it.isLetter() || it.isUpperCase() }
+    }
+
+    private fun String.isLikelyUnquotedPathContinuation(): Boolean {
+        val normalized = trim().trim('"', '\'')
+        if (normalized.isBlank()) return false
+        if (normalized.startsWith("-")) return false
+        if (normalized.contains('*') || normalized.contains('|')) return false
+        if (normalized.isAbsoluteFilePath()) return false
+        if (!normalized.contains('/') && !normalized.contains('\\')) return false
+        return normalized.isLikelyFilePath()
     }
 
     private fun String.isLikelyFilePath(): Boolean {

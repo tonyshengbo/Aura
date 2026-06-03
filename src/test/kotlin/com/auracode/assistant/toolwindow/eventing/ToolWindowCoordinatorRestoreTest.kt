@@ -21,6 +21,8 @@ import com.auracode.assistant.protocol.ProviderFileChange
 import com.auracode.assistant.protocol.ProviderItem
 import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.service.AgentChatService
+import com.auracode.assistant.session.kernel.SessionDomainEvent
+import com.auracode.assistant.session.kernel.SessionFileChange
 import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
 import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
 import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
@@ -78,6 +80,79 @@ class ToolWindowCoordinatorRestoreTest {
         assertEquals(listOf("hello", "world"), state.nodes.filterIsInstance<ConversationActivityItem.MessageNode>().map { it.text })
         assertEquals(0, state.nodes.filterIsInstance<ConversationActivityItem.TurnDurationNode>().size)
         assertFalse(state.isRunning)
+
+        coordinator.dispose()
+        service.dispose()
+    }
+
+    @Test
+    fun `edited files tracked refreshes workspace paths`() {
+        val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
+        val repository = SQLiteChatSessionRepository(createTempDirectory("coordinator-refresh").resolve("chat.db"))
+        val provider = HistoryBackedProvider(
+            historyTurns = mutableListOf(),
+            liveStream = {
+                flow {
+                    emit(
+                        SessionDomainEvent.ThreadStarted(threadId = "thread-1"),
+                    )
+                    emit(
+                        SessionDomainEvent.TurnStarted(
+                            turnId = "turn-1",
+                            threadId = "thread-1",
+                            startedAtMs = 1L,
+                        ),
+                    )
+                    emit(
+                        SessionDomainEvent.EditedFilesTracked(
+                            threadId = "thread-1",
+                            turnId = "turn-1",
+                            changes = listOf(
+                                SessionFileChange(
+                                    path = "/tmp/LiveOnly.kt",
+                                    kind = "create",
+                                    summary = "create /tmp/LiveOnly.kt",
+                                    displayName = "LiveOnly.kt",
+                                ),
+                            ),
+                        ),
+                    )
+                    emit(
+                        SessionDomainEvent.TurnCompleted(
+                            turnId = "turn-1",
+                            outcome = com.auracode.assistant.session.kernel.SessionTurnOutcome.SUCCESS,
+                            completedAtMs = 2L,
+                        ),
+                    )
+                }
+            },
+        )
+        val service = AgentChatService(
+            repository = repository,
+            registry = registry(provider),
+            settings = settings,
+        )
+        val refreshedPaths = mutableListOf<List<String>>()
+        val eventHub = ToolWindowEventHub()
+        val coordinator = ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = eventHub,
+            sessionTabsStore = SessionTabsAreaStore(),
+            executionStatusStore = ExecutionStatusAreaStore(),
+            conversationStore = ConversationAreaStore(),
+            submissionStore = SubmissionAreaStore(),
+            sidePanelStore = SidePanelAreaStore(),
+            refreshWorkspacePaths = { paths -> refreshedPaths += paths },
+            historyPageSize = 10,
+        )
+
+        service.createSession()
+        coordinator.onSessionActivated()
+        eventHub.publishUiIntent(UiIntent.InputChanged("refresh please"))
+        eventHub.publishUiIntent(UiIntent.SendPrompt)
+        waitUntil(timeoutMs = 2_000) { refreshedPaths.isNotEmpty() }
+        assertTrue(refreshedPaths.single().contains("/tmp/LiveOnly.kt"))
 
         coordinator.dispose()
         service.dispose()
