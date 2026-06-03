@@ -12,9 +12,10 @@ internal data class EnvironmentDraftState(
     val codexPathManuallyEdited: Boolean = false,
     val nodePathManuallyEdited: Boolean = false,
 ) {
-    /** Returns true when the visible environment draft differs from persisted settings. */
+    /** Returns true when the user has manually edited a path that differs from persisted settings. */
     val isDirty: Boolean
-        get() = codexCliPath.trim() != savedCodexCliPath.trim() || nodePath.trim() != savedNodePath.trim()
+        get() = (codexPathManuallyEdited && codexCliPath.trim() != savedCodexCliPath.trim())
+            || (nodePathManuallyEdited && nodePath.trim() != savedNodePath.trim())
 
     /** Applies a user edit to the Codex executable path and marks the draft as manual when needed. */
     fun withEditedCodexPath(value: String): EnvironmentDraftState {
@@ -44,8 +45,16 @@ internal data class EnvironmentDraftState(
         val nextSavedNode = nodePath.trim()
         val keepManualCodex = codexPathManuallyEdited && this.codexCliPath.trim() != savedCodexCliPath.trim()
         val keepManualNode = nodePathManuallyEdited && this.nodePath.trim() != savedNodePath.trim()
-        val nextCodexDraft = if (keepManualCodex) this.codexCliPath else nextSavedCodex
-        val nextNodeDraft = if (keepManualNode) this.nodePath else nextSavedNode
+        // draft 被 auto-detect 填充但尚未保存时，持久化值不变则保留 draft，
+        // 避免版本检查触发的 SettingsSnapshotUpdated 用空的持久化值覆盖检测结果。
+        val keepAutoCodex = !keepManualCodex
+            && this.codexCliPath.isNotBlank()
+            && nextSavedCodex == savedCodexCliPath.trim()
+        val keepAutoNode = !keepManualNode
+            && this.nodePath.isNotBlank()
+            && nextSavedNode == savedNodePath.trim()
+        val nextCodexDraft = if (keepManualCodex || keepAutoCodex) this.codexCliPath else nextSavedCodex
+        val nextNodeDraft = if (keepManualNode || keepAutoNode) this.nodePath else nextSavedNode
         return copy(
             codexCliPath = nextCodexDraft,
             nodePath = nextNodeDraft,

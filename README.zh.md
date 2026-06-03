@@ -77,7 +77,7 @@ Aura Code 是一个面向 IntelliJ IDEA 的双引擎 AI 助手：
 启动带插件的沙盒 IDE：
 
 ```bash
-./gradlew runIde
+./gradlew clean runIde
 ```
 
 开发阶段常用命令：

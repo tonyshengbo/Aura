@@ -60,6 +60,7 @@ internal data class SidePanelAreaState(
     val environmentDraft: EnvironmentDraftState = EnvironmentDraftState(),
     val claudeCliPath: String = "claude",
     val savedClaudeCliPath: String = "claude",
+    val claudeCliPathManuallyEdited: Boolean = false,
     val languageMode: UiLanguageMode = UiLanguageMode.FOLLOW_IDE,
     val themeMode: UiThemeMode = UiThemeMode.FOLLOW_IDE,
     val uiScaleMode: UiScaleMode = UiScaleMode.P100,
@@ -118,10 +119,10 @@ internal data class SidePanelAreaState(
     val nodePath: String
         get() = environmentDraft.nodePath
 
-    /** Returns true when the environment draft needs an explicit save action. */
+    /** Returns true when the user has manually edited a runtime path that needs saving. */
     val isEnvironmentSaveVisible: Boolean
         get() = environmentDraft.isDirty ||
-            claudeCliPath.trim() != savedClaudeCliPath.trim()
+            (claudeCliPathManuallyEdited && claudeCliPath.trim() != savedClaudeCliPath.trim())
 
     /**
      * Keeps agent editing modal visibility derived from the existing page mode
@@ -266,6 +267,7 @@ internal class SidePanelAreaStore {
                     is UiIntent.EditSettingsClaudeCliPath -> {
                         _state.value = _state.value.copy(
                             claudeCliPath = event.intent.value,
+                            claudeCliPathManuallyEdited = event.intent.value.trim() != _state.value.savedClaudeCliPath.trim(),
                             claudeRuntimeCheckResult = null,
                         )
                     }
@@ -288,6 +290,7 @@ internal class SidePanelAreaStore {
                                 savedNodePath = current.environmentDraft.savedNodePath,
                             ),
                             claudeCliPath = current.savedClaudeCliPath,
+                            claudeCliPathManuallyEdited = false,
                             environmentCheckResult = null,
                             claudeRuntimeCheckResult = null,
                         )
@@ -446,13 +449,20 @@ internal class SidePanelAreaStore {
             is AppEvent.SettingsSnapshotUpdated -> {
                 val selected = event.savedAgents.firstOrNull { it.id == _state.value.editingAgentId }
                 val fallback = event.savedAgents.firstOrNull()
+                // claudeCliPath 被 auto-detect 填充但尚未保存时，持久化值不变则保留 draft，
+                // 避免版本检查触发的 SettingsSnapshotUpdated 用持久化值覆盖检测结果。
+                val keepAutoClaudePath = _state.value.claudeCliPath.trim() != _state.value.savedClaudeCliPath.trim()
+                    && event.claudeCliPath.trim() == _state.value.savedClaudeCliPath.trim()
                 _state.value = _state.value.copy(
                     environmentDraft = _state.value.environmentDraft.withPersistedPaths(
                         codexCliPath = event.codexCliPath,
                         nodePath = event.nodePath,
                     ),
-                    claudeCliPath = event.claudeCliPath,
+                    claudeCliPath = if (keepAutoClaudePath) _state.value.claudeCliPath else event.claudeCliPath,
                     savedClaudeCliPath = event.claudeCliPath,
+                    // 持久化值变化时（真正保存后），清除手动编辑标记
+                    claudeCliPathManuallyEdited = _state.value.claudeCliPathManuallyEdited
+                        && (if (keepAutoClaudePath) _state.value.claudeCliPath else event.claudeCliPath).trim() != event.claudeCliPath.trim(),
                     languageMode = event.languageMode,
                     themeMode = event.themeMode,
                     uiScaleMode = event.uiScaleMode,
