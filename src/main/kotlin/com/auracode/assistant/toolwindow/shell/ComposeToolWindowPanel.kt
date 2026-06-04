@@ -69,6 +69,67 @@ import java.io.File
 import java.nio.file.Path
 import javax.swing.JPanel
 
+internal data class ConversationFileTarget(
+    val path: String,
+    val line: Int? = null,
+    val column: Int? = null,
+)
+
+/**
+ * 解析 Markdown 链接中的本地文件目标，支持行号和列号指定。
+ *
+ * 支持格式：
+ * - `/abs/path/file.kt` — 纯路径
+ * - `/abs/path/file.kt:42` — 路径+行号（从1开始）
+ * - `/abs/path/file.kt:42:7` — 路径+行号+列号（从1开始）
+ * - Windows: `C:\path\file.kt` 或 `C:/path/file.kt`
+ *
+ * 非本地路径（例如 URI）会原样返回为纯路径目标，不提取行列号。
+ * 空或纯空白输入返回 null。
+ */
+internal fun parseConversationFileTarget(rawPath: String): ConversationFileTarget? {
+    val normalized = rawPath.trim()
+    if (normalized.isBlank()) return null
+
+    validateAndExtractPathTarget(normalized, PATH_WITH_LINE_COLUMN_PATTERN)?.let { (path, line, column) ->
+        return ConversationFileTarget(path = path, line = line, column = column)
+    }
+    validateAndExtractPathTarget(normalized, PATH_WITH_LINE_PATTERN)?.let { (path, line) ->
+        return ConversationFileTarget(path = path, line = line)
+    }
+    return ConversationFileTarget(path = normalized)
+}
+
+/**
+ * 尝试从路径字符串中提取文件路径和行列号。
+ * 返回 Triple(path, line, column)，仅在路径为本地文件系统路径时返回非null。
+ */
+private fun validateAndExtractPathTarget(
+    normalized: String,
+    pattern: Regex,
+): Triple<String, Int?, Int?>? {
+    pattern.matchEntire(normalized)?.let { match ->
+        val path = match.groupValues[1]
+        if (!path.isLocalFilesystemPath()) return null
+
+        return when (match.groupValues.size) {
+            3 -> Triple(path, match.groupValues[2].toIntOrNull(), null)
+            4 -> Triple(path, match.groupValues[2].toIntOrNull(), match.groupValues[3].toIntOrNull())
+            else -> null
+        }
+    }
+    return null
+}
+
+private val PATH_WITH_LINE_COLUMN_PATTERN = Regex("""^(.+):([1-9]\d*):([1-9]\d*)$""")
+private val PATH_WITH_LINE_PATTERN = Regex("""^(.+):([1-9]\d*)$""")
+
+private fun String.isLocalFilesystemPath(): Boolean {
+    return startsWith("/") || WINDOWS_ABSOLUTE_PATH.matches(this)
+}
+
+private val WINDOWS_ABSOLUTE_PATH = Regex("""^[A-Za-z]:[\\/].+""")
+
 class ComposeToolWindowPanel(
     project: Project,
     toolWindow: ToolWindow,
@@ -426,9 +487,17 @@ class ComposeToolWindowPanel(
     ) {
         val app = ApplicationManager.getApplication()
         val action = Runnable {
+            val target = parseConversationFileTarget(path) ?: return@Runnable
             LocalFileSystem.getInstance()
-                .findFileByPath(path)
-                ?.let { OpenFileDescriptor(project, it).navigate(true) }
+                .findFileByPath(target.path)
+                ?.let { file ->
+                    val line = target.line?.let { (it - 1).coerceAtLeast(0) }
+                    val column = target.column?.let { (it - 1).coerceAtLeast(0) } ?: 0
+                    when (line) {
+                        null -> OpenFileDescriptor(project, file)
+                        else -> OpenFileDescriptor(project, file, line, column)
+                    }.navigate(true)
+                }
         }
         if (app.isDispatchThread) {
             action.run()

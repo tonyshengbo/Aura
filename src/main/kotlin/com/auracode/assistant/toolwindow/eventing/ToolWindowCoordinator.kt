@@ -427,7 +427,6 @@ internal class ToolWindowCoordinator(
             is UiIntent.OpenSkillPath -> settingsHandler.openSkillPath(intent.path)
             is UiIntent.RevealSkillPath -> settingsHandler.revealSkillPath(intent.path)
             is UiIntent.UninstallSkill -> settingsHandler.uninstallSkill(intent.name, intent.path)
-            UiIntent.CreateNewMcpDraft -> settingsHandler.loadMcpEditorDraft()
             is UiIntent.SelectMcpServerForEdit -> settingsHandler.loadMcpEditorDraft(intent.name)
             UiIntent.SaveMcpDraft -> settingsHandler.saveMcpDraft()
             is UiIntent.ToggleMcpServerEnabled -> settingsHandler.toggleMcpServerEnabled(intent.name, intent.enabled)

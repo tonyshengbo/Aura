@@ -120,6 +120,65 @@ class ToolWindowCoordinatorMcpTest {
     }
 
     @Test
+    fun `creating new mcp draft keeps default single server template without loading all servers`() {
+        val workingDir = createTempDirectory("coordinator-mcp-new-draft")
+        val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
+        val service = AgentChatService(
+            repository = com.auracode.assistant.persistence.chat.SQLiteChatSessionRepository(workingDir.resolve("chat.db")),
+            registry = registry(),
+            settings = settings,
+        )
+        val eventHub = ToolWindowEventHub()
+        val sidePanelStore = SidePanelAreaStore()
+        val adapter = RecordingMcpAdapter().apply {
+            editorDraft = McpServerDraft(
+                configJson = """
+                    {
+                      "mcpServers": {
+                        "docs": {
+                          "enabled": true,
+                          "command": "npx"
+                        },
+                        "figma": {
+                          "enabled": true,
+                          "url": "https://example.com/mcp"
+                        }
+                      }
+                    }
+                """.trimIndent(),
+            )
+        }
+        val coordinator = ToolWindowCoordinator(
+            chatService = service,
+            settingsService = settings,
+            eventHub = eventHub,
+            sessionTabsStore = SessionTabsAreaStore(),
+            executionStatusStore = ExecutionStatusAreaStore(),
+            conversationStore = ConversationAreaStore(),
+            submissionStore = SubmissionAreaStore(),
+            sidePanelStore = sidePanelStore,
+            approvalStore = ApprovalAreaStore(),
+            mcpAdapterRegistry = McpManagementAdapterRegistry(mapOf("codex" to adapter)),
+        )
+
+        eventHub.publishUiIntent(UiIntent.SelectSettingsSection(com.auracode.assistant.toolwindow.settings.SettingsSection.MCP))
+        eventHub.publishUiIntent(UiIntent.CreateNewMcpDraft)
+
+        waitUntil(timeoutMs = 15_000) {
+            sidePanelStore.state.value.isMcpEditorDialogVisible &&
+                sidePanelStore.state.value.mcpDraft.configJson.contains("\"server-name\"")
+        }
+
+        assertEquals(0, adapter.getEditorDraftCalls)
+        assertTrue(sidePanelStore.state.value.mcpDraft.configJson.contains("\"server-name\""))
+        assertTrue(!sidePanelStore.state.value.mcpDraft.configJson.contains("\"docs\""))
+        assertTrue(!sidePanelStore.state.value.mcpDraft.configJson.contains("\"figma\""))
+
+        coordinator.dispose()
+        service.dispose()
+    }
+
+    @Test
     fun `selecting mcp settings loads configured servers and runtime statuses`() {
         val workingDir = createTempDirectory("coordinator-mcp-load")
         val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
@@ -355,6 +414,8 @@ class ToolWindowCoordinatorMcpTest {
         val enabledUpdates: MutableList<Pair<String, Boolean>> = mutableListOf()
         var listCalls: Int = 0
         var refreshCalls: Int = 0
+        var getEditorDraftCalls: Int = 0
+        var editorDraft: McpServerDraft? = null
         var getEditorDraftFailure: Throwable? = null
 
         override suspend fun listServers(): List<McpServerSummary> {
@@ -363,8 +424,9 @@ class ToolWindowCoordinatorMcpTest {
         }
 
         override suspend fun getEditorDraft(): McpServerDraft {
+            getEditorDraftCalls += 1
             getEditorDraftFailure?.let { throw it }
-            return savedDrafts.lastOrNull() ?: McpServerDraft()
+            return editorDraft ?: savedDrafts.lastOrNull() ?: McpServerDraft()
         }
 
         override suspend fun getServer(name: String): McpServerDraft? {

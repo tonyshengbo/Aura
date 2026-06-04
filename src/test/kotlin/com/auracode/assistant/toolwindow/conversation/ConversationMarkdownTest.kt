@@ -36,6 +36,14 @@ class ConversationMarkdownTest {
             resolveConversationMarkdownFilePath("/Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt#L42"),
         )
         assertEquals(
+            "/Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt:42",
+            resolveConversationMarkdownFilePath("/Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt:42"),
+        )
+        assertEquals(
+            "/Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt:42:7",
+            resolveConversationMarkdownFilePath("/Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt:42:7"),
+        )
+        assertEquals(
             "/Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt",
             resolveConversationMarkdownFilePath("file:///Users/tonysheng/StudioProject/Aura/src/main/kotlin/Main.kt"),
         )
