@@ -3,6 +3,7 @@ package com.auracode.assistant.toolwindow.conversation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.text.SpanStyle
@@ -50,11 +51,11 @@ internal fun ConversationMarkdown(
                     codeText = palette.markdownCodeText,
                     inlineCodeText = palette.markdownCodeText,
                     linkText = palette.linkColor,
-                    codeBackground = palette.markdownCodeBg,
-                    inlineCodeBackground = palette.markdownInlineCodeBg,
+                    codeBackground = Color.Transparent,
+                    inlineCodeBackground = Color.Transparent,
                     dividerColor = palette.markdownDivider.copy(alpha = 0.82f),
                     tableText = palette.timelineCardText,
-                    tableBackground = palette.markdownTableBg,
+                    tableBackground = Color.Transparent,
                 ),
                 typography = markdownTypography(
                     h1 = androidx.compose.material.MaterialTheme.typography.h5.copy(
