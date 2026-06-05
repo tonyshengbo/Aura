@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.auracode.assistant"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 
 repositories {
     google()
@@ -49,11 +49,11 @@ intellijPlatform {
             sinceBuild = "233"
         }
         changeNotes = """
-            <p>Aura Code 1.0.0-beta.4 stabilizes the dual-engine Codex and Claude workspace for IntelliJ IDEA beta distribution.</p>
+            <p>Aura Code 1.0.0 is the first stable release of the dual-engine Codex and Claude workspace for IntelliJ IDEA.</p>
             <ul>
-              <li>Expands Claude runtime workflows with plan mode, tool input, local history replay, diagnostics, and slash-command coverage.</li>
-              <li>Refines multi-tab session execution, running-state synchronization, token usage tracking, and runtime management UX.</li>
-              <li>Packages the current beta line for GitHub prerelease delivery and manual JetBrains Marketplace upload.</li>
+              <li>Unifies Codex and Claude sessions in one native tool window with project-scoped history, multi-tab conversations, and background execution awareness.</li>
+              <li>Includes plan mode, approval prompts, tool user input, file context, edited-file review, Skills, MCP server management, and token usage views.</li>
+              <li>Supports local runtime setup for Codex CLI, Claude CLI, and optional Node paths across stable GitHub Release and Marketplace distribution.</li>
             </ul>
         """.trimIndent()
     }

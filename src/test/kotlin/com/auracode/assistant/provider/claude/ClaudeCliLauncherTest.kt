@@ -170,7 +170,7 @@ class ClaudeCliLauncherTest {
     }
 
     @Test
-    fun `start closes stdin after process launch`() {
+    fun `start keeps stdin open for permission prompt tool responses`() {
         val stdin = TrackingOutputStream()
         val process = FakeProcess(
             input = ByteArrayInputStream(ByteArray(0)),
@@ -201,7 +201,7 @@ class ClaudeCliLauncherTest {
             settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) },
         )
 
-        assertTrue(stdin.closed)
+        assertFalse(stdin.closed)
     }
 
     @Test

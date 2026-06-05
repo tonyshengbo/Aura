@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-06-05
+
+### Added
+
+- First stable Aura Code release for IntelliJ IDEA.
+- Unified Codex and Claude sessions in one native tool window with project-scoped history, multi-tab conversations, and background completion awareness.
+- Plan mode, approval prompts, tool user input, file mentions, attachments, saved agents, slash commands, and edited-file review workflows.
+- Runtime management for Codex CLI, Claude CLI, optional Node paths, local Skills, MCP servers, and token usage history.
+- Chinese, English, Japanese, and Korean UI support with theme and UI scaling controls.
+
+### Changed
+
+- Moved public distribution from beta prerelease wording to stable GitHub Release and Marketplace-ready packaging.
+- Updated plugin metadata and documentation for the 1.0.0 release line.
+
 ## [1.0.0-beta.4] - 2026-05-10
 
 ### Added
