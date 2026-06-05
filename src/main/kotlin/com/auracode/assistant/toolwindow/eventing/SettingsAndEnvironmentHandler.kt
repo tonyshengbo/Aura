@@ -211,11 +211,14 @@ internal class SettingsAndEnvironmentHandler(
     /** Refreshes the Codex CLI version snapshot and publishes the latest UI state. */
     fun refreshCodexCliVersion(force: Boolean = false, announceResult: Boolean = true) {
         val sidePanelState = context.sidePanelStore.state.value
-        val checking = context.codexCliVersionService.snapshot().copy(
-            checkStatus = CodexCliVersionCheckStatus.CHECKING,
-            message = "Checking Codex CLI version...",
-        )
-        context.eventHub.publish(AppEvent.CodexCliVersionSnapshotUpdated(checking))
+        val shouldPublishChecking = force || context.codexCliVersionService.shouldRefresh(force = false)
+        if (shouldPublishChecking) {
+            val checking = context.codexCliVersionService.snapshot().copy(
+                checkStatus = CodexCliVersionCheckStatus.CHECKING,
+                message = "Checking Codex CLI version...",
+            )
+            context.eventHub.publish(AppEvent.CodexCliVersionSnapshotUpdated(checking))
+        }
         context.coroutineLauncher.launch("refreshCodexCliVersion(force=$force)") {
             runCatching {
                 context.codexCliVersionService.refresh(
@@ -292,11 +295,14 @@ internal class SettingsAndEnvironmentHandler(
 
     /** Refreshes the Claude CLI version snapshot and publishes the latest UI state. */
     fun refreshClaudeCliVersion(force: Boolean = false, announceResult: Boolean = true) {
-        val checking = context.claudeCliVersionService.snapshot().copy(
-            checkStatus = ClaudeCliVersionCheckStatus.CHECKING,
-            message = "Checking Claude CLI version...",
-        )
-        context.eventHub.publish(AppEvent.ClaudeCliVersionSnapshotUpdated(checking))
+        val shouldPublishChecking = force || context.claudeCliVersionService.shouldRefresh(force = false)
+        if (shouldPublishChecking) {
+            val checking = context.claudeCliVersionService.snapshot().copy(
+                checkStatus = ClaudeCliVersionCheckStatus.CHECKING,
+                message = "Checking Claude CLI version...",
+            )
+            context.eventHub.publish(AppEvent.ClaudeCliVersionSnapshotUpdated(checking))
+        }
         context.coroutineLauncher.launch("refreshClaudeCliVersion(force=$force)") {
             runCatching {
                 context.claudeCliVersionService.refresh(force = force)
@@ -961,6 +967,7 @@ internal class SettingsAndEnvironmentHandler(
                 val feedbackMessage = "Saved MCP server '$savedName'."
                 context.eventHub.publish(AppEvent.StatusTextUpdated(UiText.raw(feedbackMessage)))
                 context.eventHub.publish(AppEvent.McpFeedbackUpdated(message = feedbackMessage, isError = false))
+                context.eventHub.publishUiIntent(UiIntent.ShowMcpSettingsList)
                 afterSave?.invoke(listOf(savedName))
             }.onFailure { error ->
                 logMcpDiagnostic(
