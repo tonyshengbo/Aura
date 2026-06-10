@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-06-10
+
+### Fixed
+
+- Removed deprecated and scheduled-for-removal IntelliJ Platform API usages reported by JetBrains Marketplace compatibility verification.
+- Avoided bundling IntelliJ-provided Markdown classes in the plugin distribution.
+- Replaced deprecated Compose Desktop resource loading calls used by tool window icons and image previews.
+
 ## [1.0.0] - 2026-06-05
 
 ### Added
