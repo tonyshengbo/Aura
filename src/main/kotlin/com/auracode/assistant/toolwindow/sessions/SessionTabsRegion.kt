@@ -20,7 +20,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import com.auracode.assistant.i18n.AuraCodeBundle
@@ -157,7 +157,7 @@ internal fun SessionTabActionChip(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(iconPath),
+                painter = assistantPainterResource(iconPath),
                 contentDescription = description,
                 tint = if (enabled) p.textSecondary else p.textMuted,
                 modifier = Modifier.size(t.controls.iconLg),

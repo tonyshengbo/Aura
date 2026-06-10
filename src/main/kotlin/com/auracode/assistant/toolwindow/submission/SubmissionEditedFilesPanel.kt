@@ -31,7 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -229,7 +229,7 @@ private fun EditedFilesToolbarAction(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(iconPath),
+                painter = assistantPainterResource(iconPath),
                 contentDescription = tooltip,
                 tint = p.textSecondary,
                 modifier = Modifier.size(14.dp),

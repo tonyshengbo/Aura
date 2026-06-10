@@ -29,7 +29,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.model.MessageRole
@@ -222,7 +222,7 @@ private fun ConversationAttachmentCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource("/icons/document.svg"),
+                    painter = assistantPainterResource("/icons/document.svg"),
                     contentDescription = null,
                     tint = palette.textMuted,
                     modifier = Modifier.size(t.controls.iconLg),

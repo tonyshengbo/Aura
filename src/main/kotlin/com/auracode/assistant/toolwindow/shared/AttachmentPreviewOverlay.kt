@@ -17,8 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.loadImageBitmap
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -126,7 +124,7 @@ internal fun AttachmentPreviewOverlay(
                     )
                 } else {
                     androidx.compose.material.Icon(
-                        painter = painterResource("/icons/attach-file.svg"),
+                        painter = assistantPainterResource("/icons/attach-file.svg"),
                         contentDescription = null,
                         tint = palette.textMuted,
                         modifier = Modifier
@@ -212,7 +210,7 @@ private fun rememberAttachmentPreviewImageSize(
 internal fun rememberAttachmentPreviewBitmap(path: String): ImageBitmap? {
     return remember(path) {
         runCatching {
-            FileInputStream(path).use(::loadImageBitmap)
+            FileInputStream(path).use(::loadAssistantImageBitmap)
         }.getOrNull()
     }
 }
@@ -239,7 +237,7 @@ private fun AttachmentPreviewCloseButton(
         contentAlignment = Alignment.Center,
     ) {
         androidx.compose.material.Icon(
-            painter = painterResource("/icons/close.svg"),
+            painter = assistantPainterResource("/icons/close.svg"),
             contentDescription = AuraCodeBundle.message("common.close"),
             tint = palette.textPrimary,
             modifier = Modifier.size(t.controls.iconLg),

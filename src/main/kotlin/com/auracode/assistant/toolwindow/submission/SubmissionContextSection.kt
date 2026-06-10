@@ -19,7 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
@@ -56,7 +56,7 @@ internal fun ContextEntryStrip(
                     onClick = { onIntent(UiIntent.OpenAttachmentPicker) },
                 ) {
                     Icon(
-                        painter = painterResource("/icons/attach-file.svg"),
+                        painter = assistantPainterResource("/icons/attach-file.svg"),
                         contentDescription = AuraCodeBundle.message("composer.addAttachment"),
                         tint = p.textSecondary,
                         modifier = Modifier.size(16.dp),
@@ -133,7 +133,7 @@ private fun EditedFilesEntry(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                painter = painterResource("/icons/document.svg"),
+                painter = assistantPainterResource("/icons/document.svg"),
                 contentDescription = AuraCodeBundle.message("composer.editedFiles.entry.tooltip"),
                 tint = p.textSecondary,
                 modifier = Modifier.size(t.controls.iconMd),
@@ -149,7 +149,7 @@ private fun EditedFilesEntry(
             )
             Spacer(Modifier.width(t.spacing.xs))
             Icon(
-                painter = painterResource(if (expanded) "/icons/arrow-down.svg" else "/icons/arrow-up.svg"),
+                painter = assistantPainterResource(if (expanded) "/icons/arrow-down.svg" else "/icons/arrow-up.svg"),
                 contentDescription = null,
                 tint = p.textMuted,
                 modifier = Modifier.size(14.dp),
@@ -186,7 +186,7 @@ private fun ContextEntryChip(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource("/icons/close.svg"),
+                    painter = assistantPainterResource("/icons/close.svg"),
                     contentDescription = AuraCodeBundle.message("composer.removeFile"),
                     tint = p.textMuted,
                     modifier = Modifier.size(13.dp),
@@ -212,7 +212,7 @@ private fun AgentEntryChip(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            painter = painterResource("/icons/agent-settings.svg"),
+            painter = assistantPainterResource("/icons/agent-settings.svg"),
             contentDescription = null,
             tint = p.textSecondary,
             modifier = Modifier.size(t.controls.iconMd),
@@ -233,7 +233,7 @@ private fun AgentEntryChip(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource("/icons/close.svg"),
+                    painter = assistantPainterResource("/icons/close.svg"),
                     contentDescription = AuraCodeBundle.message("common.delete"),
                     tint = p.textMuted,
                     modifier = Modifier.size(13.dp),

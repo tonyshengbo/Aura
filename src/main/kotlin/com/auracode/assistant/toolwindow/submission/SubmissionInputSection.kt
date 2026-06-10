@@ -48,7 +48,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
@@ -560,7 +560,7 @@ private fun MentionAgentSuggestionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            painter = painterResource("/icons/community.svg"),
+            painter = assistantPainterResource("/icons/community.svg"),
             contentDescription = null,
             tint = p.textSecondary,
             modifier = Modifier.size(t.controls.iconMd),
@@ -600,7 +600,7 @@ private fun AgentSuggestionRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
-            painter = painterResource("/icons/agent-settings.svg"),
+            painter = assistantPainterResource("/icons/agent-settings.svg"),
             contentDescription = null,
             tint = p.textSecondary,
             modifier = Modifier.size(t.controls.iconMd),

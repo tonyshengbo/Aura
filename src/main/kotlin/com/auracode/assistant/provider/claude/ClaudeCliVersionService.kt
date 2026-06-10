@@ -10,7 +10,7 @@ import com.auracode.assistant.provider.runtime.resolvePreferredShellEnvironment
 import com.auracode.assistant.settings.AgentSettingsService
 import java.io.BufferedReader
 import java.net.HttpURLConnection
-import java.net.URL
+import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.TimeUnit
 
@@ -335,7 +335,7 @@ private fun runClaudeCliCommand(
 }
 
 private fun fetchLatestClaudeCliVersionFromNpm(): String {
-    val connection = URL("https://registry.npmjs.org/@anthropic-ai/claude-code/latest").openConnection() as HttpURLConnection
+    val connection = URI("https://registry.npmjs.org/@anthropic-ai/claude-code/latest").toURL().openConnection() as HttpURLConnection
     connection.requestMethod = "GET"
     connection.connectTimeout = 5_000
     connection.readTimeout = 5_000

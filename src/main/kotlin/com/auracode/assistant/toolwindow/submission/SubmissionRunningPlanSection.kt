@@ -30,7 +30,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.font.FontWeight
@@ -226,7 +226,7 @@ internal fun SubmissionRunningPlanSection(
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 Icon(
-                    painter = painterResource(runningPlanToggleIconPath(expanded)),
+                    painter = assistantPainterResource(runningPlanToggleIconPath(expanded)),
                     contentDescription = if (expanded) {
                         AuraCodeBundle.message("timeline.collapse")
                     } else {

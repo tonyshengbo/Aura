@@ -28,7 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
@@ -309,7 +309,7 @@ private fun DropdownChip(
             Text(label, color = if (enabled) p.textSecondary else p.textMuted)
             Spacer(Modifier.width(t.spacing.xs))
             Icon(
-                painter = painterResource("/icons/arrow-down.svg"),
+                painter = assistantPainterResource("/icons/arrow-down.svg"),
                 contentDescription = null,
                 tint = if (enabled) p.textMuted else p.textMuted.copy(alpha = 0.6f),
                 modifier = Modifier.size(20.dp),
@@ -358,7 +358,7 @@ private fun TrailingActionChip(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            painter = painterResource(iconPath),
+            painter = assistantPainterResource(iconPath),
             contentDescription = contentDescription,
             tint = iconTint,
             modifier = Modifier.size(16.dp),
@@ -407,7 +407,7 @@ private fun DropdownOptionRow(
                 modifier = Modifier.size(20.dp),
             ) {
                 Icon(
-                    painter = painterResource("/icons/delete.svg"),
+                    painter = assistantPainterResource("/icons/delete.svg"),
                     contentDescription = AuraCodeBundle.message("composer.model.custom.delete"),
                     tint = p.textMuted,
                     modifier = Modifier.size(14.dp),

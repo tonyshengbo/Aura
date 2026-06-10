@@ -46,8 +46,10 @@ class ProviderRegistryTest {
 
         assertEquals(
             listOf(
+                "claude-opus-4-8",
                 "claude-opus-4-7",
                 "claude-sonnet-4-6",
+                "claude-fable-5",
                 "claude-haiku-4-5-20251001",
                 "claude-opus-4-6",
             ),
@@ -81,8 +83,17 @@ class ProviderRegistryTest {
     fun `curated model catalogs expose display friendly short names`() {
         assertEquals("gpt-5.3-codex", CodexModelCatalog.option("gpt-5.3-codex")?.description)
         assertEquals("gpt-5.4", CodexModelCatalog.option("gpt-5.4")?.description)
+        assertEquals("Opus 4.8 [1m]", ClaudeModelCatalog.option("claude-opus-4-8")?.shortName)
         assertEquals("Sonnet 4.6 [1m]", ClaudeModelCatalog.option("claude-sonnet-4-6")?.shortName)
+        assertEquals("Fable 5 [1m]", ClaudeModelCatalog.option("claude-fable-5")?.shortName)
         assertEquals("Haiku 4.5 [200k]", ClaudeModelCatalog.option("claude-haiku-4-5-20251001")?.shortName)
+    }
+
+    @Test
+    fun `claude model catalog exposes expected context windows`() {
+        assertEquals(1_000_000, ClaudeModelCatalog.contextWindow("claude-opus-4-8"))
+        assertEquals(1_000_000, ClaudeModelCatalog.contextWindow("claude-fable-5"))
+        assertEquals(200_000, ClaudeModelCatalog.contextWindow("claude-haiku-4-5-20251001"))
     }
 
     @Test

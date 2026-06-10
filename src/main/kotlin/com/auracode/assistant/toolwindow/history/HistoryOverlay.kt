@@ -31,7 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -281,7 +281,7 @@ private fun HistorySessionRow(
         HoverTooltip(text = AuraCodeBundle.message("header.action.history")) {
             IconButton(onClick = onOpen) {
                 Icon(
-                    painter = painterResource("/icons/history.svg"),
+                    painter = assistantPainterResource("/icons/history.svg"),
                     contentDescription = AuraCodeBundle.message("header.action.history"),
                     tint = p.textSecondary,
                     modifier = Modifier.size(t.controls.iconMd),
@@ -291,7 +291,7 @@ private fun HistorySessionRow(
         HoverTooltip(text = AuraCodeBundle.message("drawer.history.export.action")) {
             IconButton(onClick = onExport) {
                 Icon(
-                    painter = painterResource("/icons/document.svg"),
+                    painter = assistantPainterResource("/icons/document.svg"),
                     contentDescription = AuraCodeBundle.message("drawer.history.export.action"),
                     tint = p.textSecondary,
                     modifier = Modifier.size(t.controls.iconMd),

@@ -21,7 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -134,7 +134,7 @@ private fun AboutHeroCard(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        painter = painterResource("/icons/toolwindow-stripe.svg"),
+                        painter = assistantPainterResource("/icons/toolwindow-stripe.svg"),
                         contentDescription = "Aura Code",
                         tint = Color.Unspecified,
                         modifier = Modifier.size(22.dp),
@@ -189,7 +189,7 @@ private fun AboutLinkRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                painter = painterResource(iconPath),
+                painter = assistantPainterResource(iconPath),
                 contentDescription = value,
                 tint = p.textSecondary,
                 modifier = Modifier.size(t.controls.iconLg),

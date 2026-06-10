@@ -18,7 +18,7 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -104,7 +104,7 @@ private fun PendingQueueRow(
             modifier = Modifier.size(22.dp),
         ) {
             Icon(
-                painter = painterResource("/icons/close-small.svg"),
+                painter = assistantPainterResource("/icons/close-small.svg"),
                 contentDescription = AuraCodeBundle.message("composer.pending.cancel"),
                 tint = p.textMuted,
                 modifier = Modifier.size(14.dp),

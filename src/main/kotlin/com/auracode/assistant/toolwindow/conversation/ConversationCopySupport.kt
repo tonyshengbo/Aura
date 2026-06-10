@@ -18,7 +18,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.shared.DesignPalette
@@ -114,7 +114,7 @@ internal fun ConversationCopyActionButton(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource(if (copied) "/icons/check.svg" else "/icons/copy.svg"),
+                    painter = assistantPainterResource(if (copied) "/icons/check.svg" else "/icons/copy.svg"),
                     contentDescription = tooltip,
                     tint = if (copied) palette.success else palette.textSecondary,
                     modifier = Modifier.size(16.dp),

@@ -14,11 +14,17 @@ internal object ClaudeModelCatalog {
     const val defaultModel: String = "claude-opus-4-7"
     private const val standardContextWindow: Int = 200_000
     private const val extendedContextWindow: Int = 1_000_000
+    private const val opusNextModel: String = "claude-opus-4-8"
     private const val opusNewModel: String = "claude-opus-4-7"
     private const val sonnetModel: String = "claude-sonnet-4-6"
+    private const val fableModel: String = "claude-fable-5"
     private const val opusModel: String = "claude-opus-4-6"
     private const val haikuModel: String = "claude-haiku-4-5-20251001"
     private val curatedOptions: List<ClaudeModelOption> = listOf(
+        ClaudeModelOption(
+            id = opusNextModel,
+            shortName = "Opus 4.8 [1m]",
+        ),
         ClaudeModelOption(
             id = opusNewModel,
             shortName = "Opus 4.7 [1m]",
@@ -26,6 +32,10 @@ internal object ClaudeModelCatalog {
         ClaudeModelOption(
             id = sonnetModel,
             shortName = "Sonnet 4.6 [1m]",
+        ),
+        ClaudeModelOption(
+            id = fableModel,
+            shortName = "Fable 5 [1m]",
         ),
         ClaudeModelOption(
             id = haikuModel,
@@ -40,6 +50,8 @@ internal object ClaudeModelCatalog {
         "claude-sonnet-4-5" to sonnetModel,
         "claude-opus-4-1" to opusNewModel,
         "claude-haiku-4-5" to haikuModel,
+        "claude-opus-4-8[1m]" to opusNextModel,
+        "claude-fable-5[1m]" to fableModel,
         "claude-sonnet-4-6[1m]" to sonnetModel,
         "claude-opus-4-6[1m]" to opusModel,
     )
@@ -68,7 +80,7 @@ internal object ClaudeModelCatalog {
     fun contextWindow(modelId: String?): Int {
         val normalized = normalize(modelId.orEmpty())
         return when (normalized) {
-            opusNewModel, sonnetModel, opusModel -> extendedContextWindow
+            opusNextModel, opusNewModel, sonnetModel, fableModel, opusModel -> extendedContextWindow
             else -> standardContextWindow
         }
     }

@@ -24,7 +24,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
@@ -245,7 +245,7 @@ private fun McpServerActionsMenu(
             enabled = enabled,
         ) {
             Icon(
-                painter = painterResource("/icons/more-vert.svg"),
+                painter = assistantPainterResource("/icons/more-vert.svg"),
                 contentDescription = AuraCodeBundle.message("common.more"),
                 tint = if (enabled) p.textSecondary else p.textMuted,
                 modifier = Modifier.size(18.dp),

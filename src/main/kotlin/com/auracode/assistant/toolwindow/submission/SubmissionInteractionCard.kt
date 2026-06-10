@@ -21,7 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -226,7 +226,7 @@ private fun KeyboardHintIcon(
 ) {
     val t = assistantUiTokens()
     Icon(
-        painter = painterResource("/icons/swap-vert.svg"),
+        painter = assistantPainterResource("/icons/swap-vert.svg"),
         contentDescription = null,
         tint = tint,
         modifier = modifier.size(t.controls.iconMd),

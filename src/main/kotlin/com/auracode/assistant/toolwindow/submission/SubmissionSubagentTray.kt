@@ -18,7 +18,7 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,7 +64,7 @@ internal fun SubmissionSubagentTray(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Icon(
-                    painter = painterResource("/icons/community.svg"),
+                    painter = assistantPainterResource("/icons/community.svg"),
                     contentDescription = null,
                     tint = accentColor,
                     modifier = Modifier.size(t.controls.iconMd),
@@ -87,7 +87,7 @@ internal fun SubmissionSubagentTray(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        painter = painterResource("/icons/close-small.svg"),
+                        painter = assistantPainterResource("/icons/close-small.svg"),
                         contentDescription = AuraCodeBundle.message("common.close"),
                         tint = p.textMuted,
                         modifier = Modifier.size(12.dp),
@@ -107,7 +107,7 @@ internal fun SubmissionSubagentTray(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        painter = painterResource(if (state.subagentTrayExpanded) "/icons/arrow-down.svg" else "/icons/arrow-up.svg"),
+                        painter = assistantPainterResource(if (state.subagentTrayExpanded) "/icons/arrow-down.svg" else "/icons/arrow-up.svg"),
                         contentDescription = null,
                         tint = p.textMuted,
                         modifier = Modifier.size(12.dp),

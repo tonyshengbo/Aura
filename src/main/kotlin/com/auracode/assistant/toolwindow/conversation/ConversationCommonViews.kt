@@ -42,7 +42,7 @@ import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 
 @Composable
 internal fun LoadOlderHistoryButton(
@@ -399,7 +399,7 @@ private fun ConversationExpandableCardTitle(
     Row(verticalAlignment = Alignment.CenterVertically) {
         titleIconPath?.let { iconPath ->
             Icon(
-                painter = painterResource(iconPath),
+                painter = assistantPainterResource(iconPath),
                 contentDescription = null,
                 tint = palette.textSecondary,
                 modifier = Modifier.size(16.dp),

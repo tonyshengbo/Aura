@@ -19,7 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.eventing.UiIntent
@@ -100,7 +100,7 @@ private fun AttachmentCard(
                 )
             } else {
                 Icon(
-                    painter = painterResource("/icons/document.svg"),
+                    painter = assistantPainterResource("/icons/document.svg"),
                     contentDescription = null,
                     tint = p.textMuted,
                     modifier = Modifier.size(24.dp),
@@ -117,7 +117,7 @@ private fun AttachmentCard(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    painter = painterResource("/icons/delete.svg"),
+                    painter = assistantPainterResource("/icons/delete.svg"),
                     contentDescription = AuraCodeBundle.message("common.delete"),
                     tint = p.textMuted,
                     modifier = Modifier.size(10.dp),

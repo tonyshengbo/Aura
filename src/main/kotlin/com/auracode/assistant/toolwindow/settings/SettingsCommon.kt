@@ -33,7 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -90,7 +90,7 @@ internal fun OverlayCloseButton(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource("/icons/close.svg"),
+                painter = assistantPainterResource("/icons/close.svg"),
                 contentDescription = AuraCodeBundle.message("common.close"),
                 tint = p.textSecondary,
                 modifier = Modifier.size(t.controls.iconLg),
@@ -119,7 +119,7 @@ internal fun SettingsRailItem(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(iconPath),
+                painter = assistantPainterResource(iconPath),
                 contentDescription = description,
                 tint = if (selected) p.accent else p.textSecondary,
                 modifier = Modifier.size(t.controls.iconLg),
@@ -242,7 +242,7 @@ internal fun SettingsGhostIconButton(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                painter = painterResource(iconPath),
+                painter = assistantPainterResource(iconPath),
                 contentDescription = contentDescription,
                 tint = if (enabled) p.textSecondary.copy(alpha = 0.9f) else p.textMuted.copy(alpha = 0.72f),
                 modifier = Modifier.size(t.controls.iconLg),
@@ -368,7 +368,7 @@ internal fun SettingsSelectField(
         )
         Spacer(Modifier.size(t.spacing.sm))
         Icon(
-            painter = painterResource("/icons/arrow-down.svg"),
+            painter = assistantPainterResource("/icons/arrow-down.svg"),
             contentDescription = null,
             tint = p.textMuted,
             modifier = Modifier.size(t.controls.iconLg),

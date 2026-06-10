@@ -29,7 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.AssistantUiText
@@ -77,7 +77,7 @@ internal fun ExecutionTurnStatusRegion(
         horizontalArrangement = Arrangement.spacedBy(t.spacing.sm),
     ) {
         Icon(
-            painter = painterResource("/icons/loading.svg"),
+            painter = assistantPainterResource("/icons/loading.svg"),
             contentDescription = null,
             tint = p.accent,
             modifier = Modifier

@@ -19,7 +19,7 @@ class SmartFileSearchService(private val project: Project) {
             val candidates = FilenameIndex.getAllFilenames(project).asSequence()
                 .filter { it.contains(q, ignoreCase = true) }
                 .flatMap { name ->
-                    FilenameIndex.getVirtualFilesByName(project, name, scope).asSequence()
+                    FilenameIndex.getVirtualFilesByName(name, scope).asSequence()
                 }
                 .filter { file -> !file.isDirectory }
                 .filter { file -> MentionFileWhitelist.allowPath(file.path) }

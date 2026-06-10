@@ -20,7 +20,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -103,7 +103,7 @@ private fun AgentListRow(
         horizontalArrangement = Arrangement.Start,
     ) {
         Icon(
-            painter = painterResource("/icons/agent-settings.svg"),
+            painter = assistantPainterResource("/icons/agent-settings.svg"),
             contentDescription = null,
             tint = p.textSecondary,
             modifier = Modifier.size(t.controls.iconMd),

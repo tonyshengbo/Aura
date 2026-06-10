@@ -23,11 +23,16 @@ configurations.matching { configuration ->
 }.configureEach {
     resolutionStrategy.sortArtifacts(org.gradle.api.artifacts.ResolutionStrategy.SortOrder.DEPENDENCY_FIRST)
 }
-
 dependencies {
     implementation(compose.desktop.currentOs)
-    implementation("com.mikepenz:multiplatform-markdown-renderer:0.31.0")
-    implementation("com.mikepenz:multiplatform-markdown-renderer-m2:0.31.0")
+    implementation("com.mikepenz:multiplatform-markdown-renderer:0.31.0") {
+        exclude(group = "org.jetbrains", module = "markdown")
+        exclude(group = "org.jetbrains", module = "markdown-jvm")
+    }
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m2:0.31.0") {
+        exclude(group = "org.jetbrains", module = "markdown")
+        exclude(group = "org.jetbrains", module = "markdown-jvm")
+    }
     implementation("org.xerial:sqlite-jdbc:3.46.1.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     testRuntimeOnly("net.java.dev.jna:jna:5.14.0")

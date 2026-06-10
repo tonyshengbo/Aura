@@ -36,7 +36,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantBodyTextStyle
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
@@ -186,7 +186,7 @@ internal fun InlineSubmissionInputChoice(
             )
             if (showKeyboardHintIcon) {
                 Icon(
-                    painter = painterResource("/icons/swap-vert.svg"),
+                    painter = assistantPainterResource("/icons/swap-vert.svg"),
                     contentDescription = null,
                     tint = p.textMuted,
                     modifier = Modifier

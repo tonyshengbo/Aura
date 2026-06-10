@@ -6,7 +6,7 @@ import androidx.compose.material.lightColors
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import com.auracode.assistant.settings.UiThemeMode
-import com.intellij.util.ui.StartupUiUtil
+import com.intellij.ui.JBColor
 
 internal enum class EffectiveTheme {
     LIGHT,
@@ -45,7 +45,7 @@ internal fun resolveEffectiveTheme(mode: UiThemeMode, ideDark: Boolean): Effecti
     }
 }
 
-internal fun currentIdeDarkTheme(): Boolean = StartupUiUtil.isUnderDarcula
+internal fun currentIdeDarkTheme(): Boolean = !JBColor.isBright()
 
 internal fun assistantPalette(theme: EffectiveTheme): DesignPalette {
     return when (theme) {

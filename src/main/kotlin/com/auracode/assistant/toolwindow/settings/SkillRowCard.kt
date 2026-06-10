@@ -21,7 +21,7 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -158,7 +158,7 @@ internal fun SkillRowActionsMenu(
             enabled = enabled,
         ) {
             Icon(
-                painter = painterResource("/icons/more-vert.svg"),
+                painter = assistantPainterResource("/icons/more-vert.svg"),
                 contentDescription = AuraCodeBundle.message("common.more"),
                 tint = if (enabled) p.textSecondary else p.textMuted,
                 modifier = Modifier.size(18.dp),
