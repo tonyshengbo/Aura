@@ -1,7 +1,6 @@
 package com.auracode.assistant.toolwindow.settings
 
-import com.intellij.ide.plugins.PluginManagerCore
-import com.intellij.openapi.extensions.PluginId
+import com.intellij.ide.plugins.PluginManager
 
 /** Stores the static metadata displayed by the About settings page. */
 internal object AboutPluginInfo {
@@ -12,7 +11,7 @@ internal object AboutPluginInfo {
 
     /** Resolves the installed plugin version and falls back when unavailable. */
     fun pluginVersion(): String {
-        val rawVersion = PluginManagerCore.getPlugin(PluginId.getId(pluginId))?.version
+        val rawVersion = PluginManager.getPluginByClass(AboutPluginInfo::class.java)?.version
         return normalizeVersion(rawVersion = rawVersion)
     }
 }
