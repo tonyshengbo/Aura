@@ -6,22 +6,10 @@ import kotlin.test.assertTrue
 
 /** Verifies the stable metadata helpers used by the About settings page. */
 class AboutPluginInfoTest {
-    /** Ensures a non-blank version is returned unchanged. */
+    /** Ensures the About page displays the locally defined plugin version. */
     @Test
-    fun `returns provided version when not blank`() {
-        assertEquals("1.2.3", normalizeVersion("1.2.3"))
-    }
-
-    /** Ensures blank versions fall back to the provided default. */
-    @Test
-    fun `falls back when version is blank`() {
-        assertEquals("1.0.0", normalizeVersion("   ", fallbackVersion = "1.0.0"))
-    }
-
-    /** Ensures null versions fall back to the provided default. */
-    @Test
-    fun `falls back when version is null`() {
-        assertEquals("9.9.9", normalizeVersion(null, fallbackVersion = "9.9.9"))
+    fun `uses static plugin version`() {
+        assertEquals("1.0.1", AboutPluginInfo.pluginVersion)
     }
 
     /** Ensures the community entry opens the new join URL instead of exposing a group number. */

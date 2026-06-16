@@ -17,7 +17,7 @@ internal object CodexRuntimeJsonSupport {
             putJsonObject("clientInfo") {
                 put("name", "codex_sdk_ts")
                 put("title", "Aura Code IntelliJ Plugin")
-                put("version", "0.120.0")
+                put("version", "0.140.0")
             }
             putJsonObject("capabilities") {
                 put("experimentalApi", true)
