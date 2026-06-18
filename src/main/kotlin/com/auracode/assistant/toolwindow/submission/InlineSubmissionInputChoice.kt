@@ -144,6 +144,9 @@ internal fun InlineSubmissionInputChoice(
                     .padding(end = if (showKeyboardHintIcon) t.controls.iconMd + t.spacing.sm else 0.dp)
                     .padding(vertical = 2.dp)
                     .onPreviewKeyEvent { event ->
+                        if (shouldConsumeImeTypedEvent(value, event)) {
+                            return@onPreviewKeyEvent true
+                        }
                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         when (event.key) {
                             Key.DirectionUp -> when (inlineInputKeyAction(value, InlineInputKey.UP)) {

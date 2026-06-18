@@ -335,9 +335,12 @@ internal class CodexRuntimeProvider(
                 "turn/started" -> {
                     val turn = params.objectValue("turn")
                     val turnId = turn?.string("id") ?: return emptyList()
-                    activeTurnId = turnId
                     val threadId = params.string("threadId")
                         ?: turn.string("threadId")
+                    if (isTrackedChildThreadEvent(threadId)) {
+                        return markTrackedSubagentActive(threadId)
+                    }
+                    activeTurnId = turnId
                     activeThreadId = threadId ?: activeThreadId
                     listOf(ProviderEvent.TurnStarted(turnId = turnId, threadId = threadId))
                 }
@@ -424,6 +427,9 @@ internal class CodexRuntimeProvider(
                 "item/started",
                 "item/completed",
                 -> {
+                    if (isTrackedChildThreadEvent(params)) {
+                        return emptyList()
+                    }
                     val item = params.objectValue("item") ?: return emptyList()
                     parseItemLifecycle(
                         item = item,
@@ -432,31 +438,56 @@ internal class CodexRuntimeProvider(
                     )
                 }
 
-                "item/agentMessage/delta" -> parseNarrativeDelta(
-                    params = params,
-                    itemName = "message",
-                    isThinking = false,
-                )
+                "item/agentMessage/delta" -> {
+                    if (isTrackedChildThreadEvent(params)) {
+                        return emptyList()
+                    }
+                    parseNarrativeDelta(
+                        params = params,
+                        itemName = "message",
+                        isThinking = false,
+                    )
+                }
 
                 "item/reasoning/textDelta",
                 "item/reasoning/summaryTextDelta",
-                -> parseNarrativeDelta(
-                    params = params,
-                    itemName = "reasoning",
-                    isThinking = true,
-                )
+                -> {
+                    if (isTrackedChildThreadEvent(params)) {
+                        return emptyList()
+                    }
+                    parseNarrativeDelta(
+                        params = params,
+                        itemName = "reasoning",
+                        isThinking = true,
+                    )
+                }
 
-                "item/commandExecution/outputDelta" -> parseActivityDelta(
-                    params = params,
-                    kind = ItemKind.COMMAND_EXEC,
-                )
+                "item/commandExecution/outputDelta" -> {
+                    if (isTrackedChildThreadEvent(params)) {
+                        return emptyList()
+                    }
+                    parseActivityDelta(
+                        params = params,
+                        kind = ItemKind.COMMAND_EXEC,
+                    )
+                }
 
-                "item/fileChange/outputDelta" -> parseActivityDelta(
-                    params = params,
-                    kind = ItemKind.DIFF_APPLY,
-                )
+                "item/fileChange/outputDelta" -> {
+                    if (isTrackedChildThreadEvent(params)) {
+                        return emptyList()
+                    }
+                    parseActivityDelta(
+                        params = params,
+                        kind = ItemKind.DIFF_APPLY,
+                    )
+                }
 
-                "item/plan/delta" -> parsePlanDelta(params)
+                "item/plan/delta" -> {
+                    if (isTrackedChildThreadEvent(params)) {
+                        return emptyList()
+                    }
+                    parsePlanDelta(params)
+                }
 
                 "turn/plan/updated" -> {
                     val turnId = params.string("turnId").orEmpty()
@@ -765,6 +796,22 @@ internal class CodexRuntimeProvider(
             )
             maybeBuildParentTurnFailureCompletion(threadId = threadId, rawStatus = rawStatus)?.let(events::add)
             return events
+        }
+
+        /**
+         * Child turn starts are filtered from the parent timeline but still mean the
+         * tracked subagent moved past pending initialization.
+         */
+        private fun markTrackedSubagentActive(threadId: String?): List<ProviderEvent> {
+            val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotBlank() } ?: return emptyList()
+            val existing = subagentSnapshotsByThreadId[normalizedThreadId] ?: return emptyList()
+            closedSubagentThreadIds.remove(normalizedThreadId)
+            subagentSnapshotsByThreadId[normalizedThreadId] = existing.copy(
+                status = ProviderAgentStatus.ACTIVE,
+                statusText = "active",
+                updatedAt = System.currentTimeMillis(),
+            )
+            return listOf(currentSubagentSnapshotEvent())
         }
 
         /**
@@ -1306,6 +1353,23 @@ internal class CodexRuntimeProvider(
         private fun isTrackedSubagentThread(threadId: String): Boolean {
             return subagentSnapshotsByThreadId.containsKey(threadId) ||
                 collabToolCallSnapshotsById.values.any { snapshot -> threadId in snapshot.receiverThreadIds }
+        }
+
+        private fun isTrackedChildThreadEvent(params: JsonObject): Boolean {
+            val threadId = params.string("threadId")
+                ?: params.string("thread_id")
+                ?: params.objectValue("turn")?.string("threadId")
+                ?: params.objectValue("turn")?.string("thread_id")
+                ?: params.objectValue("item")?.string("threadId")
+                ?: params.objectValue("item")?.string("thread_id")
+            return isTrackedChildThreadEvent(threadId)
+        }
+
+        private fun isTrackedChildThreadEvent(threadId: String?): Boolean {
+            val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotBlank() } ?: return false
+            val normalizedActiveThreadId = activeThreadId?.trim()?.takeIf { it.isNotBlank() }
+            if (normalizedThreadId == normalizedActiveThreadId) return false
+            return isTrackedSubagentThread(normalizedThreadId)
         }
 
         /**

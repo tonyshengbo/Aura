@@ -767,6 +767,51 @@ class CodexRuntimeProviderTest {
     }
 
     @Test
+    fun `child turn started marks tracked subagent active without starting parent turn`() {
+        val parser = CodexRuntimeProvider.CodexRuntimeNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+
+        parser.startParentTurnAndTrackChildThread()
+
+        val childEvents = parser.parseNotification(
+            method = "turn/started",
+            params = buildJsonObject {
+                put("threadId", "thread-review-1")
+                put(
+                    "turn",
+                    buildJsonObject {
+                        put("id", "turn-child")
+                        put("threadId", "thread-review-1")
+                    },
+                )
+            },
+        )
+
+        val updated = assertIs<ProviderEvent.SubagentsUpdated>(childEvents.single())
+        val agent = updated.agents.single()
+        assertEquals("thread-review-1", agent.threadId)
+        assertEquals(ProviderAgentStatus.ACTIVE, agent.status)
+        assertEquals("active", agent.statusText)
+
+        val parentDeltaEvents = parser.parseNotification(
+            method = "item/agentMessage/delta",
+            params = buildJsonObject {
+                put("threadId", "thread-main-1")
+                put("turnId", "turn-parent")
+                put("itemId", "msg-parent-1")
+                put("delta", "parent progress")
+            },
+        )
+
+        val parentMessage = assertIs<ProviderEvent.ItemUpdated>(parentDeltaEvents.single())
+        assertEquals(ItemKind.NARRATIVE, parentMessage.item.kind)
+        assertEquals("message", parentMessage.item.name)
+        assertEquals("parent progress", parentMessage.item.text)
+    }
+
+    @Test
     fun `thread status not loaded removes existing subagent snapshot`() {
         val parser = CodexRuntimeProvider.CodexRuntimeNotificationParser(
             requestId = "req-1",
@@ -1028,6 +1073,112 @@ class CodexRuntimeProviderTest {
         val completed = assertIs<ProviderEvent.TurnCompleted>(events.last())
         assertEquals("turn-parent", completed.turnId)
         assertEquals(TurnOutcome.FAILED, completed.outcome)
+    }
+
+    @Test
+    fun `tracked child agent message delta does not emit parent timeline item`() {
+        val parser = CodexRuntimeProvider.CodexRuntimeNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+        parser.startParentTurnAndTrackChildThread()
+
+        val childTurnEvents = parser.parseNotification(
+            method = "turn/started",
+            params = buildJsonObject {
+                put("threadId", "thread-review-1")
+                put(
+                    "turn",
+                    buildJsonObject {
+                        put("id", "turn-child-1")
+                        put("threadId", "thread-review-1")
+                    },
+                )
+            },
+        )
+        val childDeltaEvents = parser.parseNotification(
+            method = "item/agentMessage/delta",
+            params = buildJsonObject {
+                put("threadId", "thread-review-1")
+                put("turnId", "turn-child-1")
+                put("itemId", "msg-child-1")
+                put("delta", "child progress")
+            },
+        )
+
+        val childTurnUpdate = assertIs<ProviderEvent.SubagentsUpdated>(childTurnEvents.single())
+        assertEquals(ProviderAgentStatus.ACTIVE, childTurnUpdate.agents.single().status)
+        assertTrue(childDeltaEvents.isEmpty())
+    }
+
+    @Test
+    fun `tracked child agent message lifecycle does not emit parent timeline item`() {
+        val parser = CodexRuntimeProvider.CodexRuntimeNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+        parser.startParentTurnAndTrackChildThread()
+
+        val startedEvents = parser.parseNotification(
+            method = "item/started",
+            params = buildJsonObject {
+                put("threadId", "thread-review-1")
+                put("turnId", "turn-child-1")
+                put(
+                    "item",
+                    buildJsonObject {
+                        put("type", "agentMessage")
+                        put("id", "msg-child-1")
+                        put("threadId", "thread-review-1")
+                        put("status", "running")
+                    },
+                )
+            },
+        )
+        val completedEvents = parser.parseNotification(
+            method = "item/completed",
+            params = buildJsonObject {
+                put("threadId", "thread-review-1")
+                put("turnId", "turn-child-1")
+                put(
+                    "item",
+                    buildJsonObject {
+                        put("type", "agentMessage")
+                        put("id", "msg-child-1")
+                        put("threadId", "thread-review-1")
+                        put("status", "completed")
+                        put("text", "final child response")
+                    },
+                )
+            },
+        )
+
+        assertTrue(startedEvents.isEmpty())
+        assertTrue(completedEvents.isEmpty())
+    }
+
+    @Test
+    fun `parent agent message delta still emits narrative timeline item`() {
+        val parser = CodexRuntimeProvider.CodexRuntimeNotificationParser(
+            requestId = "req-1",
+            diagnosticLogger = {},
+        )
+        parser.startParentTurnAndTrackChildThread()
+
+        val events = parser.parseNotification(
+            method = "item/agentMessage/delta",
+            params = buildJsonObject {
+                put("threadId", "thread-main-1")
+                put("turnId", "turn-parent")
+                put("itemId", "msg-parent-1")
+                put("delta", "parent progress")
+            },
+        )
+
+        val updated = assertIs<ProviderEvent.ItemUpdated>(events.single())
+        assertEquals(ItemKind.NARRATIVE, updated.item.kind)
+        assertEquals("message", updated.item.name)
+        assertEquals("parent progress", updated.item.text)
     }
 
     @Test
@@ -1745,6 +1896,42 @@ private fun buildCollaborationModePayloadForTest(
     model: String?,
     reasoningEffort: String?,
 ) = buildCollaborationModePayloadForMode(mode, model, reasoningEffort)
+
+private fun CodexRuntimeProvider.CodexRuntimeNotificationParser.startParentTurnAndTrackChildThread() {
+    parseNotification(
+        method = "turn/started",
+        params = buildJsonObject {
+            put(
+                "turn",
+                buildJsonObject {
+                    put("id", "turn-parent")
+                    put("threadId", "thread-main-1")
+                },
+            )
+        },
+    )
+    parseNotification(
+        method = "item/completed",
+        params = buildJsonObject {
+            put(
+                "item",
+                buildJsonObject {
+                    put("type", "collabAgentToolCall")
+                    put("id", "call_1")
+                    put("tool", "spawnAgent")
+                    put("status", "completed")
+                    put("prompt", "Perform a code review of the latest diff.")
+                    put(
+                        "receiverThreadIds",
+                        buildJsonArray {
+                            add(JsonPrimitive("thread-review-1"))
+                        },
+                    )
+                },
+            )
+        },
+    )
+}
 
 private fun extractFileChangeKindForTest(json: kotlinx.serialization.json.JsonObject) =
     extractFileChangeKind(json)

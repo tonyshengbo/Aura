@@ -5,6 +5,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.graphics.Color
 import com.auracode.assistant.toolwindow.execution.ToolUserInputChoiceKind
 import com.auracode.assistant.toolwindow.shared.DesignPalette
+import java.awt.event.KeyEvent as AwtKeyEvent
 import kotlin.test.assertEquals
 import kotlin.test.Test
 import kotlin.test.assertFalse
@@ -43,6 +44,49 @@ class InlineSubmissionInputBehaviorTest {
         assertEquals(InlineInputKeyAction.NONE, inlineInputKeyAction(composing, InlineInputKey.DOWN))
         assertEquals(InlineInputKeyAction.MOVE_PREVIOUS, inlineInputKeyAction(committed, InlineInputKey.UP))
         assertEquals(InlineInputKeyAction.MOVE_NEXT, inlineInputKeyAction(committed, InlineInputKey.DOWN))
+    }
+
+    @Test
+    fun `ime typed characters are consumed only during active composition`() {
+        assertTrue(
+            shouldConsumeImeTypedCharacter(
+                compositionActive = true,
+                eventId = AwtKeyEvent.KEY_TYPED,
+                keyChar = 's',
+            ),
+        )
+        assertFalse(
+            shouldConsumeImeTypedCharacter(
+                compositionActive = false,
+                eventId = AwtKeyEvent.KEY_TYPED,
+                keyChar = 's',
+            ),
+        )
+    }
+
+    @Test
+    fun `ime typed character guard ignores non printable or non typed events`() {
+        assertFalse(
+            shouldConsumeImeTypedCharacter(
+                compositionActive = true,
+                eventId = AwtKeyEvent.KEY_PRESSED,
+                keyChar = 's',
+            ),
+        )
+        assertFalse(
+            shouldConsumeImeTypedCharacter(
+                compositionActive = true,
+                eventId = AwtKeyEvent.KEY_TYPED,
+                keyChar = AwtKeyEvent.CHAR_UNDEFINED,
+            ),
+        )
+        assertFalse(
+            shouldConsumeImeTypedCharacter(
+                compositionActive = true,
+                eventId = AwtKeyEvent.KEY_TYPED,
+                keyChar = '\n',
+            ),
+        )
     }
 
     @Test

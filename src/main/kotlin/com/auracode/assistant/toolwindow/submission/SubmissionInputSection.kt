@@ -122,6 +122,9 @@ internal fun SubmissionInputSection(
                     .fillMaxWidth()
                     .padding(top = with(density) { SubmissionOutlinedTextFieldTopPadding.toDp() })
                     .onPreviewKeyEvent {
+                        if (shouldConsumeImeTypedEvent(state.document, it)) {
+                            return@onPreviewKeyEvent true
+                        }
                         if (it.type != KeyEventType.KeyDown) {
                             return@onPreviewKeyEvent false
                         }
