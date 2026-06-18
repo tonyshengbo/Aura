@@ -133,6 +133,7 @@ private val WINDOWS_ABSOLUTE_PATH = Regex("""^[A-Za-z]:[\\/].+""")
 class ComposeToolWindowPanel(
     project: Project,
     toolWindow: ToolWindow,
+    parentDisposable: Disposable,
 ) : JPanel(BorderLayout()), Disposable {
     private val hostToolWindow = toolWindow
     private var toolWindowAnchor by mutableStateOf(hostToolWindow.anchor ?: ToolWindowAnchor.RIGHT)
@@ -296,7 +297,7 @@ class ComposeToolWindowPanel(
         sessionTabCoordinator.initialize()
         updateToolWindowText()
 
-        project.messageBus.connect(this).subscribe(
+        project.messageBus.connect(parentDisposable).subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
             object : FileEditorManagerListener {
                 override fun selectionChanged(event: FileEditorManagerEvent) {
@@ -312,9 +313,9 @@ class ComposeToolWindowPanel(
                     publishFocusedContextSnapshot()
                 }
             },
-            this,
+            parentDisposable,
         )
-        ApplicationManager.getApplication().messageBus.connect(this).subscribe(
+        ApplicationManager.getApplication().messageBus.connect(parentDisposable).subscribe(
             LafManagerListener.TOPIC,
             LafManagerListener {
                 settingsService.notifyAppearanceChanged()

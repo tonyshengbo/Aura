@@ -2,9 +2,9 @@ package com.auracode.assistant.toolwindow.shell
 
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
 import com.intellij.ui.components.JBScrollPane
@@ -18,17 +18,19 @@ class AgentToolWindowFactory : ToolWindowFactory, DumbAware {
         val toolWindowTitle = AuraCodeBundle.message("plugin.name")
         toolWindow.setTitle(toolWindowTitle)
         toolWindow.setStripeTitle(toolWindowTitle)
-        val panel = try {
-            ComposeToolWindowPanel(project, toolWindow)
+        val contentDisposable = Disposer.newDisposable("Aura Code ToolWindow Content")
+        val content = try {
+            val panel = ComposeToolWindowPanel(project, toolWindow, contentDisposable)
+            Disposer.register(contentDisposable, panel)
+            ContentFactory.getInstance().createContent(panel, "", false).also {
+                it.setDisposer(contentDisposable)
+            }
         } catch (t: Throwable) {
+            Disposer.dispose(contentDisposable)
             LOG.error("Failed to create Aura Code panel", t)
-            buildFallbackPanel(t)
+            ContentFactory.getInstance().createContent(buildFallbackPanel(t), "", false)
         }
-        val content = ContentFactory.getInstance().createContent(panel, "", false)
         ToolWindowPrimaryContentPresentation.configure(toolWindow.component, content)
-        if (panel is Disposable) {
-            content.setDisposer(panel)
-        }
         toolWindow.contentManager.addContent(content)
     }
 
