@@ -122,6 +122,7 @@ internal class ToolWindowCoordinator(
     private val historyPageSize: Int = 40,
     private val runStartupWarmups: Boolean = true,
     private val scopeDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val uiProjectionIntervalMs: Long = 32L,
 ) : Disposable {
     companion object {
         private val LOG = Logger.getInstance(ToolWindowCoordinator::class.java)
@@ -154,6 +155,18 @@ internal class ToolWindowCoordinator(
     private val sessionConversationUiStateRegistry = SessionConversationUiStateRegistry()
     private val pendingSubmissionsBySessionId = linkedMapOf<String, ArrayDeque<com.auracode.assistant.toolwindow.submission.PendingSubmission>>()
     private val activePlanRunContexts = linkedMapOf<String, ActivePlanRunContext>()
+    private val projectionPerformanceTracker = SessionUiProjectionPerformanceTracker(
+        report = { message -> diagnosticLog(message, null) },
+    )
+    private val sessionUiUpdateScheduler = SessionUiUpdateScheduler(
+        scope = scope.coroutineScope,
+        intervalMs = uiProjectionIntervalMs,
+        onFlush = { sessionId, batch ->
+            val startedAt = System.nanoTime()
+            syncSessionUiProjection(sessionId)
+            projectionPerformanceTracker.record(batch, System.nanoTime() - startedAt)
+        },
+    )
     private val coroutineLauncher = CoordinatorCoroutineLauncher(
         scope = scope,
         logger = LOG,
@@ -543,6 +556,7 @@ internal class ToolWindowCoordinator(
             oldestCursor = page.olderCursor,
             hasOlder = page.hasOlder,
         )
+        sessionUiUpdateScheduler.drop(sessionId)
         syncSessionUiProjection(sessionId)
         if (sessionId == activeSessionId()) {
             sessionConversationUiStateRegistry.restore(sessionId, conversationStore)
@@ -565,7 +579,11 @@ internal class ToolWindowCoordinator(
                 dispatchSessionEvent(sessionId, AppEvent.StatusTextUpdated(UiText.raw(error.message)))
             }
         refreshWorkspacePathsFor(events)
-        syncSessionUiProjection(sessionId)
+        sessionUiUpdateScheduler.request(
+            sessionId = sessionId,
+            eventCount = events.size,
+            immediate = events.any(::requiresImmediateProjection),
+        )
         if (events.any { event ->
                 event is SessionDomainEvent.TurnCompleted &&
                     event.outcome in setOf(
@@ -867,6 +885,7 @@ internal class ToolWindowCoordinator(
 
     /** Drops every session-scoped UI cache owned by the coordinator. */
     private fun dropSessionViewState(sessionId: String) {
+        sessionUiUpdateScheduler.drop(sessionId)
         sessionConversationPagingBySessionId.remove(sessionId)
         sessionHistoryEditedFilesFilterRegistry.drop(sessionId)
         sessionHistoryTransientUiRegistry.drop(sessionId)
@@ -875,6 +894,7 @@ internal class ToolWindowCoordinator(
     }
 
     override fun dispose() {
+        sessionUiUpdateScheduler.cancel()
         scope.cancel()
     }
 }
