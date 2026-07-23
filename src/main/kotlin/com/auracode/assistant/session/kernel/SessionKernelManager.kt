@@ -36,4 +36,13 @@ internal class SessionKernelManager(
         kernelsBySessionId.remove(sessionId)
         runtimeRegistry.clear(sessionId)
     }
+
+    /** Drops inactive kernels so provider-backed history can restore them on demand later. */
+    fun retainSessions(sessionIds: Set<String>) {
+        kernelsBySessionId.keys
+            .filterNot(sessionIds::contains)
+            .forEach(::remove)
+    }
+
+    internal fun sessionIds(): Set<String> = kernelsBySessionId.keys.toSet()
 }

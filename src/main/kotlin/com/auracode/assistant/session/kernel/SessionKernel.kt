@@ -20,7 +20,7 @@ internal class SessionKernel(
             engineId = engineId,
         ),
     )
-    private val eventLog = mutableListOf<SessionDomainEvent>()
+    private val journal = SessionEventJournal()
 
     /** Exposes the latest immutable session state snapshot. */
     val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -32,7 +32,7 @@ internal class SessionKernel(
     /** Applies one live domain event incrementally. */
     fun applyLiveEvent(event: SessionDomainEvent) {
         synchronized(stateLock) {
-            eventLog += event
+            journal.append(event)
             _state.value = reducer.reduce(_state.value, event)
             syncRuntimeBinding()
         }
@@ -42,7 +42,7 @@ internal class SessionKernel(
     fun applyLiveEvents(events: Iterable<SessionDomainEvent>) {
         synchronized(stateLock) {
             events.forEach { event ->
-                eventLog += event
+                journal.append(event)
                 _state.value = reducer.reduce(_state.value, event)
             }
             syncRuntimeBinding()
@@ -52,14 +52,14 @@ internal class SessionKernel(
     /** Rebuilds the session state from a full history snapshot. */
     fun restoreHistory(events: List<SessionDomainEvent>) {
         synchronized(stateLock) {
-            eventLog.clear()
-            eventLog += events
+            journal.replaceAll(events)
+            val compactedEvents = journal.snapshot()
             _state.value = reducer.reduceAll(
                 initialState = SessionState.empty(
                     sessionId = sessionId,
                     engineId = engineId,
                 ),
-                events = eventLog,
+                events = compactedEvents,
             )
             syncRuntimeBinding()
         }
@@ -71,15 +71,14 @@ internal class SessionKernel(
             return
         }
         synchronized(stateLock) {
-            val combinedEvents = olderEvents + eventLog
-            eventLog.clear()
-            eventLog += combinedEvents
+            journal.prepend(olderEvents)
+            val compactedEvents = journal.snapshot()
             _state.value = reducer.reduceAll(
                 initialState = SessionState.empty(
                     sessionId = sessionId,
                     engineId = engineId,
                 ),
-                events = eventLog,
+                events = compactedEvents,
             )
             syncRuntimeBinding()
         }
@@ -99,7 +98,7 @@ internal class SessionKernel(
 
     /** Returns the currently stored domain-event log for verification or replay. */
     fun snapshotEventLog(): List<SessionDomainEvent> {
-        return synchronized(stateLock) { eventLog.toList() }
+        return synchronized(stateLock) { journal.snapshot() }
     }
 
     /** Mirrors the current runtime slice into the optional registry. */

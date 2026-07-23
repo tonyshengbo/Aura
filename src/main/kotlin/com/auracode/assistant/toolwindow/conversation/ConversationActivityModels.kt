@@ -1,5 +1,6 @@
 package com.auracode.assistant.toolwindow.conversation
 
+import androidx.compose.runtime.Immutable
 import com.auracode.assistant.model.MessageRole
 import com.auracode.assistant.persistence.chat.PersistedAttachmentKind
 import com.auracode.assistant.protocol.ItemKind
@@ -24,6 +25,7 @@ internal enum class ConversationAttachmentKind {
     TEXT,
 }
 
+@Immutable
 internal data class ConversationMessageAttachment(
     val id: String,
     val kind: ConversationAttachmentKind,
@@ -42,6 +44,7 @@ internal enum class ConversationFileChangeKind {
     UNKNOWN,
 }
 
+@Immutable
 internal data class ConversationFileChange(
     val sourceScopedId: String,
     val path: String,
@@ -55,6 +58,7 @@ internal data class ConversationFileChange(
     val newContent: String? = null,
 )
 
+@Immutable
 internal sealed interface ConversationActivityItem {
     val id: String
     val sourceId: String?

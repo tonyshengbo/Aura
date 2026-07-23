@@ -21,12 +21,53 @@ import com.auracode.assistant.i18n.AuraCodeBundle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 /**
  * Verifies that session projections drive timeline and execution UI models from kernel state.
  */
 class ConversationUiProjectionTest {
+    @Test
+    fun `incremental conversation projection reuses unchanged entry nodes`() {
+        val reducer = SessionStateReducer()
+        val builder = SessionUiProjectionBuilder()
+        val initial = reducer.reduceAll(
+            SessionState.empty("session-incremental", "codex"),
+            listOf(
+                SessionDomainEvent.TurnStarted("turn-1"),
+                SessionDomainEvent.MessageAppended("message-1", "turn-1", SessionMessageRole.USER, "question"),
+                SessionDomainEvent.MessageAppended("message-2", "turn-1", SessionMessageRole.ASSISTANT, "draft"),
+            ),
+        )
+        val first = builder.projectConversation(initial)
+
+        val updated = reducer.reduce(
+            initial,
+            SessionDomainEvent.MessageAppended("message-2", "turn-1", SessionMessageRole.ASSISTANT, "updated"),
+        )
+        val second = builder.projectConversation(updated, setOf("message-2"))
+
+        assertSame(first.nodes[0], second.nodes[0])
+        assertNotSame(first.nodes[1], second.nodes[1])
+        assertEquals("updated", assertIs<ConversationActivityItem.MessageNode>(second.nodes[1]).text)
+
+        val appended = reducer.reduce(
+            updated,
+            SessionDomainEvent.ReasoningUpdated(
+                itemId = "reasoning-1",
+                turnId = "turn-1",
+                status = SessionActivityStatus.RUNNING,
+                text = "checking",
+            ),
+        )
+        val third = builder.projectConversation(appended, setOf("reasoning-1"))
+        assertSame(second.nodes[0], third.nodes[0])
+        assertSame(second.nodes[1], third.nodes[1])
+        assertEquals("checking", assertIs<ConversationActivityItem.ReasoningNode>(third.nodes[2]).body)
+    }
+
     /**
      * Verifies that projected conversation nodes are built from structured kernel entries instead of timeline mappers.
      */

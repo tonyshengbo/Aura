@@ -8,9 +8,21 @@ data class CodexModelOption(
 
 /** 维护 Codex 内置模型列表和默认模型选择。 */
 object CodexModelCatalog {
-    const val defaultModel: String = "gpt-5.5"
+    const val defaultModel: String = "gpt-5.6-sol"
 
     val options: List<CodexModelOption> = listOf(
+        CodexModelOption(
+            id = "gpt-5.6-sol",
+            description = "GPT-5.6-SOL",
+        ),
+        CodexModelOption(
+            id = "gpt-5.6-terra",
+            description = "GPT-5.6-TERRA",
+        ),
+        CodexModelOption(
+            id = "gpt-5.6-luna",
+            description = "GPT-5.6-LUNA",
+        ),
         CodexModelOption(
             id = "gpt-5.5",
             description = "GPT-5.5",
@@ -18,18 +30,6 @@ object CodexModelCatalog {
         CodexModelOption(
             id = "gpt-5.4",
             description = "gpt-5.4",
-        ),
-        CodexModelOption(
-            id = "gpt-5.4-mini",
-            description = "GPT-5.4-Mini",
-        ),
-        CodexModelOption(
-            id = "gpt-5.3-codex",
-            description = "gpt-5.3-codex",
-        ),
-        CodexModelOption(
-            id = "gpt-5.2",
-            description = "gpt-5.2",
         ),
     )
 

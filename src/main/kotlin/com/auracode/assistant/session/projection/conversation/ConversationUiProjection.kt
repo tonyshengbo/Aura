@@ -26,47 +26,117 @@ internal data class ConversationUiProjection(
     val isRunning: Boolean,
     val activeTurnId: String?,
     val latestError: String? = null,
+    val entryPatches: List<ConversationProjectedEntryPatch>? = null,
+)
+
+internal data class ConversationProjectedEntryPatch(
+    val entryId: String,
+    val previousNodeIds: List<String>,
+    val nodes: List<ConversationActivityItem>,
 )
 
 /**
  * Projects kernel conversation state into timeline nodes without re-parsing provider payloads in UI code.
  */
 internal class ConversationUiProjectionBuilder {
+    private data class SessionProjectionCache(
+        val nodesByEntryId: MutableMap<String, List<ConversationActivityItem>>,
+    )
+
+    private val cacheBySessionId = mutableMapOf<String, SessionProjectionCache>()
+
     /** Projects one immutable session state snapshot into timeline-ready nodes. */
-    fun project(state: SessionState): ConversationUiProjection {
+    @Synchronized
+    fun project(
+        state: SessionState,
+        changedEntryIds: Set<String>? = null,
+    ): ConversationUiProjection {
         val latestError = state.conversation.order
             .asReversed()
             .mapNotNull { entryId -> state.conversation.entries[entryId] as? SessionConversationEntry.Error }
             .firstOrNull()
             ?.message
+        val buildResult = buildNodes(state, changedEntryIds)
         return ConversationUiProjection(
-            nodes = buildNodes(state),
+            nodes = buildResult.nodes,
             isRunning = state.runtime.runStatus == com.auracode.assistant.session.kernel.SessionRunStatus.RUNNING,
             activeTurnId = state.runtime.activeTurnId,
             latestError = latestError,
+            entryPatches = buildResult.entryPatches,
         )
     }
 
+    @Synchronized
+    fun drop(sessionId: String) {
+        cacheBySessionId.remove(sessionId)
+    }
+
+    @Synchronized
+    fun retain(sessionIds: Set<String>) {
+        cacheBySessionId.keys.retainAll(sessionIds)
+    }
+
     /** Builds projected timeline nodes in the same order as the kernel conversation log. */
-    private fun buildNodes(state: SessionState): List<ConversationActivityItem> {
-        return buildList {
-            state.conversation.order.forEach { entryId ->
-                val entry = state.conversation.entries[entryId] ?: return@forEach
-                when (entry) {
-                    is SessionConversationEntry.Message -> add(entry.toNode(state))
-                    is SessionConversationEntry.Reasoning -> add(entry.toNode())
-                    is SessionConversationEntry.Command -> add(entry.toNode())
-                    is SessionConversationEntry.Tool -> add(entry.toNode())
-                    is SessionConversationEntry.FileChanges -> addAll(entry.toNodes())
-                    is SessionConversationEntry.Approval -> add(entry.toNode())
-                    is SessionConversationEntry.Plan -> add(entry.toNode())
-                    is SessionConversationEntry.TurnDurationSummary -> add(entry.toNode())
-                    is SessionConversationEntry.ToolUserInput -> add(entry.toNode())
-                    is SessionConversationEntry.ContextCompaction -> add(entry.toNode())
-                    is SessionConversationEntry.Error -> add(entry.toNode())
-                    is SessionConversationEntry.EngineSwitched -> add(entry.toNode())
+    private fun buildNodes(
+        state: SessionState,
+        changedEntryIds: Set<String>?,
+    ): ConversationNodeBuildResult {
+        val existingCache = cacheBySessionId[state.sessionId]
+        var entryPatches: List<ConversationProjectedEntryPatch>? = null
+        val cache = if (changedEntryIds == null || existingCache == null) {
+            SessionProjectionCache(
+                nodesByEntryId = state.conversation.order.associateWithTo(linkedMapOf()) { entryId ->
+                    projectEntry(state, entryId)
+                },
+            ).also { cacheBySessionId[state.sessionId] = it }
+        } else {
+            val orderedChangedIds = state.conversation.order.filterTo(linkedSetOf()) { it in changedEntryIds } +
+                changedEntryIds.filterNot { it in state.conversation.entries }
+            entryPatches = orderedChangedIds.map { entryId ->
+                val previousNodes = existingCache.nodesByEntryId[entryId].orEmpty()
+                val nextNodes = if (entryId in state.conversation.entries) projectEntry(state, entryId) else emptyList()
+                if (entryId in state.conversation.entries) {
+                    existingCache.nodesByEntryId[entryId] = nextNodes
+                } else {
+                    existingCache.nodesByEntryId.remove(entryId)
                 }
+                ConversationProjectedEntryPatch(
+                    entryId = entryId,
+                    previousNodeIds = previousNodes.map(ConversationActivityItem::id),
+                    nodes = nextNodes,
+                )
             }
+            existingCache
+        }
+        val nodes = buildList {
+            state.conversation.order.forEach { entryId ->
+                addAll(cache.nodesByEntryId[entryId].orEmpty())
+            }
+        }
+        return ConversationNodeBuildResult(nodes = nodes, entryPatches = entryPatches)
+    }
+
+    private data class ConversationNodeBuildResult(
+        val nodes: List<ConversationActivityItem>,
+        val entryPatches: List<ConversationProjectedEntryPatch>?,
+    )
+
+    /** Projects one kernel entry while preserving the one-to-many file-change mapping. */
+    private fun projectEntry(state: SessionState, entryId: String): List<ConversationActivityItem> {
+        return when (val entry = state.conversation.entries[entryId]) {
+            is SessionConversationEntry.Message -> listOf(entry.toNode(state))
+            is SessionConversationEntry.Reasoning -> listOf(entry.toNode())
+            is SessionConversationEntry.Command -> listOf(entry.toNode())
+            is SessionConversationEntry.Tool -> listOf(entry.toNode())
+            is SessionConversationEntry.FileChanges -> entry.toNodes()
+            is SessionConversationEntry.Approval -> listOf(entry.toNode())
+            is SessionConversationEntry.Plan -> listOf(entry.toNode())
+            is SessionConversationEntry.TurnDurationSummary -> listOf(entry.toNode())
+            is SessionConversationEntry.ToolUserInput -> listOf(entry.toNode())
+            is SessionConversationEntry.ContextCompaction -> listOf(entry.toNode())
+            is SessionConversationEntry.Error -> listOf(entry.toNode())
+            is SessionConversationEntry.EngineSwitched -> listOf(entry.toNode())
+            null -> emptyList()
         }
     }
 

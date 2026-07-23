@@ -10,7 +10,21 @@ internal data class SessionUiFlushBatch(
     val eventCount: Int,
     val requestCount: Int,
     val oldestRequestNanos: Long,
+    val slices: Set<SessionProjectionSlice>,
+    val conversationEntryIds: Set<String>?,
 )
+
+internal enum class SessionProjectionSlice {
+    CONVERSATION,
+    EXECUTION,
+    SUBMISSION,
+    NAVIGATION,
+    ;
+
+    companion object {
+        val ALL: Set<SessionProjectionSlice> = entries.toSet()
+    }
+}
 
 /**
  * Coalesces high-frequency projection requests per session while allowing interaction-critical
@@ -27,6 +41,8 @@ internal class SessionUiUpdateScheduler(
         val oldestRequestNanos: Long,
         val eventCount: Int,
         val requestCount: Int,
+        val slices: Set<SessionProjectionSlice>,
+        val conversationEntryIds: Set<String>?,
         val job: Job?,
     )
 
@@ -34,10 +50,17 @@ internal class SessionUiUpdateScheduler(
     private val pendingBySessionId = mutableMapOf<String, PendingUpdate>()
     private var nextGeneration = 0L
 
-    fun request(sessionId: String, eventCount: Int, immediate: Boolean) {
+    fun request(
+        sessionId: String,
+        eventCount: Int,
+        slices: Set<SessionProjectionSlice>,
+        immediate: Boolean,
+        conversationEntryIds: Set<String>? = null,
+    ) {
         require(eventCount > 0) { "eventCount must be positive" }
+        if (slices.isEmpty()) return
         if (immediate || intervalMs <= 0L) {
-            flushNow(sessionId, eventCount)
+            flushNow(sessionId, eventCount, slices, conversationEntryIds)
             return
         }
 
@@ -47,6 +70,13 @@ internal class SessionUiUpdateScheduler(
                 pendingBySessionId[sessionId] = current.copy(
                     eventCount = current.eventCount + eventCount,
                     requestCount = current.requestCount + 1,
+                    slices = current.slices + slices,
+                    conversationEntryIds = mergeConversationEntryIds(
+                        currentSlices = current.slices,
+                        currentEntryIds = current.conversationEntryIds,
+                        incomingSlices = slices,
+                        incomingEntryIds = conversationEntryIds,
+                    ),
                 )
                 return
             }
@@ -62,13 +92,15 @@ internal class SessionUiUpdateScheduler(
                 oldestRequestNanos = requestedAt,
                 eventCount = eventCount,
                 requestCount = 1,
+                slices = slices,
+                conversationEntryIds = conversationEntryIds,
                 job = job,
             )
         }
     }
 
     fun flush(sessionId: String) {
-        flushNow(sessionId, additionalEventCount = 0)
+        flushNow(sessionId, 0, emptySet(), emptySet())
     }
 
     fun drop(sessionId: String) {
@@ -84,7 +116,12 @@ internal class SessionUiUpdateScheduler(
         }
     }
 
-    private fun flushNow(sessionId: String, additionalEventCount: Int) {
+    private fun flushNow(
+        sessionId: String,
+        additionalEventCount: Int,
+        additionalSlices: Set<SessionProjectionSlice>,
+        additionalConversationEntryIds: Set<String>?,
+    ) {
         val batch = synchronized(lock) {
             val pending = pendingBySessionId.remove(sessionId)
             pending?.job?.cancel()
@@ -95,6 +132,17 @@ internal class SessionUiUpdateScheduler(
                     eventCount = (pending?.eventCount ?: 0) + additionalEventCount,
                     requestCount = (pending?.requestCount ?: 0) + if (additionalEventCount > 0) 1 else 0,
                     oldestRequestNanos = pending?.oldestRequestNanos ?: nanoTime(),
+                    slices = pending?.slices.orEmpty() + additionalSlices,
+                    conversationEntryIds = if (pending == null) {
+                        additionalConversationEntryIds
+                    } else {
+                        mergeConversationEntryIds(
+                            currentSlices = pending.slices,
+                            currentEntryIds = pending.conversationEntryIds,
+                            incomingSlices = additionalSlices,
+                            incomingEntryIds = additionalConversationEntryIds,
+                        )
+                    },
                 )
             }
         }
@@ -112,6 +160,8 @@ internal class SessionUiUpdateScheduler(
                     eventCount = pending.eventCount,
                     requestCount = pending.requestCount,
                     oldestRequestNanos = pending.oldestRequestNanos,
+                    slices = pending.slices,
+                    conversationEntryIds = pending.conversationEntryIds,
                 )
             }
         }
@@ -120,6 +170,22 @@ internal class SessionUiUpdateScheduler(
 
     private companion object {
         const val DEFAULT_INTERVAL_MS = 32L
+    }
+
+    private fun mergeConversationEntryIds(
+        currentSlices: Set<SessionProjectionSlice>,
+        currentEntryIds: Set<String>?,
+        incomingSlices: Set<SessionProjectionSlice>,
+        incomingEntryIds: Set<String>?,
+    ): Set<String>? {
+        val currentHasConversation = SessionProjectionSlice.CONVERSATION in currentSlices
+        val incomingHasConversation = SessionProjectionSlice.CONVERSATION in incomingSlices
+        return when {
+            !currentHasConversation -> incomingEntryIds
+            !incomingHasConversation -> currentEntryIds
+            currentEntryIds == null || incomingEntryIds == null -> null
+            else -> currentEntryIds + incomingEntryIds
+        }
     }
 }
 
@@ -140,6 +206,97 @@ internal fun requiresImmediateProjection(event: com.auracode.assistant.session.k
         -> true
         else -> false
     }
+}
+
+/** Resolves the smallest safe set of UI projection slices affected by one domain event. */
+internal fun projectionSlicesFor(
+    event: com.auracode.assistant.session.kernel.SessionDomainEvent,
+): Set<SessionProjectionSlice> {
+    return when (event) {
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.MessageAppended,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ReasoningUpdated,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.CommandUpdated,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ToolUpdated,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.RunningPlanUpdated,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.EngineSwitched,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ContextCompactionUpdated,
+        -> setOf(SessionProjectionSlice.CONVERSATION)
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.FileChangesUpdated ->
+            setOf(SessionProjectionSlice.CONVERSATION, SessionProjectionSlice.SUBMISSION)
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ErrorAppended -> if (event.terminal) {
+            setOf(
+                SessionProjectionSlice.CONVERSATION,
+                SessionProjectionSlice.EXECUTION,
+                SessionProjectionSlice.SUBMISSION,
+            )
+        } else {
+            setOf(SessionProjectionSlice.CONVERSATION)
+        }
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ApprovalRequested,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ApprovalResolved,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ToolUserInputRequested,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ToolUserInputResolved,
+        -> setOf(SessionProjectionSlice.CONVERSATION, SessionProjectionSlice.EXECUTION)
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.EditedFilesTracked,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.UsageUpdated,
+        -> setOf(SessionProjectionSlice.SUBMISSION)
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.SubagentsUpdated ->
+            setOf(SessionProjectionSlice.NAVIGATION)
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.ThreadStarted,
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.TurnStarted,
+        -> setOf(
+            SessionProjectionSlice.CONVERSATION,
+            SessionProjectionSlice.EXECUTION,
+            SessionProjectionSlice.SUBMISSION,
+        )
+
+        is com.auracode.assistant.session.kernel.SessionDomainEvent.TurnCompleted -> SessionProjectionSlice.ALL
+    }
+}
+
+internal fun projectionSlicesFor(
+    events: Iterable<com.auracode.assistant.session.kernel.SessionDomainEvent>,
+): Set<SessionProjectionSlice> = events.flatMapTo(linkedSetOf(), ::projectionSlicesFor)
+
+/**
+ * Returns changed conversation entry ids for the incremental projection fast path.
+ * A null result requests a full conversation rebuild.
+ */
+internal fun incrementalConversationEntryIdsFor(
+    events: Iterable<com.auracode.assistant.session.kernel.SessionDomainEvent>,
+): Set<String>? {
+    val changedIds = linkedSetOf<String>()
+    events.forEach { event ->
+        if (SessionProjectionSlice.CONVERSATION !in projectionSlicesFor(event)) return@forEach
+        when (event) {
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.MessageAppended -> changedIds += event.messageId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.ReasoningUpdated -> changedIds += event.itemId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.CommandUpdated -> changedIds += event.itemId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.ToolUpdated -> changedIds += event.itemId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.FileChangesUpdated -> changedIds += event.itemId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.RunningPlanUpdated -> {
+                changedIds += listOfNotNull(
+                    "plan",
+                    event.plan.turnId?.takeIf { it.isNotBlank() },
+                ).joinToString(":")
+            }
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.EngineSwitched -> changedIds += event.itemId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.ContextCompactionUpdated -> changedIds += event.itemId
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.ErrorAppended -> {
+                if (event.terminal) return null
+                changedIds += event.itemId
+            }
+            is com.auracode.assistant.session.kernel.SessionDomainEvent.ThreadStarted -> Unit
+            else -> return null
+        }
+    }
+    return changedIds
 }
 
 /** Aggregates projection timing so diagnostics do not add one log write per provider event. */

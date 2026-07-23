@@ -2,6 +2,7 @@ package com.auracode.assistant.toolwindow.conversation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalUriHandler
@@ -174,13 +175,15 @@ private fun rememberConversationMarkdownUriHandler(
     externalUriHandler: UriHandler,
     onOpenFilePath: ((String) -> Unit)?,
 ): UriHandler {
-    return object : UriHandler {
-        override fun openUri(target: String) {
-            val localPath = resolveConversationMarkdownFilePath(target)
-            when {
-                localPath != null && onOpenFilePath != null -> onOpenFilePath(localPath)
-                isSafeHttpUrl(target) -> externalUriHandler.openUri(target)
-                else -> Unit
+    return remember(externalUriHandler, onOpenFilePath) {
+        object : UriHandler {
+            override fun openUri(target: String) {
+                val localPath = resolveConversationMarkdownFilePath(target)
+                when {
+                    localPath != null && onOpenFilePath != null -> onOpenFilePath(localPath)
+                    isSafeHttpUrl(target) -> externalUriHandler.openUri(target)
+                    else -> Unit
+                }
             }
         }
     }

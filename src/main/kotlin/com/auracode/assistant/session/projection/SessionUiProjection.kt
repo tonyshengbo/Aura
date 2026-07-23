@@ -29,13 +29,28 @@ internal class SessionUiProjectionBuilder(
     private val submissionProjectionBuilder: SubmissionUiProjectionBuilder = SubmissionUiProjectionBuilder(),
     private val navigationProjectionBuilder: SessionNavigationUiProjectionBuilder = SessionNavigationUiProjectionBuilder(),
 ) {
+    fun projectConversation(
+        state: SessionState,
+        changedEntryIds: Set<String>? = null,
+    ): ConversationUiProjection = conversationProjectionBuilder.project(state, changedEntryIds)
+
+    fun dropConversation(sessionId: String) = conversationProjectionBuilder.drop(sessionId)
+
+    fun retainConversations(sessionIds: Set<String>) = conversationProjectionBuilder.retain(sessionIds)
+
+    fun projectExecution(state: SessionState): ExecutionUiProjection = executionProjectionBuilder.project(state)
+
+    fun projectSubmission(state: SessionState): SubmissionUiProjection = submissionProjectionBuilder.project(state)
+
+    fun projectNavigation(state: SessionState): SessionNavigationUiProjection = navigationProjectionBuilder.project(state)
+
     /** Projects one immutable kernel snapshot into the read-only UI projection graph. */
     fun project(state: SessionState): SessionUiProjection {
         return SessionUiProjection(
-            conversation = conversationProjectionBuilder.project(state),
-            execution = executionProjectionBuilder.project(state),
-            submission = submissionProjectionBuilder.project(state),
-            navigation = navigationProjectionBuilder.project(state),
+            conversation = projectConversation(state),
+            execution = projectExecution(state),
+            submission = projectSubmission(state),
+            navigation = projectNavigation(state),
         )
     }
 }

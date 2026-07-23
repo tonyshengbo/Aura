@@ -24,6 +24,7 @@ internal data class ConversationAreaState(
     val expandedNodeIds: Set<String> = emptySet(),
     val scrollSnapshot: ConversationScrollSnapshot? = null,
     val renderVersion: Long = 0L,
+    val timelineContentVersion: Long = 0L,
     val renderCause: ConversationRenderCause = ConversationRenderCause.IDLE,
     val prependedCount: Int = 0,
     val latestError: String? = null,
@@ -35,6 +36,7 @@ internal data class ConversationAreaState(
 internal class ConversationAreaStore {
     private val _state = MutableStateFlow(ConversationAreaState())
     val state: StateFlow<ConversationAreaState> = _state.asStateFlow()
+    private val nodeIndexById = mutableMapOf<String, Int>()
 
     fun onEvent(event: AppEvent) {
         when (event) {
@@ -60,11 +62,24 @@ internal class ConversationAreaStore {
                     ),
                     isLoadingOlder = event.loading,
                     renderVersion = previous.renderVersion + 1,
+                    timelineContentVersion = previous.timelineContentVersion + 1,
                 )
+                rebuildNodeIndex(_state.value.nodes)
             }
 
             is AppEvent.ConversationUiProjectionUpdated -> {
-                syncProjectedState(
+                val appliedIncrementally = event.entryPatches?.let { patches ->
+                    syncProjectedStateIncrementally(
+                        projectedNodes = event.nodes,
+                        patches = patches,
+                        oldestCursor = event.oldestCursor,
+                        hasOlder = event.hasOlder,
+                        isRunning = event.isRunning,
+                        activeTurnId = event.activeTurnId,
+                        latestError = event.latestError,
+                    )
+                } == true
+                if (!appliedIncrementally) syncProjectedState(
                     nodes = event.nodes,
                     oldestCursor = event.oldestCursor,
                     hasOlder = event.hasOlder,
@@ -88,6 +103,7 @@ internal class ConversationAreaStore {
 
             AppEvent.ConversationReset -> {
                 _state.value = ConversationAreaState()
+                nodeIndexById.clear()
             }
 
             else -> Unit
@@ -96,6 +112,7 @@ internal class ConversationAreaStore {
 
     fun restoreState(state: ConversationAreaState) {
         _state.value = state
+        rebuildNodeIndex(state.nodes)
     }
 
     /** Persists the currently visible viewport snapshot so session switches can capture it later. */
@@ -158,12 +175,96 @@ internal class ConversationAreaStore {
             activeTurnId = activeTurnId,
             latestError = latestError,
             renderVersion = previous.renderVersion + 1,
+            timelineContentVersion = previous.timelineContentVersion + 1,
             renderCause = renderCause,
             prependedCount = prependedCount,
         )
         _state.value = nextState.copy(
             expandedNodeIds = projectedExpandedNodeIds(previous = previous, nextState = nextState),
         )
+        rebuildNodeIndex(_state.value.nodes)
+    }
+
+    /** Applies safe same-id replacements and tail appends without rescanning the full timeline. */
+    private fun syncProjectedStateIncrementally(
+        projectedNodes: List<ConversationActivityItem>,
+        patches: List<com.auracode.assistant.toolwindow.eventing.ConversationEntryNodePatch>,
+        oldestCursor: String?,
+        hasOlder: Boolean,
+        isRunning: Boolean,
+        activeTurnId: String?,
+        latestError: String?,
+    ): Boolean {
+        val previous = _state.value
+        if (previous.isLoadingOlder || previous.hasOlder != hasOlder) return false
+
+        val previousNodesById = linkedMapOf<String, ConversationActivityItem?>()
+        var appendedNodeCount = 0
+        patches.forEach { patch ->
+            if (patch.previousNodeIds.isEmpty()) {
+                if (patch.nodes.any { it.id in nodeIndexById }) return false
+                appendedNodeCount += patch.nodes.size
+                return@forEach
+            }
+            if (patch.previousNodeIds.size != patch.nodes.size) return false
+            patch.previousNodeIds.zip(patch.nodes).forEach { (previousId, nextNode) ->
+                if (previousId != nextNode.id) return false
+                val index = nodeIndexById[previousId] ?: return false
+                previousNodesById[previousId] = previous.nodes[index]
+            }
+        }
+
+        val expectedHeaderCount = if (hasOlder || previous.isLoadingOlder) 1 else 0
+        if (previous.nodes.size + appendedNodeCount != projectedNodes.size + expectedHeaderCount) return false
+
+        val nextNodes = previous.nodes.toMutableList()
+        patches.forEach { patch ->
+            if (patch.previousNodeIds.isEmpty()) {
+                patch.nodes.forEach { node ->
+                    nodeIndexById[node.id] = nextNodes.size
+                    nextNodes += node
+                }
+            } else {
+                patch.nodes.forEach { node ->
+                    nextNodes[nodeIndexById.getValue(node.id)] = node
+                }
+            }
+        }
+
+        var expanded = previous.expandedNodeIds
+        patches.flatMap { it.nodes }.forEach { node ->
+            val previousNode = previousNodesById[node.id]
+            if (shouldExpandByDefault(node, previousNode)) expanded = expanded + node.id
+            if (!node.isProcessActivityNode()) return@forEach
+            val isNodeRunning = node.status == ItemStatus.RUNNING
+            val wasRunning = previousNode?.status == ItemStatus.RUNNING
+            when {
+                previousNode == null && shouldAutoExpandOnArrival(node, isNodeRunning) -> expanded = expanded + node.id
+                shouldAutoExpandAfterContentArrives(previousNode, node, isNodeRunning) -> expanded = expanded + node.id
+                wasRunning && shouldAutoCollapseOnCompletion(node, isNodeRunning) -> expanded = expanded - node.id
+            }
+        }
+
+        _state.value = previous.copy(
+            nodes = nextNodes,
+            oldestCursor = oldestCursor,
+            hasOlder = hasOlder,
+            isLoadingOlder = false,
+            isRunning = isRunning,
+            activeTurnId = activeTurnId,
+            expandedNodeIds = expanded,
+            latestError = latestError,
+            renderVersion = previous.renderVersion + 1,
+            timelineContentVersion = previous.timelineContentVersion + if (patches.any { it.previousNodeIds.isNotEmpty() || it.nodes.isNotEmpty() }) 1 else 0,
+            renderCause = ConversationRenderCause.LIVE_UPDATE,
+            prependedCount = 0,
+        )
+        return true
+    }
+
+    private fun rebuildNodeIndex(nodes: List<ConversationActivityItem>) {
+        nodeIndexById.clear()
+        nodes.forEachIndexed { index, node -> nodeIndexById[node.id] = index }
     }
 
     /** Recomputes expansion state for either reducer-driven or projection-driven node updates. */

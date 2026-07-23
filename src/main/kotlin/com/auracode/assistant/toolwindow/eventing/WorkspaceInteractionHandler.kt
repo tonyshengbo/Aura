@@ -112,8 +112,7 @@ internal class WorkspaceInteractionHandler(
         return attachments.mapNotNull { attachment ->
             val source = runCatching { Path.of(attachment.path) }.getOrNull() ?: return@mapNotNull null
             if (!source.isRegularFile()) return@mapNotNull null
-            val bytes = runCatching { Files.readAllBytes(source) }.getOrNull() ?: return@mapNotNull null
-            val sha = sha256(bytes)
+            val sha = runCatching { sha256(source) }.getOrNull() ?: return@mapNotNull null
             val ext = attachment.displayName.substringAfterLast('.', "").takeIf { it.isNotBlank() }
             val fileName = buildString {
                 append(sha)
@@ -212,9 +211,20 @@ internal class WorkspaceInteractionHandler(
         }
     }
 
-    private fun sha256(bytes: ByteArray): String {
-        return MessageDigest.getInstance("SHA-256")
-            .digest(bytes)
-            .joinToString("") { "%02x".format(it) }
+    private fun sha256(path: Path): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        Files.newInputStream(path).use { input ->
+            val buffer = ByteArray(DEFAULT_HASH_BUFFER_BYTES)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                if (read > 0) digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        const val DEFAULT_HASH_BUFFER_BYTES: Int = 64 * 1024
     }
 }

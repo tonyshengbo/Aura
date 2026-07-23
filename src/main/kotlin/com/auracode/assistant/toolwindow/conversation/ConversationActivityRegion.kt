@@ -272,7 +272,7 @@ internal fun ConversationActivityRegion(
             .collect(onScrollSnapshotChanged)
     }
 
-    LaunchedEffect(state.renderVersion) {
+    LaunchedEffect(state.timelineContentVersion) {
         when (state.renderCause) {
             ConversationRenderCause.HISTORY_PREPEND -> {
                 val delta = state.prependedCount
@@ -301,7 +301,7 @@ internal fun ConversationActivityRegion(
         }
     }
 
-    LaunchedEffect(state.scrollRestoreRequestVersion, state.renderVersion, rowCount) {
+    LaunchedEffect(state.scrollRestoreRequestVersion, rowCount) {
         val snapshot = state.pendingScrollRestoreSnapshot
         if (!conversationHasPendingScrollRestoreRequest(
                 requestVersion = state.scrollRestoreRequestVersion,
@@ -325,7 +325,7 @@ internal fun ConversationActivityRegion(
         handledScrollRestoreRequestVersion = state.scrollRestoreRequestVersion
     }
 
-    LaunchedEffect(state.promptScrollRequestVersion, state.renderVersion, rowCount) {
+    LaunchedEffect(state.promptScrollRequestVersion, rowCount) {
         if (!conversationHasPendingPromptScrollRequest(state.promptScrollRequestVersion, handledPromptScrollVersion)) {
             return@LaunchedEffect
         }

@@ -355,6 +355,7 @@ internal sealed interface AppEvent {
         val isRunning: Boolean,
         val activeTurnId: String? = null,
         val latestError: String?,
+        val entryPatches: List<ConversationEntryNodePatch>? = null,
     ) : AppEvent
     data class ExecutionUiProjectionUpdated(
         val approvals: List<PendingApprovalRequestUiModel>,
@@ -401,3 +402,9 @@ internal sealed interface AppEvent {
     ) : AppEvent
     data object ConversationReset : AppEvent
 }
+
+internal data class ConversationEntryNodePatch(
+    val entryId: String,
+    val previousNodeIds: List<String>,
+    val nodes: List<ConversationActivityItem>,
+)

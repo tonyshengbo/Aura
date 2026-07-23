@@ -48,6 +48,24 @@ import kotlin.test.assertTrue
 @OptIn(ExperimentalCoroutinesApi::class)
 class ToolWindowCoordinatorMultiSessionTest {
     @Test
+    fun `conversation memory rebase only runs for oversized active idle sessions`() {
+        assertTrue(shouldRebaseConversationMemory(321, 320, sessionIsActive = true, sessionIsRunning = false))
+        assertFalse(shouldRebaseConversationMemory(320, 320, sessionIsActive = true, sessionIsRunning = false))
+        assertFalse(shouldRebaseConversationMemory(321, 320, sessionIsActive = false, sessionIsRunning = false))
+        assertFalse(shouldRebaseConversationMemory(321, 320, sessionIsActive = true, sessionIsRunning = true))
+        assertTrue(
+            shouldRebaseConversationMemory(
+                entryCount = 1,
+                maxEntries = 320,
+                sessionIsActive = true,
+                sessionIsRunning = false,
+                retainedCharacters = 9_000_000,
+                maxCharacters = 8_000_000,
+            ),
+        )
+    }
+
+    @Test
     fun `selecting claude routes the next submission through claude provider`() {
         val harness = MultiEngineCoordinatorHarness()
         harness.settleStartup()
@@ -551,6 +569,45 @@ class ToolWindowCoordinatorMultiSessionTest {
     }
 
     @Test
+    fun `assistant streaming updates only publish the conversation projection slice`() {
+        val harness = CoordinatorHarness()
+        harness.eventHub.publishUiIntent(UiIntent.UpdateDocument(TextFieldValue("slice-run", TextRange(9))))
+        harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
+        harness.waitUntil { harness.provider.requests.size == 1 }
+        harness.provider.emit("slice-run", ProviderEvent.ThreadStarted("thread-slice"))
+        harness.provider.emit("slice-run", ProviderEvent.TurnStarted("turn-slice", "thread-slice"))
+        Thread.sleep(100)
+
+        val beforeStreaming = harness.projectedSlices.size
+        harness.provider.emit(
+            "slice-run",
+            ProviderEvent.ItemUpdated(
+                ProviderItem(
+                    id = "slice-run:assistant",
+                    kind = ItemKind.NARRATIVE,
+                    status = ItemStatus.RUNNING,
+                    name = "message",
+                    text = "streaming",
+                ),
+            ),
+        )
+        harness.waitUntil {
+            harness.projectedSlices.size > beforeStreaming
+        }
+        assertEquals(
+            setOf(SessionProjectionSlice.CONVERSATION),
+            harness.projectedSlices.last(),
+        )
+
+        val beforeCompletion = harness.projectedSlices.size
+        harness.provider.emit("slice-run", ProviderEvent.TurnCompleted("turn-slice", TurnOutcome.SUCCESS))
+        harness.waitUntil { harness.projectedSlices.size > beforeCompletion }
+        assertEquals(SessionProjectionSlice.ALL, harness.projectedSlices.last())
+
+        harness.dispose()
+    }
+
+    @Test
     fun `queued background session submission dispatches without mutating the active tab`() {
         val harness = CoordinatorHarness()
 
@@ -839,6 +896,7 @@ class ToolWindowCoordinatorMultiSessionTest {
         val eventHub = ToolWindowEventHub()
         val conversationStore = ConversationAreaStore()
         val submissionStore = SubmissionAreaStore()
+        val projectedSlices = CopyOnWriteArrayList<Set<SessionProjectionSlice>>()
         val chatService: AgentChatService = service
         private val coordinator = ToolWindowCoordinator(
             chatService = service,
@@ -852,6 +910,7 @@ class ToolWindowCoordinatorMultiSessionTest {
             historyPageSize = 10,
             runStartupWarmups = false,
             scopeDispatcher = testDispatcher,
+            onProjectionSlicesPublished = { _, slices -> projectedSlices += slices },
         )
 
         fun waitUntil(timeoutMs: Long = 15_000, condition: () -> Boolean) {

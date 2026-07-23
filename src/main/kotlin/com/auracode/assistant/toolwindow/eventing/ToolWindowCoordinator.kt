@@ -45,14 +45,17 @@ import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptStore
 import com.auracode.assistant.logging.CliDebugLogger
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.util.LowMemoryWatcher
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import java.awt.Desktop
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.isRegularFile
 
 internal class ToolWindowCoordinator(
@@ -119,15 +122,20 @@ internal class ToolWindowCoordinator(
         }
     },
     private val onSessionSnapshotPublished: () -> Unit = {},
+    private val onProjectionSlicesPublished: (String, Set<SessionProjectionSlice>) -> Unit = { _, _ -> },
     private val historyPageSize: Int = 40,
     private val runStartupWarmups: Boolean = true,
     private val scopeDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val uiProjectionIntervalMs: Long = 32L,
+    private val maxInMemoryConversationEntries: Int = 320,
+    private val maxInMemoryConversationCharacters: Long = 8L * 1024L * 1024L,
 ) : Disposable {
     companion object {
         private val LOG = Logger.getInstance(ToolWindowCoordinator::class.java)
         private val CLI_LOGGER = CliDebugLogger(LOG)
         private const val MENTION_LIMIT: Int = 10
+        private const val CONVERSATION_MEMORY_REBASE_DELAY_MS: Long = 500L
+        private const val CONVERSATION_MEMORY_REBASE_PAGE_SIZE: Int = 12
         private const val EXECUTE_APPROVED_PLAN_PROMPT: String =
             "The user approved the latest plan. Execute it now."
     }
@@ -155,6 +163,7 @@ internal class ToolWindowCoordinator(
     private val sessionConversationUiStateRegistry = SessionConversationUiStateRegistry()
     private val pendingSubmissionsBySessionId = linkedMapOf<String, ArrayDeque<com.auracode.assistant.toolwindow.submission.PendingSubmission>>()
     private val activePlanRunContexts = linkedMapOf<String, ActivePlanRunContext>()
+    private val sessionHistoryRebaseInFlight = ConcurrentHashMap.newKeySet<String>()
     private val projectionPerformanceTracker = SessionUiProjectionPerformanceTracker(
         report = { message -> diagnosticLog(message, null) },
     )
@@ -163,7 +172,11 @@ internal class ToolWindowCoordinator(
         intervalMs = uiProjectionIntervalMs,
         onFlush = { sessionId, batch ->
             val startedAt = System.nanoTime()
-            syncSessionUiProjection(sessionId)
+            syncSessionUiProjection(
+                sessionId = sessionId,
+                slices = batch.slices,
+                conversationEntryIds = batch.conversationEntryIds,
+            )
             projectionPerformanceTracker.record(batch, System.nanoTime() - startedAt)
         },
     )
@@ -262,6 +275,10 @@ internal class ToolWindowCoordinator(
     private val conversationHandler = ConversationFlowHandler(context, workspaceHandler)
 
     init {
+        LowMemoryWatcher.register(
+            { releaseInactiveSessionMemory() },
+            this,
+        )
         coroutineLauncher.launch("eventHub.collect") {
             eventHub.stream.collect { event ->
                 if (event is AppEvent.UiIntentPublished && settingsHandler.isMcpIntent(event.intent)) {
@@ -582,6 +599,8 @@ internal class ToolWindowCoordinator(
         sessionUiUpdateScheduler.request(
             sessionId = sessionId,
             eventCount = events.size,
+            slices = projectionSlicesFor(events),
+            conversationEntryIds = incrementalConversationEntryIdsFor(events),
             immediate = events.any(::requiresImmediateProjection),
         )
         if (events.any { event ->
@@ -595,13 +614,60 @@ internal class ToolWindowCoordinator(
         ) {
             conversationHandler.dispatchNextPendingSubmissionIfIdle(sessionId, allowTurnCompletedBypass = true)
         }
+        events.filterIsInstance<SessionDomainEvent.TurnCompleted>()
+            .lastOrNull()
+            ?.let { completed -> scheduleConversationMemoryRebase(sessionId, completed.turnId) }
+    }
+
+    /** Replaces an oversized idle live timeline with the provider-backed latest history page. */
+    private fun scheduleConversationMemoryRebase(sessionId: String, completedTurnId: String) {
+        val state = kernelForSession(sessionId).currentState
+        val entryCount = state.conversation.order.size
+        val retainedCharacters = estimateConversationRetainedCharacters(state)
+        if (!shouldRebaseConversationMemory(
+                entryCount = entryCount,
+                maxEntries = maxInMemoryConversationEntries,
+                sessionIsActive = sessionId == activeSessionId(),
+                // TurnCompleted is authoritative even though AgentChatService clears its run
+                // registry immediately after returning from this callback.
+                sessionIsRunning = false,
+                retainedCharacters = retainedCharacters,
+                maxCharacters = maxInMemoryConversationCharacters,
+            )
+        ) return
+        if (!sessionHistoryRebaseInFlight.add(sessionId)) return
+
+        coroutineLauncher.launch("rebaseConversationMemory($sessionId)") {
+            try {
+                // Give the provider a brief opportunity to flush the just-completed turn into its
+                // own history source. A new run starting during this window cancels the rebase.
+                delay(CONVERSATION_MEMORY_REBASE_DELAY_MS)
+                if (sessionId != activeSessionId()) return@launch
+                if (chatService.listSessions().firstOrNull { it.id == sessionId }?.isRunning == true) return@launch
+                val page = chatService.loadCurrentConversationReplay(
+                    limit = minOf(historyPageSize, CONVERSATION_MEMORY_REBASE_PAGE_SIZE),
+                )
+                val containsCompletedTurn = page.events.any { event ->
+                    event is SessionDomainEvent.TurnCompleted && event.turnId == completedTurnId
+                }
+                if (!containsCompletedTurn) return@launch
+                restoreSessionHistory(sessionId = sessionId, page = page, prepend = false)
+            } finally {
+                sessionHistoryRebaseInFlight.remove(sessionId)
+            }
+        }
     }
 
     /** Refreshes IDE-visible files after provider-reported workspace changes. */
     private fun refreshWorkspacePathsFor(events: List<SessionDomainEvent>) {
         val affectedPaths = linkedSetOf<String>()
-        events.filterIsInstance<SessionDomainEvent.FileChangesUpdated>()
-            .flatMap { it.changes }
+        events.flatMap { event ->
+            when (event) {
+                is SessionDomainEvent.FileChangesUpdated -> event.changes
+                is SessionDomainEvent.EditedFilesTracked -> event.changes
+                else -> emptyList()
+            }
+        }
             .forEach { change ->
                 val path = change.path.trim()
                 if (path.isBlank()) return@forEach
@@ -617,41 +683,69 @@ internal class ToolWindowCoordinator(
     }
 
     /** Rebuilds the read-only projection for one session and pushes it into scoped UI stores. */
-    private fun syncSessionUiProjection(sessionId: String) {
-        val projection = normalizeHistoryTransientUi(
-            sessionId = sessionId,
-            projection = sessionProjectionBuilder.project(kernelForSession(sessionId).currentState),
-        )
-        val visibleEditedFiles = sessionHistoryEditedFilesFilterRegistry.filterVisible(
-            sessionId = sessionId,
-            editedFiles = projection.submission.editedFiles,
-        )
-        val paging = sessionConversationPagingBySessionId[sessionId] ?: SessionConversationPaging()
-        dispatchSessionEvent(
-            sessionId,
-            AppEvent.ConversationUiProjectionUpdated(
-                nodes = projection.conversation.nodes,
-                oldestCursor = paging.oldestCursor,
-                hasOlder = paging.hasOlder,
-                isRunning = projection.conversation.isRunning,
-                activeTurnId = projection.conversation.activeTurnId,
-                latestError = projection.conversation.latestError,
-            ),
-        )
-        dispatchSessionEvent(
-            sessionId,
-            AppEvent.SubmissionUiProjectionUpdated(
-                isRunning = projection.submission.isRunning,
-                editedFiles = visibleEditedFiles,
-            ),
-        )
-        dispatchSessionEvent(
-            sessionId,
-            AppEvent.SessionNavigationUiProjectionUpdated(
-                subagents = projection.navigation.subagents,
-            ),
-        )
-        syncExecutionUiProjection(sessionId = sessionId, projection = projection.execution)
+    private fun syncSessionUiProjection(
+        sessionId: String,
+        slices: Set<SessionProjectionSlice> = SessionProjectionSlice.ALL,
+        conversationEntryIds: Set<String>? = null,
+    ) {
+        if (slices.isEmpty()) return
+        val state = kernelForSession(sessionId).currentState
+        val suppressTransientRuntime = shouldSuppressHistoryTransientRuntime(sessionId)
+
+        if (SessionProjectionSlice.CONVERSATION in slices) {
+            val projected = sessionProjectionBuilder.projectConversation(state, conversationEntryIds)
+            val conversation = if (suppressTransientRuntime) projected.copy(isRunning = false) else projected
+            val paging = sessionConversationPagingBySessionId[sessionId] ?: SessionConversationPaging()
+            dispatchSessionEvent(
+                sessionId,
+                AppEvent.ConversationUiProjectionUpdated(
+                    nodes = conversation.nodes,
+                    oldestCursor = paging.oldestCursor,
+                    hasOlder = paging.hasOlder,
+                    isRunning = conversation.isRunning,
+                    activeTurnId = conversation.activeTurnId,
+                    latestError = conversation.latestError,
+                    entryPatches = conversation.entryPatches?.map { patch ->
+                        ConversationEntryNodePatch(
+                            entryId = patch.entryId,
+                            previousNodeIds = patch.previousNodeIds,
+                            nodes = patch.nodes,
+                        )
+                    },
+                ),
+            )
+        }
+
+        if (SessionProjectionSlice.SUBMISSION in slices) {
+            val projected = sessionProjectionBuilder.projectSubmission(state)
+            val submission = if (suppressTransientRuntime) projected.copy(isRunning = false) else projected
+            val visibleEditedFiles = sessionHistoryEditedFilesFilterRegistry.filterVisible(
+                sessionId = sessionId,
+                editedFiles = submission.editedFiles,
+            )
+            dispatchSessionEvent(
+                sessionId,
+                AppEvent.SubmissionUiProjectionUpdated(
+                    isRunning = submission.isRunning,
+                    editedFiles = visibleEditedFiles,
+                ),
+            )
+        }
+
+        if (SessionProjectionSlice.NAVIGATION in slices) {
+            val navigation = sessionProjectionBuilder.projectNavigation(state)
+            dispatchSessionEvent(
+                sessionId,
+                AppEvent.SessionNavigationUiProjectionUpdated(subagents = navigation.subagents),
+            )
+        }
+
+        if (SessionProjectionSlice.EXECUTION in slices) {
+            val projected = sessionProjectionBuilder.projectExecution(state)
+            val execution = if (suppressTransientRuntime) projected.copy(turnStatus = null) else projected
+            syncExecutionUiProjection(sessionId = sessionId, projection = execution)
+        }
+        onProjectionSlicesPublished(sessionId, slices)
     }
 
     /** Pushes the execution slice of the current projection into approval, tool-input, plan, and status stores. */
@@ -676,32 +770,19 @@ internal class ToolWindowCoordinator(
     )
 
     internal fun isSessionConversationRunning(sessionId: String): Boolean {
-        val projection = normalizeHistoryTransientUi(
-            sessionId = sessionId,
-            projection = sessionProjectionBuilder.project(kernelForSession(sessionId).currentState),
-        )
-        return projection.conversation.isRunning
+        if (shouldSuppressHistoryTransientRuntime(sessionId)) return false
+        return sessionProjectionBuilder.projectConversation(kernelForSession(sessionId).currentState).isRunning
     }
 
     /** Projects only the edited-file submission slice for one session snapshot. */
     private fun projectEditedFiles(state: com.auracode.assistant.session.kernel.SessionState): List<EditedFileAggregate> {
-        return sessionProjectionBuilder.project(state).submission.editedFiles
+        return sessionProjectionBuilder.projectSubmission(state).editedFiles
     }
 
-    /** Hides replayed transient running UI for history-restored sessions that are not actually running now. */
-    private fun normalizeHistoryTransientUi(
-        sessionId: String,
-        projection: com.auracode.assistant.session.projection.SessionUiProjection,
-    ): com.auracode.assistant.session.projection.SessionUiProjection {
+    /** Returns whether replayed transient runtime UI should be hidden for one restored session. */
+    private fun shouldSuppressHistoryTransientRuntime(sessionId: String): Boolean {
         val actuallyRunning = chatService.listSessions().firstOrNull { it.id == sessionId }?.isRunning == true
-        if (!sessionHistoryTransientUiRegistry.shouldSuppress(sessionId) || actuallyRunning) {
-            return projection
-        }
-        return projection.copy(
-            conversation = projection.conversation.copy(isRunning = false),
-            submission = projection.submission.copy(isRunning = false),
-            execution = projection.execution.copy(turnStatus = null),
-        )
+        return sessionHistoryTransientUiRegistry.shouldSuppress(sessionId) && !actuallyRunning
     }
 
     private fun publishSessionSnapshot() {
@@ -886,6 +967,7 @@ internal class ToolWindowCoordinator(
     /** Drops every session-scoped UI cache owned by the coordinator. */
     private fun dropSessionViewState(sessionId: String) {
         sessionUiUpdateScheduler.drop(sessionId)
+        sessionProjectionBuilder.dropConversation(sessionId)
         sessionConversationPagingBySessionId.remove(sessionId)
         sessionHistoryEditedFilesFilterRegistry.drop(sessionId)
         sessionHistoryTransientUiRegistry.drop(sessionId)
@@ -893,18 +975,89 @@ internal class ToolWindowCoordinator(
         sessionConversationUiStateRegistry.drop(sessionId)
     }
 
+    /** Releases provider-restorable state for sessions that are neither active nor open in an IDE tab. */
+    private fun releaseInactiveSessionMemory() {
+        val retainedSessionIds = buildSet {
+            add(activeSessionId())
+            addAll(openSessionTabIds())
+            chatService.listSessions()
+                .filter { it.isRunning }
+                .mapTo(this) { it.id }
+        }
+        sessionKernelManager.retainSessions(retainedSessionIds)
+        sessionProjectionBuilder.retainConversations(retainedSessionIds)
+        diagnosticLog(
+            "Low-memory cleanup retained ${retainedSessionIds.size} active/open session caches",
+            null,
+        )
+    }
+
     override fun dispose() {
         sessionUiUpdateScheduler.cancel()
+        eventHub.close()
         scope.cancel()
     }
+}
+
+internal fun shouldRebaseConversationMemory(
+    entryCount: Int,
+    maxEntries: Int,
+    sessionIsActive: Boolean,
+    sessionIsRunning: Boolean,
+    retainedCharacters: Long = 0L,
+    maxCharacters: Long = Long.MAX_VALUE,
+): Boolean {
+    val entryBudgetExceeded = maxEntries > 0 && entryCount > maxEntries
+    val characterBudgetExceeded = maxCharacters > 0 && retainedCharacters > maxCharacters
+    return (entryBudgetExceeded || characterBudgetExceeded) && sessionIsActive && !sessionIsRunning
+}
+
+internal fun estimateConversationRetainedCharacters(
+    state: com.auracode.assistant.session.kernel.SessionState,
+): Long {
+    fun String?.sizeLong(): Long = this?.length?.toLong() ?: 0L
+    return state.conversation.entries.values.sumOf { entry ->
+        when (entry) {
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Message -> entry.text.length.toLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Reasoning -> entry.text.length.toLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Command ->
+                entry.command.sizeLong() + entry.cwd.sizeLong() + entry.outputText.sizeLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Tool ->
+                entry.toolName.length + entry.summary.sizeLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.FileChanges ->
+                entry.summary.length + entry.changes.sumOf { change ->
+                    change.path.length.toLong() + change.summary.length + change.unifiedDiff.sizeLong() +
+                        change.oldContent.sizeLong() + change.newContent.sizeLong()
+                }
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Approval ->
+                entry.request.body.length.toLong() + entry.request.command.sizeLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.ToolUserInput ->
+                entry.request.questions.sumOf { question ->
+                    question.questionTextSize() + question.options.sumOf { option ->
+                        option.label.length.toLong() + option.description.length
+                    }
+                } + entry.responseSummary.sizeLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Plan -> entry.body.length.toLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.ContextCompaction ->
+                entry.title.length.toLong() + entry.body.length
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.Error -> entry.message.length.toLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.EngineSwitched -> entry.targetEngineLabel.length.toLong()
+            is com.auracode.assistant.session.kernel.SessionConversationEntry.TurnDurationSummary -> 0L
+        }
+    }
+}
+
+private fun com.auracode.assistant.session.kernel.SessionToolUserInputQuestion.questionTextSize(): Long {
+    return headerKey.length.toLong() + promptKey.length
 }
 
 private fun readFileContentDefault(path: String): String? {
     val maxFileBytes = 128 * 1024
     val file = runCatching { Path.of(path) }.getOrNull() ?: return null
     if (!file.isRegularFile()) return null
-    val bytes = runCatching { Files.readAllBytes(file) }.getOrNull() ?: return null
+    val bytes = runCatching {
+        Files.newInputStream(file).use { input -> input.readNBytes(maxFileBytes) }
+    }.getOrNull() ?: return null
     if (bytes.isEmpty() || bytes.any { it == 0.toByte() }) return null
-    val clipped = if (bytes.size > maxFileBytes) bytes.copyOf(maxFileBytes) else bytes
-    return runCatching { clipped.toString(Charsets.UTF_8) }.getOrNull()
+    return runCatching { bytes.toString(Charsets.UTF_8) }.getOrNull()
 }

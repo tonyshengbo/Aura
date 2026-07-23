@@ -25,8 +25,13 @@ internal class CodexModelCatalogService(
         val cachedIds = settingsService.cachedCodexModelIds()
         val cachedNames = settingsService.cachedCodexModelDisplayNames()
         if (cachedIds.isNotEmpty()) {
-            return cachedIds.mapIndexed { i, slug ->
-                CodexModelEntry(slug = slug, displayName = cachedNames.getOrElse(i) { slug })
+            val cachedById = cachedIds.mapIndexed { index, slug ->
+                slug to cachedNames.getOrElse(index) { slug }
+            }.toMap()
+            return CodexModelCatalog.options.mapNotNull { option ->
+                cachedById[option.id]?.let { displayName ->
+                    CodexModelEntry(slug = option.id, displayName = displayName)
+                }
             }
         }
         return CodexModelCatalog.options.map { CodexModelEntry(slug = it.id, displayName = it.description) }
@@ -53,7 +58,8 @@ internal class CodexModelCatalogService(
 
         if (result.exitCode != 0) return CodexModelCatalogRefreshResult.Failed
 
-        val fetched = parseCodexModelEntries(result.stdout)
+        val fetchedBySlug = parseCodexModelEntries(result.stdout).associateBy { it.slug }
+        val fetched = CodexModelCatalog.ids().mapNotNull(fetchedBySlug::get)
         if (fetched.isEmpty()) return CodexModelCatalogRefreshResult.Failed
 
         val currentSlugs = currentModels().map { it.slug }

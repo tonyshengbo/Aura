@@ -41,6 +41,7 @@ import com.auracode.assistant.toolwindow.shell.SkillImportDialogState
 import com.auracode.assistant.toolwindow.settings.RuntimeSettingsTab
 import com.auracode.assistant.toolwindow.settings.SettingsSection
 import com.auracode.assistant.toolwindow.eventing.AppEvent
+import com.auracode.assistant.toolwindow.eventing.ConversationEntryNodePatch
 import com.auracode.assistant.toolwindow.eventing.SubmissionMode
 import com.auracode.assistant.toolwindow.eventing.SubmissionReasoning
 import com.auracode.assistant.toolwindow.eventing.UiIntent
@@ -59,9 +60,130 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertNotSame
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class AreaStoresTest {
+    @Test
+    fun `timeline store applies same-id replacement and tail append incrementally`() {
+        val store = ConversationAreaStore()
+        val stable = ConversationActivityItem.MessageNode(
+            id = "message:turn-1:user-1",
+            sourceId = "user-1",
+            role = com.auracode.assistant.model.MessageRole.USER,
+            text = "question",
+            status = ItemStatus.SUCCESS,
+            timestamp = null,
+            turnId = "turn-1",
+            cursor = null,
+        )
+        val streaming = ConversationActivityItem.MessageNode(
+            id = "message:turn-1:assistant-1",
+            sourceId = "assistant-1",
+            role = com.auracode.assistant.model.MessageRole.ASSISTANT,
+            text = "draft",
+            status = ItemStatus.RUNNING,
+            timestamp = null,
+            turnId = "turn-1",
+            cursor = null,
+        )
+        store.onEvent(
+            AppEvent.ConversationUiProjectionUpdated(
+                nodes = listOf(stable, streaming),
+                oldestCursor = null,
+                hasOlder = false,
+                isRunning = true,
+                latestError = null,
+            ),
+        )
+
+        val contentVersionBeforeMetadata = store.state.value.timelineContentVersion
+        val renderVersionBeforeMetadata = store.state.value.renderVersion
+        store.onEvent(
+            AppEvent.ConversationUiProjectionUpdated(
+                nodes = listOf(stable.copy(), streaming.copy()),
+                oldestCursor = null,
+                hasOlder = false,
+                isRunning = true,
+                latestError = null,
+                entryPatches = emptyList(),
+            ),
+        )
+        assertEquals(contentVersionBeforeMetadata, store.state.value.timelineContentVersion)
+        assertEquals(renderVersionBeforeMetadata + 1, store.state.value.renderVersion)
+        assertSame(stable, store.state.value.nodes[0])
+
+        val stableClone = stable.copy()
+        val completed = streaming.copy(text = "answer", status = ItemStatus.SUCCESS)
+        store.onEvent(
+            AppEvent.ConversationUiProjectionUpdated(
+                nodes = listOf(stableClone, completed),
+                oldestCursor = null,
+                hasOlder = false,
+                isRunning = true,
+                latestError = null,
+                entryPatches = listOf(
+                    ConversationEntryNodePatch(
+                        entryId = "assistant-1",
+                        previousNodeIds = listOf(streaming.id),
+                        nodes = listOf(completed),
+                    ),
+                ),
+            ),
+        )
+        assertSame(stable, store.state.value.nodes[0])
+        assertSame(completed, store.state.value.nodes[1])
+
+        val reasoning = ConversationActivityItem.ReasoningNode(
+            id = "reasoning:turn-1:reasoning-1",
+            sourceId = "reasoning-1",
+            body = "checking",
+            status = ItemStatus.RUNNING,
+            turnId = "turn-1",
+        )
+        store.onEvent(
+            AppEvent.ConversationUiProjectionUpdated(
+                nodes = listOf(stableClone, completed, reasoning),
+                oldestCursor = null,
+                hasOlder = false,
+                isRunning = true,
+                latestError = null,
+                entryPatches = listOf(
+                    ConversationEntryNodePatch(
+                        entryId = "reasoning-1",
+                        previousNodeIds = emptyList(),
+                        nodes = listOf(reasoning),
+                    ),
+                ),
+            ),
+        )
+        assertSame(stable, store.state.value.nodes[0])
+        assertSame(reasoning, store.state.value.nodes[2])
+        assertTrue(reasoning.id in store.state.value.expandedNodeIds)
+
+        val splitA = completed.copy(id = "message:turn-1:assistant-1:a")
+        val splitB = completed.copy(id = "message:turn-1:assistant-1:b")
+        store.onEvent(
+            AppEvent.ConversationUiProjectionUpdated(
+                nodes = listOf(stableClone, splitA, splitB, reasoning),
+                oldestCursor = null,
+                hasOlder = false,
+                isRunning = true,
+                latestError = null,
+                entryPatches = listOf(
+                    ConversationEntryNodePatch(
+                        entryId = "assistant-1",
+                        previousNodeIds = listOf(completed.id),
+                        nodes = listOf(splitA, splitB),
+                    ),
+                ),
+            ),
+        )
+        assertNotSame(stable, store.state.value.nodes[0])
+        assertSame(stableClone, store.state.value.nodes[0])
+    }
+
     @Test
     fun `composer store syncs usage snapshot for the active session`() {
         val store = SubmissionAreaStore()
