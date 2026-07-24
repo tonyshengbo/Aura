@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-07-24
+
+### Added
+
+- Added coalesced session UI update scheduling and performance tracking for high-frequency streaming events.
+- Added shared bitmap and SVG resource-loading utilities and improved IME composition handling.
+
+### Changed
+
+- Improved conversation auto-scroll behavior so streaming updates do not interfere with manual scrolling.
+- Kept process activity cards collapsed by default while preserving the user's manual expansion state.
+- Improved tool-window lifecycle management, session event projection, and rendering efficiency.
+- Updated Codex and Claude model catalogs, runtime version detection, and Codex client integration.
+
+### Fixed
+
+- Filtered unsupported Codex subagent events before they reach the conversation timeline.
+- Improved IntelliJ Platform API compatibility and plugin resource packaging.
+
 ## [1.0.1] - 2026-06-10
 
 ### Fixed

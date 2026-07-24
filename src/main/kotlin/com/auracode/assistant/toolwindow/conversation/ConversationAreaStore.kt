@@ -1,6 +1,5 @@
 package com.auracode.assistant.toolwindow.conversation
 
-import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -198,7 +197,6 @@ internal class ConversationAreaStore {
         val previous = _state.value
         if (previous.isLoadingOlder || previous.hasOlder != hasOlder) return false
 
-        val previousNodesById = linkedMapOf<String, ConversationActivityItem?>()
         var appendedNodeCount = 0
         patches.forEach { patch ->
             if (patch.previousNodeIds.isEmpty()) {
@@ -209,8 +207,7 @@ internal class ConversationAreaStore {
             if (patch.previousNodeIds.size != patch.nodes.size) return false
             patch.previousNodeIds.zip(patch.nodes).forEach { (previousId, nextNode) ->
                 if (previousId != nextNode.id) return false
-                val index = nodeIndexById[previousId] ?: return false
-                previousNodesById[previousId] = previous.nodes[index]
+                if (nodeIndexById[previousId] == null) return false
             }
         }
 
@@ -231,19 +228,13 @@ internal class ConversationAreaStore {
             }
         }
 
-        var expanded = previous.expandedNodeIds
-        patches.flatMap { it.nodes }.forEach { node ->
-            val previousNode = previousNodesById[node.id]
-            if (shouldExpandByDefault(node, previousNode)) expanded = expanded + node.id
-            if (!node.isProcessActivityNode()) return@forEach
-            val isNodeRunning = node.status == ItemStatus.RUNNING
-            val wasRunning = previousNode?.status == ItemStatus.RUNNING
-            when {
-                previousNode == null && shouldAutoExpandOnArrival(node, isNodeRunning) -> expanded = expanded + node.id
-                shouldAutoExpandAfterContentArrives(previousNode, node, isNodeRunning) -> expanded = expanded + node.id
-                wasRunning && shouldAutoCollapseOnCompletion(node, isNodeRunning) -> expanded = expanded - node.id
-            }
-        }
+        val nextNodeIds = nextNodes.mapTo(linkedSetOf(), ConversationActivityItem::id)
+        val appendedDefaultExpandedIds = patches
+            .filter { it.previousNodeIds.isEmpty() }
+            .flatMap { it.nodes }
+            .filterTo(linkedSetOf(), ConversationActivityItem::isExpandedByDefault)
+            .mapTo(linkedSetOf(), ConversationActivityItem::id)
+        val expanded = previous.expandedNodeIds.intersect(nextNodeIds) + appendedDefaultExpandedIds
 
         _state.value = previous.copy(
             nodes = nextNodes,
@@ -273,26 +264,11 @@ internal class ConversationAreaStore {
         nextState: ConversationAreaState,
     ): Set<String> {
         val nextNodeIds = nextState.nodes.mapTo(linkedSetOf(), ConversationActivityItem::id)
-        var expanded = previous.expandedNodeIds.intersect(nextNodeIds)
-
-        val previousById = previous.nodes.associateBy(ConversationActivityItem::id)
-        nextState.nodes.forEach { node ->
-            if (shouldExpandByDefault(node, previousById[node.id])) {
-                expanded = expanded + node.id
-            }
-
-            if (!node.isProcessActivityNode()) return@forEach
-
-            val previousNode = previousById[node.id]
-            val isRunning = node.status == ItemStatus.RUNNING
-            val wasRunning = previousNode?.status == ItemStatus.RUNNING
-            when {
-                previousNode == null && shouldAutoExpandOnArrival(node, isRunning) -> expanded = expanded + node.id
-                shouldAutoExpandAfterContentArrives(previousNode, node, isRunning) -> expanded = expanded + node.id
-                wasRunning && shouldAutoCollapseOnCompletion(node, isRunning) -> expanded = expanded - node.id
-            }
-        }
-        return expanded
+        val previousNodeIds = previous.nodes.mapTo(hashSetOf(), ConversationActivityItem::id)
+        val newDefaultExpandedIds = nextState.nodes
+            .filter { it.id !in previousNodeIds && it.isExpandedByDefault() }
+            .mapTo(linkedSetOf(), ConversationActivityItem::id)
+        return previous.expandedNodeIds.intersect(nextNodeIds) + newDefaultExpandedIds
     }
 
     /** Applies the load-more decoration used by both reducer history replay and projected state replacement. */
@@ -309,42 +285,8 @@ internal class ConversationAreaStore {
         }
     }
 
-    private fun shouldAutoExpandOnArrival(node: ConversationActivityItem, isRunning: Boolean): Boolean {
-        return isRunning && node !is ConversationActivityItem.FileChangeNode && node.hasAutoExpandableContent()
-    }
-
-    private fun shouldAutoExpandAfterContentArrives(
-        previousNode: ConversationActivityItem?,
-        node: ConversationActivityItem,
-        isRunning: Boolean,
-    ): Boolean {
-        if (!isRunning || node is ConversationActivityItem.FileChangeNode) {
-            return false
-        }
-        if (previousNode == null) {
-            return false
-        }
-        return !previousNode.hasAutoExpandableContent() && node.hasAutoExpandableContent()
-    }
-
-    private fun shouldAutoCollapseOnCompletion(node: ConversationActivityItem, isRunning: Boolean): Boolean {
-        return !isRunning && node !is ConversationActivityItem.FileChangeNode
-    }
-
-    private fun shouldExpandByDefault(node: ConversationActivityItem, previousNode: ConversationActivityItem?): Boolean {
-        return previousNode == null && (node is ConversationActivityItem.PlanNode || node is ConversationActivityItem.EngineSwitchedNode)
-    }
 }
 
-/**
- * Keeps streaming process nodes collapsed until they have meaningful body content to show.
- */
-private fun ConversationActivityItem.hasAutoExpandableContent(): Boolean {
-    return when (this) {
-        is ConversationActivityItem.ToolCallNode -> body.isNotBlank()
-        is ConversationActivityItem.CommandNode -> body.isNotBlank()
-        is ConversationActivityItem.FileChangeNode -> changes.isNotEmpty()
-        is ConversationActivityItem.ReasoningNode -> body.isNotBlank()
-        else -> false
-    }
+private fun ConversationActivityItem.isExpandedByDefault(): Boolean {
+    return this is ConversationActivityItem.PlanNode || this is ConversationActivityItem.EngineSwitchedNode
 }

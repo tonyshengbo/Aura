@@ -303,18 +303,23 @@ internal class CodexMcpManagementAdapter(
             onAuthorizationUrl(handle.authorizationUrl)
             handle.awaitCompletion()
         } finally {
-            synchronized(oauthLoginLock) {
+            val shouldClose = synchronized(oauthLoginLock) {
                 if (activeOauthLogin === session) {
                     activeOauthLogin = null
+                    true
+                } else {
+                    false
                 }
             }
-            client.close()
+            if (shouldClose) client.close()
         }
     }
 
     override suspend fun cancelLogin(name: String): McpAuthActionResult {
         val session = synchronized(oauthLoginLock) {
-            activeOauthLogin?.takeIf { it.name == name.trim() }
+            activeOauthLogin
+                ?.takeIf { it.name == name.trim() }
+                ?.also { activeOauthLogin = null }
         }
         if (session == null) {
             return McpAuthActionResult(

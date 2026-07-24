@@ -5,6 +5,8 @@ import com.auracode.assistant.provider.codex.CodexEnvironmentResolution
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -498,8 +500,10 @@ class CodexMcpManagementAdapterTest {
         )
 
         val loginJob = async { adapter.login("figma") }
-        while (client.startOAuthLoginCalls == 0) {
-            Thread.yield()
+        withTimeout(2_000) {
+            while (client.startOAuthLoginCalls == 0) {
+                yield()
+            }
         }
 
         val cancelResult = adapter.cancelLogin("figma")

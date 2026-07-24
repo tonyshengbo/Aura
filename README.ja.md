@@ -18,7 +18,7 @@ Aura Code は IntelliJ IDEA 向けのデュアルエンジン AI アシスタン
 
 ## リリース
 
-`1.0.0` は安定版 GitHub Release ZIP と手動アップロードされた Marketplace ビルドとして配布されています。
+`1.1.0` は安定版 GitHub Release ZIP と手動アップロードされた Marketplace ビルドとして配布されています。
 
 - GitHub Release の ZIP を利用するか、`./gradlew buildPlugin` でローカルビルド
 - `Settings -> Plugins -> Install Plugin from Disk...` からインストール

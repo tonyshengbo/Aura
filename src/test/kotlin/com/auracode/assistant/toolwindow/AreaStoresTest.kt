@@ -160,7 +160,7 @@ class AreaStoresTest {
         )
         assertSame(stable, store.state.value.nodes[0])
         assertSame(reasoning, store.state.value.nodes[2])
-        assertTrue(reasoning.id in store.state.value.expandedNodeIds)
+        assertFalse(reasoning.id in store.state.value.expandedNodeIds)
 
         val splitA = completed.copy(id = "message:turn-1:assistant-1:a")
         val splitB = completed.copy(id = "message:turn-1:assistant-1:b")
@@ -994,7 +994,7 @@ class AreaStoresTest {
     }
 
     @Test
-    fun `timeline store auto expands running process node and lets user keep it collapsed`() {
+    fun `timeline store keeps running process node collapsed and preserves manual expansion`() {
         val store = ConversationAreaStore()
         store.onEvent(
             AppEvent.ConversationUiProjectionUpdated(
@@ -1017,10 +1017,10 @@ class AreaStoresTest {
         )
 
         val node = assertIs<ConversationActivityItem.CommandNode>(store.state.value.nodes.single())
-        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
 
         store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleNodeExpanded(node.id)))
-        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
 
         store.onEvent(
             AppEvent.ConversationUiProjectionUpdated(
@@ -1043,13 +1043,13 @@ class AreaStoresTest {
         )
 
         assertEquals(1, store.state.value.nodes.size)
-        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
         assertTrue(store.state.value.renderVersion > 0L)
         assertTrue(store.state.value.isRunning)
     }
 
     @Test
-    fun `timeline store auto collapses process node when projected status becomes terminal`() {
+    fun `timeline store preserves manual expansion when process node becomes terminal`() {
         val store = ConversationAreaStore()
 
         store.onEvent(
@@ -1073,6 +1073,8 @@ class AreaStoresTest {
         )
 
         val node = assertIs<ConversationActivityItem.CommandNode>(store.state.value.nodes.single())
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.ToggleNodeExpanded(node.id)))
         assertTrue(store.state.value.expandedNodeIds.contains(node.id))
 
         store.onEvent(
@@ -1095,11 +1097,11 @@ class AreaStoresTest {
             ),
         )
 
-        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
+        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
     }
 
     @Test
-    fun `timeline store treats first projection as history reset and expands running process nodes`() {
+    fun `timeline store treats first projection as history reset and keeps running process nodes collapsed`() {
         val store = ConversationAreaStore()
         val restored = ConversationActivityItem.CommandNode(
             id = "command:turn_1:cmd_1",
@@ -1121,12 +1123,12 @@ class AreaStoresTest {
             ),
         )
 
-        assertTrue(store.state.value.expandedNodeIds.contains(restored.id))
+        assertFalse(store.state.value.expandedNodeIds.contains(restored.id))
         assertEquals(ConversationRenderCause.HISTORY_RESET, store.state.value.renderCause)
     }
 
     @Test
-    fun `timeline store keeps empty running tool collapsed until detail arrives`() {
+    fun `timeline store keeps running tool collapsed after detail arrives`() {
         val store = ConversationAreaStore()
         store.onEvent(
             AppEvent.ConversationUiProjectionUpdated(
@@ -1169,7 +1171,7 @@ class AreaStoresTest {
             ),
         )
 
-        assertTrue(store.state.value.expandedNodeIds.contains(node.id))
+        assertFalse(store.state.value.expandedNodeIds.contains(node.id))
     }
 
     @Test

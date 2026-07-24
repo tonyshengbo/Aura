@@ -18,7 +18,7 @@ Aura Code is a dual-engine AI assistant for IntelliJ IDEA:
 
 ## Release
 
-`1.0.0` is distributed as a stable GitHub Release ZIP and a manually uploaded Marketplace build.
+`1.1.0` is distributed as a stable GitHub Release ZIP and a manually uploaded Marketplace build.
 
 - Download the plugin ZIP from the GitHub Release assets, or build it locally with `./gradlew buildPlugin`
 - Install it from `Settings -> Plugins -> Install Plugin from Disk...`

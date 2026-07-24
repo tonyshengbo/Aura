@@ -87,9 +87,9 @@ class SubmissionControlBarTest {
     }
 
     @Test
-    fun `approval mode tooltip explains workspace write approvals`() {
+    fun `approval mode uses the shared execution mode tooltip`() {
         assertEquals(
-            "Approval mode is enabled. Codex uses a workspace-write sandbox and asks when approval is required.",
+            "Toggle auto mode",
             resolveExecutionModeTooltip(SubmissionMode.APPROVAL),
         )
     }

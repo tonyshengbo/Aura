@@ -770,12 +770,16 @@ internal class SettingsAndEnvironmentHandler(
             runCatching {
                 val targetEngineId = currentSkillsEngineId()
                 val sourcePath = Path.of(normalizedPath)
-                context.skillProjectionManager.projectDirectory(targetEngineId, sourcePath)
+                val scanResult = context.skillRootScanner.scan(sourcePath)
+                if (scanResult.skills.isEmpty()) {
+                    error(AuraCodeBundle.message("settings.skills.import.empty.detail"))
+                }
+                context.skillProjectionManager.projectForEngine(targetEngineId, scanResult.skills)
                 context.skillsRuntimeService.invalidateEngine(targetEngineId)
                 publishSkillsSnapshot(forceReload = true, engineId = targetEngineId)
                 val successMessage = AuraCodeBundle.message(
                     "settings.skills.import.success",
-                    "1",
+                    scanResult.skills.size.toString(),
                     skillsEngineLabel(targetEngineId),
                 )
                 context.eventHub.publish(AppEvent.SkillImportDialogStateChanged(
