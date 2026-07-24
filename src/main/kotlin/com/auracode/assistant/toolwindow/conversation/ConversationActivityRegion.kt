@@ -19,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.Icon
@@ -47,7 +49,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
-private const val TIMELINE_QUICK_SCROLL_OVERLAY_DELAY_MS: Long = 900L
+private const val TIMELINE_QUICK_SCROLL_OVERLAY_DELAY_MS: Long = 1_800L
 private const val TIMELINE_NEAR_BOTTOM_THRESHOLD_PX: Int = 40
 
 internal data class ConversationQuickScrollVisibility(
@@ -238,6 +240,10 @@ internal fun ConversationActivityRegion(
     var handledScrollRestoreRequestVersion by remember { mutableStateOf(0L) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val scrollbarInteractionSource = remember { MutableInteractionSource() }
+    val isListDragged by listState.interactionSource.collectIsDraggedAsState()
+    val isScrollbarDragged by scrollbarInteractionSource.collectIsDraggedAsState()
+    val isUserDragging = isListDragged || isScrollbarDragged
     val rowCount = state.nodes.size
     val nearTop = remember {
         derivedStateOf {
@@ -287,7 +293,7 @@ internal fun ConversationActivityRegion(
             ConversationRenderCause.HISTORY_RESET,
             ConversationRenderCause.LIVE_UPDATE,
             -> {
-                if (!hasPendingScrollRestore && autoFollowEnabled) {
+                if (!hasPendingScrollRestore && autoFollowEnabled && !isUserDragging) {
                     hadProgrammaticScroll = true
                     scrollTimelineToBottom(
                         listState = listState,
@@ -363,6 +369,16 @@ internal fun ConversationActivityRegion(
         )
         autoFollowEnabled = resolution.autoFollowEnabled
         hadProgrammaticScroll = resolution.hadProgrammaticScroll
+    }
+
+    LaunchedEffect(isUserDragging) {
+        if (isUserDragging) {
+            // User input owns the viewport until it settles back at the bottom or an explicit
+            // navigation action re-enables follow mode. Never let streaming tail growth compete
+            // with a list or scrollbar-thumb drag.
+            autoFollowEnabled = false
+            hadProgrammaticScroll = false
+        }
     }
 
     AttachmentPreviewOverlay(
@@ -513,6 +529,7 @@ internal fun ConversationActivityRegion(
 
         VerticalScrollbar(
             adapter = rememberScrollbarAdapter(scrollState = listState),
+            interactionSource = scrollbarInteractionSource,
             modifier = Modifier
                 .align(Alignment.CenterEnd)
                 .fillMaxHeight()
