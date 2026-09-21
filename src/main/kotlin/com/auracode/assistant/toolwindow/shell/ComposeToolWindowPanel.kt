@@ -37,6 +37,7 @@ import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChangePreview
+import com.auracode.assistant.toolwindow.dragdrop.AttachmentDropHost
 import com.auracode.assistant.toolwindow.shared.assistantMaterialColors
 import com.auracode.assistant.toolwindow.shared.assistantPalette
 import com.auracode.assistant.toolwindow.shared.assistantTypography
@@ -346,20 +347,26 @@ class ComposeToolWindowPanel(
                     refreshWindowChrome()
                 }
                 key(languageVersion, appearanceVersion) {
-                    Surface(modifier = Modifier) {
-                        ToolWindowScreen(
-                            sessionTabsState = sessionTabsState,
-                            executionStatusState = executionStatusState,
-                            conversationState = conversationState,
-                            submissionState = submissionState,
-                            sidePanelState = sidePanelState,
-                            approvalState = approvalState,
-                            toolUserInputPromptState = toolUserInputPromptState,
-                            anchor = toolWindowAnchor,
-                            themeMode = themeMode,
-                            onIntent = ::dispatchIntent,
-                            onConversationScrollSnapshotChanged = conversationStore::updateScrollSnapshot,
-                        )
+                    // 整窗接收本地文件拖放：松手后复用附件 intent，落到当前会话的输入框附件区。
+                    AttachmentDropHost(
+                        palette = palette,
+                        onDropPaths = { paths -> dispatchIntent(UiIntent.AddAttachments(paths)) },
+                    ) {
+                        Surface(modifier = Modifier) {
+                            ToolWindowScreen(
+                                sessionTabsState = sessionTabsState,
+                                executionStatusState = executionStatusState,
+                                conversationState = conversationState,
+                                submissionState = submissionState,
+                                sidePanelState = sidePanelState,
+                                approvalState = approvalState,
+                                toolUserInputPromptState = toolUserInputPromptState,
+                                anchor = toolWindowAnchor,
+                                themeMode = themeMode,
+                                onIntent = ::dispatchIntent,
+                                onConversationScrollSnapshotChanged = conversationStore::updateScrollSnapshot,
+                            )
+                        }
                     }
                 }
             }
