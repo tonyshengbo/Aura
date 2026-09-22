@@ -644,6 +644,7 @@ class AgentChatService private constructor(
             reasoningEffort = reasoningEffort?.trim()?.takeIf { it.isNotBlank() },
             prompt = prompt,
             systemInstructions = systemInstructions,
+            systemPrompt = settings.systemPromptProfile().resolvedContent(),
             contextFiles = contextFiles,
             imageAttachments = imageAttachments,
             fileAttachments = fileAttachments,

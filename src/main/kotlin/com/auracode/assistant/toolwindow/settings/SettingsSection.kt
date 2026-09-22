@@ -4,6 +4,7 @@ internal enum class SettingsSection {
     BASIC,
     RUNTIME,
     AGENTS,
+    ROLE,
     SKILLS,
     MCP,
     TOKEN_USAGE,
@@ -29,6 +30,10 @@ internal fun SettingsSection.presentation(): SettingsSectionPresentation = when 
     SettingsSection.AGENTS -> SettingsSectionPresentation(
         titleKey = "settings.section.agents",
         subtitleKey = "settings.section.agents.subtitle",
+    )
+    SettingsSection.ROLE -> SettingsSectionPresentation(
+        titleKey = "settings.section.role",
+        subtitleKey = "settings.section.role.subtitle",
     )
     SettingsSection.SKILLS -> SettingsSectionPresentation(
         titleKey = "settings.section.skills",

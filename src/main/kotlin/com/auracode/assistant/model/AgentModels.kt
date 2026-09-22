@@ -44,6 +44,12 @@ data class AgentRequest(
     val reasoningEffort: String? = null,
     val prompt: String,
     val systemInstructions: List<String> = emptyList(),
+    /**
+     * 全局角色文本，经引擎原生系统提示词通道下发（非 prompt 正文）。
+     *
+     * null 表示本次请求不注入全局角色；由 AgentChatService 统一从设置中读取。
+     */
+    val systemPrompt: String? = null,
     val contextFiles: List<ContextFile>,
     val imageAttachments: List<ImageAttachment> = emptyList(),
     val fileAttachments: List<FileAttachment> = emptyList(),

@@ -88,13 +88,10 @@ internal class DefaultClaudeCliLauncher(
                 add("--resume")
                 add(sessionId)
             }
-            request.systemInstructions
-                .map(String::trim)
-                .filter(String::isNotBlank)
-                .forEach { instruction ->
-                    add("--append-system-prompt")
-                    add(instruction)
-                }
+            buildAppendSystemPrompt(request)?.let { systemPrompt ->
+                add("--append-system-prompt")
+                add(systemPrompt)
+            }
             if (needsPermissionPromptTool(request) || useStdinForImages) {
                 add("--input-format")
                 add("stream-json")
@@ -107,6 +104,24 @@ internal class DefaultClaudeCliLauncher(
     private fun mapReasoningEffort(effort: String): String = when (effort) {
         "xhigh" -> "high"
         else -> effort
+    }
+
+    /**
+     * 合并全局角色与已选智能体片段为单次 `--append-system-prompt` 参数。
+     *
+     * Claude CLI 的该参数是单值选项，重复传入只有最后一次生效，
+     * 因此必须先合并再下发，否则多个智能体只有最后一个能进入系统提示。
+     * 全局角色排在前面，保证它先于智能体片段被模型读取。
+     */
+    private fun buildAppendSystemPrompt(request: AgentRequest): String? {
+        val sections = buildList {
+            request.systemPrompt?.trim()?.takeIf(String::isNotBlank)?.let(::add)
+            request.systemInstructions
+                .map(String::trim)
+                .filter(String::isNotBlank)
+                .forEach(::add)
+        }
+        return sections.takeIf(List<String>::isNotEmpty)?.joinToString("\n\n")
     }
 
     private fun resolvePermissionMode(request: AgentRequest): String {

@@ -2,6 +2,7 @@ package com.auracode.assistant.settings
 
 import com.auracode.assistant.provider.claude.ClaudeModelCatalog
 import com.auracode.assistant.provider.codex.CodexModelCatalog
+import com.auracode.assistant.settings.prompt.SystemPromptProfile
 import com.auracode.assistant.toolwindow.eventing.SubmissionReasoning
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.PersistentStateComponent
@@ -49,6 +50,10 @@ class AgentSettingsService : PersistentStateComponent<AgentSettingsService.State
         var uiTheme: String = UiThemeMode.FOLLOW_IDE.name,
         var uiScale: String = UiScaleMode.P100.name,
         var autoContextEnabled: Boolean = true,
+        /**
+         * 全局角色设定：启用后通过引擎原生系统提示词通道下发，不参与 prompt 正文拼接。
+         */
+        var systemPromptProfile: SystemPromptProfile = SystemPromptProfile(),
         var backgroundCompletionNotificationsEnabled: Boolean = true,
         var cliDebugLoggingEnabled: Boolean = false,
         var codexCliAutoUpdateCheckEnabled: Boolean = true,
@@ -152,6 +157,19 @@ class AgentSettingsService : PersistentStateComponent<AgentSettingsService.State
 
     fun setAutoContextEnabled(enabled: Boolean) {
         state.autoContextEnabled = enabled
+    }
+
+    /** 返回全局角色设定，未配置时返回默认的停用状态。 */
+    fun systemPromptProfile(): SystemPromptProfile = state.systemPromptProfile
+
+    /** 持久化全局角色开关；正文内容保持不变，便于用户随时重新启用。 */
+    fun setSystemPromptEnabled(enabled: Boolean) {
+        state.systemPromptProfile.enabled = enabled
+    }
+
+    /** 持久化全局角色正文，输入即保存，无需额外的保存动作。 */
+    fun setSystemPromptContent(content: String) {
+        state.systemPromptProfile.content = content
     }
 
     fun backgroundCompletionNotificationsEnabled(): Boolean = state.backgroundCompletionNotificationsEnabled

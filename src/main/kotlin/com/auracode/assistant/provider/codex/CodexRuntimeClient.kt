@@ -26,6 +26,9 @@ internal class CodexRuntimeClient(
                 method = "thread/start",
                 params = buildJsonObject {
                     request.model?.takeIf { it.isNotBlank() }?.let { put("model", it) }
+                    // 全局角色走 app-server 的 developerInstructions 通道，
+                    // 由 Codex 以 developer 消息注入，而不是拼进 prompt 正文。
+                    request.systemPrompt?.takeIf { it.isNotBlank() }?.let { put("developerInstructions", it) }
                     put("cwd", request.workingDirectory)
                     put("approvalPolicy", executionProfile.approvalPolicy)
                     put("sandbox", buildThreadSandboxMode(executionProfile.sandboxMode))
@@ -38,6 +41,8 @@ internal class CodexRuntimeClient(
                     put("threadId", existingThreadId)
                     put("cwd", request.workingDirectory)
                     request.model?.takeIf { it.isNotBlank() }?.let { put("model", it) }
+                    // 续聊同样下发全局角色，避免恢复的会话丢失系统提示词。
+                    request.systemPrompt?.takeIf { it.isNotBlank() }?.let { put("developerInstructions", it) }
                     put("approvalPolicy", executionProfile.approvalPolicy)
                     put("sandbox", buildThreadSandboxMode(executionProfile.sandboxMode))
                 },

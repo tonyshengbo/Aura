@@ -83,6 +83,8 @@ internal data class SidePanelAreaState(
     val editingAgentId: String? = null,
     val agentDraftName: String = "",
     val agentDraftPrompt: String = "",
+    val systemPromptEnabled: Boolean = false,
+    val systemPromptContent: String = "",
     val skillsEngineId: String = "",
     val skillsCwd: String = "",
     val skills: List<ManagedSkillEntry> = emptyList(),
@@ -359,6 +361,14 @@ internal class SidePanelAreaStore {
                         _state.value = _state.value.copy(agentDraftPrompt = event.intent.value)
                     }
 
+                    is UiIntent.EditSystemPromptEnabled -> {
+                        _state.value = _state.value.copy(systemPromptEnabled = event.intent.enabled)
+                    }
+
+                    is UiIntent.EditSystemPromptContent -> {
+                        _state.value = _state.value.copy(systemPromptContent = event.intent.value)
+                    }
+
                     UiIntent.CreateNewMcpDraft -> {
                         _state.value = _state.value.copy(
                             mcpSettingsPage = McpSettingsPage.EDITOR,
@@ -484,6 +494,8 @@ internal class SidePanelAreaStore {
                     },
                     agentDraftName = selected?.name ?: _state.value.agentDraftName.takeIf { _state.value.agentSettingsPage == AgentSettingsPage.EDITOR } ?: "",
                     agentDraftPrompt = selected?.prompt ?: _state.value.agentDraftPrompt.takeIf { _state.value.agentSettingsPage == AgentSettingsPage.EDITOR } ?: "",
+                    systemPromptEnabled = event.systemPromptEnabled,
+                    systemPromptContent = event.systemPromptContent,
                 )
             }
 

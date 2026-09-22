@@ -178,6 +178,12 @@ internal sealed interface UiIntent {
     data class SelectSavedAgentForEdit(val id: String) : UiIntent
     data class EditAgentDraftName(val value: String) : UiIntent
     data class EditAgentDraftPrompt(val value: String) : UiIntent
+
+    /** 切换全局角色开关；正文内容不随开关清空。 */
+    data class EditSystemPromptEnabled(val enabled: Boolean) : UiIntent
+
+    /** 更新全局角色正文，输入即持久化。 */
+    data class EditSystemPromptContent(val value: String) : UiIntent
     data object SaveAgentDraft : UiIntent
     data class DeleteSavedAgent(val id: String) : UiIntent
     data object LoadSkills : UiIntent
@@ -272,6 +278,8 @@ internal sealed interface AppEvent {
         val cliDebugLoggingEnabled: Boolean = false,
         val codexCliAutoUpdateCheckEnabled: Boolean = true,
         val savedAgents: List<SavedAgentDefinition>,
+        val systemPromptEnabled: Boolean = false,
+        val systemPromptContent: String = "",
         val selectedAgentIds: List<String> = emptyList(),
         val customModelIds: List<String> = emptyList(),
         val selectedModel: String = com.auracode.assistant.provider.codex.CodexModelCatalog.defaultModel,

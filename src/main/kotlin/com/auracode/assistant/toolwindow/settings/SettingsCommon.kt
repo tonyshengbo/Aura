@@ -386,11 +386,13 @@ internal fun SettingsTextInput(
     minLines: Int = 1,
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
     visualTransformation: VisualTransformation = VisualTransformation.None,
+    enabled: Boolean = true,
 ) {
     val t = assistantUiTokens()
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
+        enabled = enabled,
         modifier = modifier.fillMaxWidth(),
         textStyle = assistantBodyTextStyle(t).copy(color = p.textPrimary),
         singleLine = singleLine,

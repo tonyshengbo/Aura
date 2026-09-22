@@ -1798,6 +1798,42 @@ class CodexRuntimeProviderTest {
     }
 
     @Test
+    fun `shared codex client forwards global role as developer instructions`() {
+        val session = FakeCodexRuntimeSession().apply {
+            response(
+                "thread/start",
+                buildJsonObject {
+                    put(
+                        "thread",
+                        buildJsonObject {
+                            put("id", "thread-role")
+                        },
+                    )
+                },
+            )
+        }
+        val client = CodexRuntimeClient(session = session, diagnosticLogger = {})
+
+        runBlockingTest {
+            client.ensureThread(
+                AgentRequest(
+                    engineId = "codex",
+                    prompt = "hello",
+                    systemPrompt = "global role",
+                    contextFiles = emptyList(),
+                    workingDirectory = "/tmp/project",
+                ),
+            )
+        }
+
+        // 全局角色走 app-server 的 developerInstructions 通道，不再拼进 prompt 正文。
+        assertEquals(
+            "global role",
+            session.requestParams.single().getValue("developerInstructions").jsonPrimitive.content,
+        )
+    }
+
+    @Test
     fun `shared codex client maps runtime skills from skills list response`() {
         val session = FakeCodexRuntimeSession().apply {
             response(
@@ -1993,6 +2029,8 @@ private const val ONE_PIXEL_PNG_BASE64 =
 
 private class FakeCodexRuntimeSession : CodexRuntimeSession {
     val requestMethods = mutableListOf<String>()
+    /** 记录每次 request 的参数，便于断言协议负载。 */
+    val requestParams = mutableListOf<JsonObject>()
     private val responses = mutableMapOf<String, JsonObject>()
 
     override fun start() = Unit
@@ -2001,6 +2039,7 @@ private class FakeCodexRuntimeSession : CodexRuntimeSession {
 
     override suspend fun request(method: String, params: JsonObject): JsonObject {
         requestMethods += method
+        requestParams += params
         return responses.getValue(method)
     }
 

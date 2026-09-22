@@ -74,6 +74,47 @@ class ClaudeCliLauncherTest {
     }
 
     @Test
+    fun `build command merges global role and agent instructions into one append system prompt`() {
+        val launcher = DefaultClaudeCliLauncher()
+
+        val command = launcher.buildCommand(
+            request = AgentRequest(
+                engineId = "claude",
+                prompt = "Say hello",
+                systemInstructions = listOf("agent-one", "agent-two"),
+                systemPrompt = "global role",
+                contextFiles = emptyList(),
+                workingDirectory = ".",
+            ),
+            executable = "claude",
+        )
+
+        // --append-system-prompt 是单值参数，必须只出现一次，否则只有最后一个片段生效。
+        assertEquals(1, command.count { it == "--append-system-prompt" })
+        assertEquals(
+            "global role\n\nagent-one\n\nagent-two",
+            command[command.indexOf("--append-system-prompt") + 1],
+        )
+    }
+
+    @Test
+    fun `build command omits append system prompt when no role or agent is selected`() {
+        val launcher = DefaultClaudeCliLauncher()
+
+        val command = launcher.buildCommand(
+            request = AgentRequest(
+                engineId = "claude",
+                prompt = "Say hello",
+                contextFiles = emptyList(),
+                workingDirectory = ".",
+            ),
+            executable = "claude",
+        )
+
+        assertFalse(command.contains("--append-system-prompt"))
+    }
+
+    @Test
     fun `build command includes verbose for stream json mode`() {
         val launcher = DefaultClaudeCliLauncher()
 

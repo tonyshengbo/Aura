@@ -77,6 +77,24 @@ internal class SettingsAndEnvironmentHandler(
         context.publishSettingsSnapshot()
     }
 
+    /** 持久化全局角色开关并刷新设置快照，让页面与状态保持一致。 */
+    fun applySystemPromptEnabled(enabled: Boolean) {
+        if (context.settingsService.systemPromptProfile().enabled == enabled) return
+        context.settingsService.setSystemPromptEnabled(enabled)
+        context.publishSettingsSnapshot()
+    }
+
+    /**
+     * 持久化全局角色正文。
+     *
+     * 这里刻意不发布设置快照：正文按输入逐字落库，若每次都广播完整快照，
+     * 会带来大量无意义的 UI 刷新；编辑器本身就是当前内容的唯一来源。
+     */
+    fun applySystemPromptContent(content: String) {
+        if (context.settingsService.systemPromptProfile().content == content) return
+        context.settingsService.setSystemPromptContent(content)
+    }
+
     fun applyBackgroundCompletionNotificationPreference(enabled: Boolean) {
         if (context.settingsService.backgroundCompletionNotificationsEnabled() == enabled) return
         context.settingsService.setBackgroundCompletionNotificationsEnabled(enabled)
@@ -1158,6 +1176,7 @@ internal class SettingsAndEnvironmentHandler(
             SettingsSection.BASIC -> Unit
             SettingsSection.RUNTIME -> refreshRuntimeChecksForCurrentState()
             SettingsSection.AGENTS,
+            SettingsSection.ROLE,
             -> Unit
             SettingsSection.ABOUT -> refreshCodexCliVersion(force = false, announceResult = false)
         }
@@ -1175,6 +1194,7 @@ internal class SettingsAndEnvironmentHandler(
                 }
             }
             SettingsSection.AGENTS,
+            SettingsSection.ROLE,
             -> Unit
             SettingsSection.ABOUT -> refreshCodexCliVersion(force = false, announceResult = false)
         }

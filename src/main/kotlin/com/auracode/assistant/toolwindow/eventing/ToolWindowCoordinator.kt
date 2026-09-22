@@ -400,6 +400,8 @@ internal class ToolWindowCoordinator(
             is UiIntent.EditSettingsThemeMode -> settingsHandler.applyThemePreview(intent.mode)
             is UiIntent.EditSettingsUiScaleMode -> settingsHandler.applyUiScalePreview(intent.mode)
             is UiIntent.EditSettingsAutoContextEnabled -> settingsHandler.applyAutoContextPreference(intent.enabled)
+            is UiIntent.EditSystemPromptEnabled -> settingsHandler.applySystemPromptEnabled(intent.enabled)
+            is UiIntent.EditSystemPromptContent -> settingsHandler.applySystemPromptContent(intent.value)
             is UiIntent.EditSettingsBackgroundCompletionNotificationsEnabled -> {
                 settingsHandler.applyBackgroundCompletionNotificationPreference(intent.enabled)
             }
@@ -815,6 +817,8 @@ internal class ToolWindowCoordinator(
                 cliDebugLoggingEnabled = settingsService.cliDebugLoggingEnabled(),
                 codexCliAutoUpdateCheckEnabled = settingsService.codexCliAutoUpdateCheckEnabled(),
                 savedAgents = state.savedAgents.toList(),
+                systemPromptEnabled = settingsService.systemPromptProfile().enabled,
+                systemPromptContent = settingsService.systemPromptProfile().content,
                 selectedAgentIds = settingsService.selectedAgentIds(),
                 customModelIds = settingsService.customModelIds(),
                 selectedModel = settingsService.selectedSubmissionModel(selectedEngineId),

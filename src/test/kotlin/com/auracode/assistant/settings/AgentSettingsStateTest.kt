@@ -86,4 +86,29 @@ class AgentSettingsStateTest {
 
         assertEquals(listOf("agent-2", "agent-1"), state.selectedAgentIds.toList())
     }
+
+    @Test
+    fun `state keeps the global role separate from saved agents`() {
+        val service = AgentSettingsService()
+        service.loadState(AgentSettingsService.State())
+
+        service.setSystemPromptEnabled(true)
+        service.setSystemPromptContent("You are a reviewer.")
+
+        assertEquals(true, service.systemPromptProfile().enabled)
+        assertEquals("You are a reviewer.", service.systemPromptProfile().resolvedContent())
+        assertEquals(0, service.savedAgents().size)
+    }
+
+    @Test
+    fun `state keeps the global role text when the profile is disabled`() {
+        val service = AgentSettingsService()
+        service.loadState(AgentSettingsService.State())
+
+        service.setSystemPromptContent("You are a reviewer.")
+        service.setSystemPromptEnabled(false)
+
+        assertEquals("You are a reviewer.", service.systemPromptProfile().content)
+        assertEquals(null, service.systemPromptProfile().resolvedContent())
+    }
 }

@@ -72,6 +72,12 @@ internal fun SettingsOverlay(
             ) { onIntent(UiIntent.SelectSettingsSection(SettingsSection.AGENTS)) }
             SettingsRailItem(
                 p = p,
+                selected = state.settingsSection == SettingsSection.ROLE,
+                iconPath = "/icons/role.svg",
+                description = AuraCodeBundle.message("settings.section.role"),
+            ) { onIntent(UiIntent.SelectSettingsSection(SettingsSection.ROLE)) }
+            SettingsRailItem(
+                p = p,
                 selected = state.settingsSection == SettingsSection.SKILLS,
                 iconPath = "/icons/document.svg",
                 description = AuraCodeBundle.message("settings.section.skills"),
@@ -152,6 +158,16 @@ internal fun SettingsOverlay(
 
                     SettingsSection.AGENTS -> {
                         AgentSettingsListPage(p = p, state = state, onIntent = onIntent)
+                    }
+
+                    SettingsSection.ROLE -> {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState()),
+                        ) {
+                            SystemPromptSettingsPage(p = p, state = state, onIntent = onIntent)
+                        }
                     }
 
                     SettingsSection.SKILLS -> {

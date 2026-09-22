@@ -20,4 +20,14 @@ class SettingsSectionPresentationTest {
         assertTrue(runtimePresentation.showHeader)
         assertFalse(runtimePresentation.showSidePanel)
     }
+
+    @Test
+    fun `role section exposes its own labels`() {
+        val rolePresentation = SettingsSection.ROLE.presentation()
+
+        assertEquals("settings.section.role", rolePresentation.titleKey)
+        assertEquals("settings.section.role.subtitle", rolePresentation.subtitleKey)
+        assertTrue(rolePresentation.showHeader)
+        assertFalse(rolePresentation.showSidePanel)
+    }
 }
