@@ -8,7 +8,8 @@ plugins {
 }
 
 group = "com.auracode.assistant"
-version = "1.1.0"
+// 插件发布版本：Marketplace 上传包、GitHub Release 与插件描述版本均以此为准
+version = "1.1.1"
 
 repositories {
     google()
@@ -54,11 +55,10 @@ intellijPlatform {
             sinceBuild = "233"
         }
         changeNotes = """
-            <p>Aura Code 1.1.0 improves conversation performance, interaction stability, and runtime compatibility.</p>
+            <p>Aura Code 1.1.1 adds configurable global system prompts and file drag-and-drop attachments.</p>
             <ul>
-              <li>Coalesces high-frequency session updates to reduce unnecessary UI projection and rendering work during streaming responses.</li>
-              <li>Improves conversation scrolling, process-card expansion behavior, IME input handling, and tool-window lifecycle management.</li>
-              <li>Updates Codex and Claude runtime integration, model catalogs, resource loading, and IntelliJ Platform compatibility.</li>
+              <li>Adds a global system prompt setting so shared role instructions are applied to both Codex and Claude sessions.</li>
+              <li>Supports dropping local files onto the tool window to add them as attachments, with hover feedback and filtering of folders and invalid paths.</li>
             </ul>
         """.trimIndent()
     }

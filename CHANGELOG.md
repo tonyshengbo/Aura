@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-09-22
+
+### Added
+
+- Added a global system prompt setting so shared role instructions are applied to both Codex and Claude sessions.
+- Added drag-and-drop support for local files in the tool window, including hover feedback and filtering of folders, non-local resources, and invalid paths.
+
 ## [1.1.0] - 2026-07-24
 
 ### Added
