@@ -1,6 +1,8 @@
 package com.auracode.assistant.toolwindow.shell
 
 import androidx.compose.material.MaterialTheme
+import androidx.compose.foundation.layout.fillMaxSize
+import com.auracode.assistant.diagram.ui.DiagramFullscreenHost
 import androidx.compose.material.Surface
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -353,19 +355,21 @@ class ComposeToolWindowPanel(
                         onDropPaths = { paths -> dispatchIntent(UiIntent.AddAttachments(paths)) },
                     ) {
                         Surface(modifier = Modifier) {
-                            ToolWindowScreen(
-                                sessionTabsState = sessionTabsState,
-                                executionStatusState = executionStatusState,
-                                conversationState = conversationState,
-                                submissionState = submissionState,
-                                sidePanelState = sidePanelState,
-                                approvalState = approvalState,
-                                toolUserInputPromptState = toolUserInputPromptState,
-                                anchor = toolWindowAnchor,
-                                themeMode = themeMode,
-                                onIntent = ::dispatchIntent,
-                                onConversationScrollSnapshotChanged = conversationStore::updateScrollSnapshot,
-                            )
+                            DiagramFullscreenHost(palette, Modifier.fillMaxSize()) {
+                                ToolWindowScreen(
+                                    sessionTabsState = sessionTabsState,
+                                    executionStatusState = executionStatusState,
+                                    conversationState = conversationState,
+                                    submissionState = submissionState,
+                                    sidePanelState = sidePanelState,
+                                    approvalState = approvalState,
+                                    toolUserInputPromptState = toolUserInputPromptState,
+                                    anchor = toolWindowAnchor,
+                                    themeMode = themeMode,
+                                    onIntent = ::dispatchIntent,
+                                    onConversationScrollSnapshotChanged = conversationStore::updateScrollSnapshot,
+                                )
+                            }
                         }
                     }
                 }

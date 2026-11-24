@@ -23,6 +23,10 @@ configurations.matching { configuration ->
     configuration.isCanBeResolved && configuration.name.contains("runtimeClasspath", ignoreCase = true)
 }.configureEach {
     resolutionStrategy.sortArtifacts(org.gradle.api.artifacts.ResolutionStrategy.SortOrder.DEPENDENCY_FIRST)
+    // Reuse the IDE's coroutine runtime: packaging a second copy breaks its exception-handler SPI
+    // when Compose starts/cancels pointer-input coroutines (for example, while zooming a diagram).
+    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core")
+    exclude(group = "org.jetbrains.kotlinx", module = "kotlinx-coroutines-core-jvm")
 }
 dependencies {
     implementation(compose.desktop.currentOs)

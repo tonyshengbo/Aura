@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.auracode.assistant.toolwindow.conversation.markdown.diagram.ConversationDiagramCodeFence
 import com.auracode.assistant.toolwindow.conversation.markdown.table.ConversationMarkdownTable
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantMonospaceStyle
@@ -164,6 +165,9 @@ internal fun ConversationMarkdown(
                     tableCornerSize = tokens.markdown.codeCorner,
                 ),
                 components = markdownComponents(
+                    codeFence = { model ->
+                        ConversationDiagramCodeFence(model.content, model.node, palette)
+                    },
                     table = { model ->
                         ConversationMarkdownTable(model.content, model.node, model.typography.text)
                     },

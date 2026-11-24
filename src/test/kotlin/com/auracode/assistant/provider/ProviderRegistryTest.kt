@@ -28,14 +28,15 @@ class ProviderRegistryTest {
 
         assertEquals(
             listOf(
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
-                "gpt-5.5",
-                "gpt-5.4",
+                "gpt-6.2-sol",
+                "gpt-6.2-astra",
+                "gpt-6.1-terra",
+                "gpt-6.1-sol",
+                "gpt-6-astra",
             ),
             registry.engine("codex")?.models,
         )
+        assertEquals("gpt-6.2-sol", settings.selectedSubmissionModel("codex"))
     }
 
     @Test
@@ -81,10 +82,11 @@ class ProviderRegistryTest {
 
     @Test
     fun `curated model catalogs expose display friendly short names`() {
-        assertEquals("GPT-5.6-SOL", CodexModelCatalog.option("gpt-5.6-sol")?.description)
-        assertEquals("GPT-5.6-TERRA", CodexModelCatalog.option("gpt-5.6-terra")?.description)
-        assertEquals("GPT-5.6-LUNA", CodexModelCatalog.option("gpt-5.6-luna")?.description)
-        assertEquals("gpt-5.4", CodexModelCatalog.option("gpt-5.4")?.description)
+        assertEquals("GPT-6.2-SOL", CodexModelCatalog.option("gpt-6.2-sol")?.description)
+        assertEquals("GPT-6.2-ASTRA", CodexModelCatalog.option("gpt-6.2-astra")?.description)
+        assertEquals("GPT-6.1-TERRA", CodexModelCatalog.option("gpt-6.1-terra")?.description)
+        assertEquals("GPT-6.1-SOL", CodexModelCatalog.option("gpt-6.1-sol")?.description)
+        assertEquals("GPT-6-ASTRA", CodexModelCatalog.option("gpt-6-astra")?.description)
         assertEquals("Opus 4.8 [1m]", ClaudeModelCatalog.option("claude-opus-4-8")?.shortName)
         assertEquals("Sonnet 4.6 [1m]", ClaudeModelCatalog.option("claude-sonnet-4-6")?.shortName)
         assertEquals("Fable 5 [1m]", ClaudeModelCatalog.option("claude-fable-5")?.shortName)

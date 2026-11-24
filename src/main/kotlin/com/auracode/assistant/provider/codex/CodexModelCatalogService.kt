@@ -19,7 +19,7 @@ internal class CodexModelCatalogService(
     private val commandRunner: (List<String>, Map<String, String>) -> CodexCliCommandResult = ::runCodexCliCommand,
 ) {
     /**
-     * 返回当前可用模型列表：有缓存用缓存，否则返回内置 fallback。
+     * 优先返回缓存中仍在内置目录里的模型，没有可用缓存时回退到内置列表。
      */
     fun currentModels(): List<CodexModelEntry> {
         val cachedIds = settingsService.cachedCodexModelIds()
@@ -28,11 +28,13 @@ internal class CodexModelCatalogService(
             val cachedById = cachedIds.mapIndexed { index, slug ->
                 slug to cachedNames.getOrElse(index) { slug }
             }.toMap()
-            return CodexModelCatalog.options.mapNotNull { option ->
+            val cachedModels = CodexModelCatalog.options.mapNotNull { option ->
                 cachedById[option.id]?.let { displayName ->
                     CodexModelEntry(slug = option.id, displayName = displayName)
                 }
             }
+            // 升级模型目录后，旧缓存可能全部过期，避免因此返回空列表。
+            if (cachedModels.isNotEmpty()) return cachedModels
         }
         return CodexModelCatalog.options.map { CodexModelEntry(slug = it.id, displayName = it.description) }
     }

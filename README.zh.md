@@ -29,6 +29,7 @@ Aura Code 是一个面向 IntelliJ IDEA 的双引擎 AI 助手：
 - 在原生 `Aura Code` 工具窗口中统一管理 Codex 和 Claude 会话
 - 项目级多标签会话，支持本地持久化、远端续接和历史导出
 - 流式响应、后台运行感知和完成通知
+- Mermaid 流程图渲染，支持缩放、拖动和窗口内全屏，详见 [使用说明](docs/mermaid-rendering.md)
 - 输入框支持 `@` 文件引用、文件或图片附件、`#` 本地智能体，以及 `/plan`、`/auto`、`/init`、`/new`、`/tab` 等 Slash Commands
 - 对话流内支持 Plan 模式、审批请求、工具用户输入和运行中计划反馈
 - 改动文件聚合，支持 Diff 预览、打开、接受和回退
