@@ -74,11 +74,15 @@ internal object SkikoLibraryPathBootstrap {
         osName: String,
         osArch: String,
     ): String? {
-        if (!osName.startsWith("Windows", ignoreCase = true)) return null
-        return if (osArch.equals("aarch64", ignoreCase = true) || osArch.equals("arm64", ignoreCase = true)) {
-            "skiko-awt-runtime-windows-arm64-"
+        val architecture = if (osArch.equals("aarch64", ignoreCase = true) || osArch.equals("arm64", ignoreCase = true)) {
+            "arm64"
         } else {
-            "skiko-awt-runtime-windows-x64-"
+            "x64"
+        }
+        return when {
+            osName.startsWith("Windows", ignoreCase = true) -> "skiko-awt-runtime-windows-$architecture-"
+            osName.startsWith("Mac", ignoreCase = true) -> "skiko-awt-runtime-macos-$architecture-"
+            else -> null
         }
     }
 

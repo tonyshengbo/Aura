@@ -13,10 +13,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.auracode.assistant.toolwindow.conversation.markdown.table.ConversationMarkdownTable
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantMonospaceStyle
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
+import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m2.Markdown
+import com.mikepenz.markdown.m2.elements.MarkdownCheckBox
 import com.mikepenz.markdown.m2.markdownColor
 import com.mikepenz.markdown.m2.markdownTypography
 import com.mikepenz.markdown.model.markdownDimens
@@ -159,6 +162,15 @@ internal fun ConversationMarkdown(
                     blockQuoteThickness = tokens.markdown.quoteThickness,
                     tableCellPadding = tokens.markdown.tableCellPadding,
                     tableCornerSize = tokens.markdown.codeCorner,
+                ),
+                components = markdownComponents(
+                    table = { model ->
+                        ConversationMarkdownTable(model.content, model.node, model.typography.text)
+                    },
+                    // Preserve the Material checkbox renderer when overriding the table component.
+                    checkbox = { model ->
+                        MarkdownCheckBox(model.content, model.node, model.typography.text)
+                    },
                 ),
                 modifier = modifier,
             )

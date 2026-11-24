@@ -68,6 +68,37 @@ class SkikoLibraryPathBootstrapTest {
     }
 
     @Test
+    fun `replaces IDE skiko path before preloading plugin runtime on macos`() {
+        val libDir = Files.createTempDirectory("skiko-macos-lib-preload")
+        val extractionRoot = Files.createTempDirectory("skiko-macos-extract-preload")
+        val runtimeJar = libDir.resolve("skiko-awt-runtime-macos-arm64-0.8.18.jar")
+        val events = mutableListOf<String>()
+        var configuredPath: String? = null
+        writeRuntimeJar(
+            runtimeJar,
+            mapOf("libskiko-macos-arm64.dylib" to "dylib"),
+        )
+
+        val extracted = SkikoLibraryPathBootstrap.configureAndPreloadIfNeeded(
+            codeSourceLocation = libDir.toUri(),
+            extractionRoot = extractionRoot,
+            osName = "Mac OS X",
+            osArch = "aarch64",
+            currentPropertyValue = "/Applications/Android Studio.app/Contents/lib/skiko-awt-runtime-all",
+            setProperty = { _, value ->
+                configuredPath = value
+                events += "set"
+            },
+            preloadLibrary = { events += "preload" },
+        )
+
+        assertNotNull(extracted)
+        assertEquals(extracted.toAbsolutePath().normalize().toString(), configuredPath)
+        assertEquals(listOf("set", "preload"), events)
+        assertTrue(extracted.resolve("libskiko-macos-arm64.dylib").exists())
+    }
+
+    @Test
     fun `extracts windows runtime jar into dedicated directory`() {
         val libDir = Files.createTempDirectory("skiko-lib")
         val extractionRoot = Files.createTempDirectory("skiko-extract")
@@ -116,6 +147,26 @@ class SkikoLibraryPathBootstrapTest {
         )
 
         assertEquals("skiko-awt-runtime-windows-arm64-", prefix)
+    }
+
+    @Test
+    fun `chooses macos arm runtime coordinates for aarch64`() {
+        val prefix = SkikoLibraryPathBootstrap.runtimeJarPrefix(
+            osName = "Mac OS X",
+            osArch = "aarch64",
+        )
+
+        assertEquals("skiko-awt-runtime-macos-arm64-", prefix)
+    }
+
+    @Test
+    fun `chooses macos x64 runtime coordinates for amd64`() {
+        val prefix = SkikoLibraryPathBootstrap.runtimeJarPrefix(
+            osName = "Mac OS X",
+            osArch = "amd64",
+        )
+
+        assertEquals("skiko-awt-runtime-macos-x64-", prefix)
     }
 
     private fun writeRuntimeJar(target: Path, entries: Map<String, String>) {
