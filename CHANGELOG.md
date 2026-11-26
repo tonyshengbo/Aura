@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-11-26
+
+### Added
+
+- Added local Mermaid flowchart rendering with zoom, pan, fullscreen, and source fallback.
+- Added follow-up messages during execution for Codex and Claude sessions.
+- Added persistent Codex asynchronous questions with answer drafts, paging, and skip support.
+
+### Changed
+
+- Replaced Compose text fields with native IDE input for improved IME composition, editing, and undo support.
+- Improved Markdown table rendering, conversation titles, and scrollable session tabs.
+- Moved dropdown and context menus into window-level popups so they display above native input fields.
+
 ## [1.1.1] - 2026-09-22
 
 ### Added
