@@ -29,7 +29,7 @@ import com.auracode.assistant.toolwindow.execution.ExecutionTurnStatusUiState
 import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.execution.PlanCompletionPromptUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptUiModel
-import com.auracode.assistant.toolwindow.input.NativeDraftOrigin
+import com.auracode.assistant.toolwindow.input.DraftOrigin
 import com.auracode.assistant.toolwindow.settings.McpSettingsTab
 import com.auracode.assistant.toolwindow.settings.RuntimeSettingsTab
 import com.auracode.assistant.toolwindow.settings.SettingsSection
@@ -64,7 +64,7 @@ internal sealed interface UiIntent {
     data class ToggleNodeExpanded(val nodeId: String) : UiIntent
     data class OpenConversationFileChange(val change: ConversationFileChange) : UiIntent
     data class OpenConversationFilePath(val path: String) : UiIntent
-    data class UpdateDocument(val value: TextFieldValue, val origin: NativeDraftOrigin? = null) : UiIntent
+    data class UpdateDocument(val value: TextFieldValue, val origin: DraftOrigin? = null) : UiIntent
     data class InputChanged(val value: String) : UiIntent
     data class SubmitBuildErrorRequest(val request: BuildErrorAuraRequest) : UiIntent
     data class SubmitExternalRequest(val request: IdeExternalRequest) : UiIntent

@@ -22,8 +22,8 @@ internal fun AgentEditorForm(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    val nameInputState = rememberSettingsTextInputState(state.agentDraftName)
-    val promptInputState = rememberSettingsTextInputState(state.agentDraftPrompt)
+    val nameInputState = rememberSettingsTextInputState(state.agentDraftName, identityKey = state.editingAgentId)
+    val promptInputState = rememberSettingsTextInputState(state.agentDraftPrompt, identityKey = state.editingAgentId)
     Column(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(t.spacing.lg),
@@ -38,7 +38,7 @@ internal fun AgentEditorForm(
                 value = nameInputState.value,
                 onValueChange = {
                     nameInputState.value = it
-                    onIntent(UiIntent.EditAgentDraftName(it.text))
+                    onIntent(UiIntent.EditAgentDraftName(nameInputState.value.text))
                 },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -57,7 +57,7 @@ internal fun AgentEditorForm(
                 value = promptInputState.value,
                 onValueChange = {
                     promptInputState.value = it
-                    onIntent(UiIntent.EditAgentDraftPrompt(it.text))
+                    onIntent(UiIntent.EditAgentDraftPrompt(promptInputState.value.text))
                 },
                 modifier = Modifier
                     .fillMaxWidth()

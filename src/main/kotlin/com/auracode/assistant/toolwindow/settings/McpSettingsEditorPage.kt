@@ -35,7 +35,10 @@ internal fun McpSettingsEditorPage(
 ) {
     val t = assistantUiTokens()
     val draft = state.mcpDraft
-    val configInputState = rememberSettingsTextInputState(draft.configJson)
+    val configInputState = rememberSettingsTextInputState(
+        draft.configJson,
+        identityKey = draft.engineId to state.editingMcpName,
+    )
     val validation = state.mcpValidationErrors.takeIf { it.hasAny() } ?: draft.validate()
     val canSave = !validation.hasAny() && !state.mcpBusyState.saving
 
@@ -57,7 +60,7 @@ internal fun McpSettingsEditorPage(
                     value = configInputState.value,
                     onValueChange = {
                         configInputState.value = it
-                        onIntent(UiIntent.EditMcpDraftJson(it.text))
+                        onIntent(UiIntent.EditMcpDraftJson(configInputState.value.text))
                     },
                     singleLine = false,
                     minLines = 14,

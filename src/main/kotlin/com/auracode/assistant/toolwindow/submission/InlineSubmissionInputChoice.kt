@@ -19,10 +19,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import com.auracode.assistant.toolwindow.input.NativeInputCommand
-import com.auracode.assistant.toolwindow.input.NativeInputController
-import com.auracode.assistant.toolwindow.input.NativeInputDraft
-import com.auracode.assistant.toolwindow.input.NativeTextInput
+import com.auracode.assistant.toolwindow.input.InputCommand
+import com.auracode.assistant.toolwindow.input.InputController
+import com.auracode.assistant.toolwindow.input.InputDraft
+import com.auracode.assistant.toolwindow.input.ComposeTextInput
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
@@ -73,30 +73,30 @@ internal fun shouldShowPlanCompletionKeyboardHint(
 internal fun rememberInlineInputDraft(
     identityKey: Any,
     text: String,
-): MutableState<NativeInputDraft> {
+): MutableState<InputDraft> {
     val state = remember(identityKey) {
         mutableStateOf(
-            NativeInputDraft(TextFieldValue(text, TextRange(text.length))),
+            InputDraft(TextFieldValue(text, TextRange(text.length))),
         )
     }
-    // 同一问题/回合内由原生输入拥有草稿；异步业务回传只作持久化，不覆盖正在编辑的文字。
+    // 同一问题/回合内由 Compose 输入拥有草稿；异步业务回传只作持久化，不覆盖正在编辑的文字。
     // 切换问题或回合通过 identityKey 初始化恢复草稿。
     return state
 }
 
 @Composable
 internal fun InlineSubmissionInputChoice(
-    value: NativeInputDraft,
+    value: InputDraft,
     placeholder: String,
     emphasized: Boolean,
     isSecret: Boolean,
     p: DesignPalette,
     modifier: Modifier = Modifier,
     showKeyboardHintIcon: Boolean = false,
-    focusRequester: NativeInputController? = null,
+    focusRequester: InputController? = null,
     identityKey: Any = Unit,
     onFocusChanged: ((Boolean) -> Unit)? = null,
-    onValueChange: (NativeInputDraft) -> Unit,
+    onValueChange: (InputDraft) -> Unit,
     onMovePrevious: (() -> Boolean)? = null,
     onMoveNext: (() -> Boolean)? = null,
     onSubmit: () -> Boolean,
@@ -112,7 +112,7 @@ internal fun InlineSubmissionInputChoice(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Box {
-            NativeTextInput(
+            ComposeTextInput(
                 draft = value,
                 identityKey = identityKey,
                 palette = p.copy(timelineCardBg = p.appBg),
@@ -131,10 +131,10 @@ internal fun InlineSubmissionInputChoice(
                         null
                     } else {
                         when (key.code) {
-                            KeyEvent.VK_UP -> onMovePrevious?.let { action -> NativeInputCommand.Invoke { action() } }
-                            KeyEvent.VK_DOWN -> onMoveNext?.let { action -> NativeInputCommand.Invoke { action() } }
-                            KeyEvent.VK_ENTER -> NativeInputCommand.Invoke { onSubmit() }
-                            KeyEvent.VK_ESCAPE -> NativeInputCommand.Invoke { onCancel() }
+                            KeyEvent.VK_UP -> onMovePrevious?.let { action -> InputCommand.Invoke { action() } }
+                            KeyEvent.VK_DOWN -> onMoveNext?.let { action -> InputCommand.Invoke { action() } }
+                            KeyEvent.VK_ENTER -> InputCommand.Invoke { onSubmit() }
+                            KeyEvent.VK_ESCAPE -> InputCommand.Invoke { onCancel() }
                             else -> null
                         }
                     }

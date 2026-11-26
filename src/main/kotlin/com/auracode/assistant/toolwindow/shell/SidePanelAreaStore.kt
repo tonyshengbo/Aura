@@ -57,6 +57,9 @@ internal data class SidePanelAreaState(
     val historyNextCursor: String? = null,
     val historyLoading: Boolean = false,
     val historyQuery: String = "",
+    val codexPathRevision: Long = 0,
+    val claudePathRevision: Long = 0,
+    val nodePathRevision: Long = 0,
     val environmentDraft: EnvironmentDraftState = EnvironmentDraftState(),
     val claudeCliPath: String = "claude",
     val savedClaudeCliPath: String = "claude",
@@ -285,6 +288,9 @@ internal class SidePanelAreaStore {
                     UiIntent.DiscardRuntimeSettingsChanges -> {
                         val current = _state.value
                         _state.value = current.copy(
+                            codexPathRevision = current.codexPathRevision + 1,
+                            claudePathRevision = current.claudePathRevision + 1,
+                            nodePathRevision = current.nodePathRevision + 1,
                             environmentDraft = EnvironmentDraftState(
                                 codexCliPath = current.environmentDraft.savedCodexCliPath,
                                 nodePath = current.environmentDraft.savedNodePath,
@@ -457,7 +463,19 @@ internal class SidePanelAreaStore {
             }
 
             is AppEvent.SettingsSnapshotUpdated -> {
-                val selected = event.savedAgents.firstOrNull { it.id == _state.value.editingAgentId }
+                val current = _state.value
+                val selected = event.savedAgents.firstOrNull { it.id == current.editingAgentId }
+                val previousSelected = current.savedAgents.firstOrNull { it.id == current.editingAgentId }
+                val editing = current.agentSettingsPage == AgentSettingsPage.EDITOR
+                val creatingAgent = editing && current.editingAgentId == null
+                // 无关设置广播不能把未保存的编辑器草稿恢复为旧持久化内容。
+                // 保存确认推进 savedAgents 基线；字段未修改时仍接受新的持久化内容。
+                val keepAgentName = editing && previousSelected != null &&
+                    current.agentDraftName != previousSelected.name &&
+                    current.agentDraftName.trim() != selected?.name
+                val keepAgentPrompt = editing && previousSelected != null &&
+                    current.agentDraftPrompt != previousSelected.prompt &&
+                    current.agentDraftPrompt.trim() != selected?.prompt
                 val fallback = event.savedAgents.firstOrNull()
                 // claudeCliPath 被 auto-detect 填充但尚未保存时，持久化值不变则保留 draft，
                 // 避免版本检查触发的 SettingsSnapshotUpdated 用持久化值覆盖检测结果。
@@ -483,7 +501,7 @@ internal class SidePanelAreaStore {
                     codexCliVersionSnapshot = event.codexCliVersionSnapshot,
                     claudeCliVersionSnapshot = event.claudeCliVersionSnapshot,
                     savedAgents = event.savedAgents,
-                    editingAgentId = selected?.id ?: _state.value.editingAgentId?.takeIf { id ->
+                    editingAgentId = if (creatingAgent) null else selected?.id ?: _state.value.editingAgentId?.takeIf { id ->
                         event.savedAgents.any { it.id == id }
                     } ?: fallback?.id,
                     agentSettingsPage = when {
@@ -492,8 +510,12 @@ internal class SidePanelAreaStore {
                         _state.value.editingAgentId != null && event.savedAgents.none { it.id == _state.value.editingAgentId } -> AgentSettingsPage.LIST
                         else -> _state.value.agentSettingsPage
                     },
-                    agentDraftName = selected?.name ?: _state.value.agentDraftName.takeIf { _state.value.agentSettingsPage == AgentSettingsPage.EDITOR } ?: "",
-                    agentDraftPrompt = selected?.prompt ?: _state.value.agentDraftPrompt.takeIf { _state.value.agentSettingsPage == AgentSettingsPage.EDITOR } ?: "",
+                    agentDraftName = if (keepAgentName || creatingAgent) current.agentDraftName else {
+                        selected?.name ?: current.agentDraftName.takeIf { editing } ?: ""
+                    },
+                    agentDraftPrompt = if (keepAgentPrompt || creatingAgent) current.agentDraftPrompt else {
+                        selected?.prompt ?: current.agentDraftPrompt.takeIf { editing } ?: ""
+                    },
                     systemPromptEnabled = event.systemPromptEnabled,
                     systemPromptContent = event.systemPromptContent,
                 )
@@ -504,12 +526,16 @@ internal class SidePanelAreaStore {
             }
 
             is AppEvent.CodexEnvironmentCheckUpdated -> {
-                _state.value = _state.value.copy(
-                    environmentDraft = _state.value.environmentDraft.withDetectedPaths(
-                        codexCliPath = event.result.codexPath,
-                        nodePath = event.result.nodePath,
-                        updateDraftPaths = event.updateDraftPaths,
-                    ),
+                val current = _state.value
+                val detected = current.environmentDraft.withDetectedPaths(
+                    codexCliPath = event.result.codexPath,
+                    nodePath = event.result.nodePath,
+                    updateDraftPaths = event.updateDraftPaths,
+                )
+                _state.value = current.copy(
+                    codexPathRevision = current.codexPathRevision + if (detected.codexCliPath != current.codexCliPath) 1 else 0,
+                    nodePathRevision = current.nodePathRevision + if (detected.nodePath != current.nodePath) 1 else 0,
+                    environmentDraft = detected,
                     environmentCheckResult = event.result,
                     environmentCheckRunning = false,
                 )
@@ -536,13 +562,17 @@ internal class SidePanelAreaStore {
                 val shouldUpdateClaudeDraft = event.updateDraftPaths &&
                     current.claudeCliPath.trim() == current.savedClaudeCliPath.trim() &&
                     event.result.cliPath.isNotBlank()
+                val detected = current.environmentDraft.withDetectedPaths(
+                    codexCliPath = current.codexCliPath,
+                    nodePath = event.result.nodePath,
+                    updateDraftPaths = event.updateDraftPaths,
+                )
+                val claudePath = if (shouldUpdateClaudeDraft) event.result.cliPath else current.claudeCliPath
                 _state.value = current.copy(
-                    claudeCliPath = if (shouldUpdateClaudeDraft) event.result.cliPath else current.claudeCliPath,
-                    environmentDraft = current.environmentDraft.withDetectedPaths(
-                        codexCliPath = current.codexCliPath,
-                        nodePath = event.result.nodePath,
-                        updateDraftPaths = event.updateDraftPaths,
-                    ),
+                    claudePathRevision = current.claudePathRevision + if (claudePath != current.claudeCliPath) 1 else 0,
+                    nodePathRevision = current.nodePathRevision + if (detected.nodePath != current.nodePath) 1 else 0,
+                    claudeCliPath = claudePath,
+                    environmentDraft = detected,
                     claudeRuntimeCheckResult = event.result,
                 )
             }

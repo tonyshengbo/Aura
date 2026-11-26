@@ -2,24 +2,24 @@ package com.auracode.assistant.toolwindow.submission
 
 import androidx.compose.ui.text.input.TextFieldValue
 import com.auracode.assistant.toolwindow.eventing.UiIntent
-import com.auracode.assistant.toolwindow.input.NativeInputCommand
-import com.auracode.assistant.toolwindow.input.NativeInputKey
+import com.auracode.assistant.toolwindow.input.InputCommand
+import com.auracode.assistant.toolwindow.input.InputKey
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
 import java.awt.event.KeyEvent
 
 /**
- * 提及与补全属于业务命令，和原生文本编辑分离。所有编辑决策使用编辑器实时快照，
- * 不读取上次重组时的 document；返回 null 时由 IDE 继续执行标准编辑动作。
+ * 提及与补全属于业务命令，和 Compose 文本编辑分离。所有编辑决策使用编辑器实时快照，
+ * 不读取上次重组时的 document；返回 null 时由 Compose 继续执行标准编辑动作。
  */
 internal fun resolveSubmissionEditorCommand(
     state: SubmissionAreaState,
     document: TextFieldValue,
-    key: NativeInputKey,
+    key: InputKey,
     onIntent: (UiIntent) -> Unit,
-): NativeInputCommand? {
+): InputCommand? {
     if (document.composition != null) return null
-    fun dispatch(intent: UiIntent) = NativeInputCommand.Invoke { onIntent(intent) }
+    fun dispatch(intent: UiIntent) = InputCommand.Invoke { onIntent(intent) }
 
     if (key.code == KeyEvent.VK_V && (key.meta || key.control)) {
         val hasImage = runCatching {
@@ -31,7 +31,7 @@ internal fun resolveSubmissionEditorCommand(
     if (state.slashPopupVisible && key.code == KeyEvent.VK_ENTER && !key.shift) {
         val selected = state.slashSuggestions.getOrNull(state.activeSlashIndex)
         if (selected is SlashSuggestionItem.Command && !selected.enabled) {
-            return NativeInputCommand.Invoke { }
+            return InputCommand.Invoke { }
         }
     }
 
@@ -91,11 +91,11 @@ internal fun resolveSubmissionEditorCommand(
             }
             else -> null
         }
-        if (edit != null) return NativeInputCommand.Edit(edit)
+        if (edit != null) return InputCommand.Edit(edit)
     }
     if (key.code == KeyEvent.VK_ENTER) {
-        return if (key.shift) NativeInputCommand.Edit(insertLineBreak(document)) else dispatch(UiIntent.SendPrompt)
+        return if (key.shift) null else dispatch(UiIntent.SendPrompt)
     }
-    // 粘贴、撤销和普通字符全部使用 IDE 默认实现。
+    // 粘贴、撤销、Shift+Enter 和普通字符全部使用 Compose 默认实现。
     return null
 }

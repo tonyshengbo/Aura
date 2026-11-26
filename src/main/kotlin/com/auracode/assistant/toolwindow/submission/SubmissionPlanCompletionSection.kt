@@ -21,7 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.eventing.UiIntent
-import com.auracode.assistant.toolwindow.input.NativeInputController
+import com.auracode.assistant.toolwindow.input.InputController
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
@@ -50,7 +50,7 @@ internal fun SubmissionPlanCompletionSection(
 ) {
     val t = assistantUiTokens()
     val cardFocusRequester = remember { FocusRequester() }
-    val revisionFocusRequester = remember { NativeInputController() }
+    val revisionFocusRequester = remember { InputController() }
     val revisionInputState = rememberInlineInputDraft(
         identityKey = state.turnId,
         text = state.revisionDraft,
@@ -85,6 +85,7 @@ internal fun SubmissionPlanCompletionSection(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (revisionFocusRequester.session?.state?.composition != null) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.DirectionRight,
                     Key.DirectionDown,

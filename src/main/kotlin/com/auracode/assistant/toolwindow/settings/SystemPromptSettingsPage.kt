@@ -49,7 +49,7 @@ internal fun SystemPromptSettingsPage(
                 value = contentInputState.value,
                 onValueChange = {
                     contentInputState.value = it
-                    onIntent(UiIntent.EditSystemPromptContent(it.text))
+                    onIntent(UiIntent.EditSystemPromptContent(contentInputState.value.text))
                 },
                 modifier = Modifier
                     .fillMaxWidth()

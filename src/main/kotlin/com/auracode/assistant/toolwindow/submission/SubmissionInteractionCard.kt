@@ -24,7 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.auracode.assistant.toolwindow.input.NativeInputController
+import com.auracode.assistant.toolwindow.input.InputController
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
@@ -53,7 +53,7 @@ internal fun restoreSubmissionInteractionFocusTarget(preferInput: Boolean): Subm
 internal fun restoreSubmissionInteractionFocus(
     target: SubmissionInteractionFocusTarget,
     cardFocusRequester: FocusRequester,
-    inputFocusRequester: NativeInputController? = null,
+    inputFocusRequester: InputController? = null,
 ) {
     when (target) {
         SubmissionInteractionFocusTarget.CARD -> cardFocusRequester.requestFocus()

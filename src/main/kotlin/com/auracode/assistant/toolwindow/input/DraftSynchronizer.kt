@@ -3,27 +3,26 @@ package com.auracode.assistant.toolwindow.input
 import androidx.compose.ui.text.input.TextFieldValue
 import java.util.UUID
 
-/**
- * 编辑器是输入状态的唯一所有者。Store 回传的快照只用于确认，不重新写入编辑器，
- * 避免重组期间旧草稿覆盖原生输入法正在维护的文档、选区和组合态。
- */
-internal class NativeDraftSynchronizer(initialDraft: NativeInputDraft) {
+/** 输入框拥有编辑状态；Store 的回传只确认，显式外部编辑在组合输入结束后执行。 */
+internal class DraftSynchronizer(initialDraft: InputDraft) {
     private val editorId = UUID.randomUUID().toString()
     private var sequence = 0L
     private var observedExternal = initialDraft
+    private var latestRevision = initialDraft.revision
     private var published = initialDraft.value
     private var deferredExternal: TextFieldValue? = null
 
-    fun publish(value: TextFieldValue): NativeInputDraft? {
+    fun publish(value: TextFieldValue): InputDraft? {
         if (published == value) return null
         published = value
         sequence++
-        return NativeInputDraft(value, sequence, NativeDraftOrigin(editorId, sequence))
+        return InputDraft(value, sequence, DraftOrigin(editorId, sequence))
     }
 
-    fun acceptExternal(draft: NativeInputDraft, composing: Boolean): TextFieldValue? {
-        if (draft == observedExternal) return null
+    fun acceptExternal(draft: InputDraft, composing: Boolean): TextFieldValue? {
+        if (draft == observedExternal || draft.revision < latestRevision) return null
         observedExternal = draft
+        latestRevision = draft.revision
         if (draft.origin?.editorId == editorId) return null
         if (composing) {
             deferredExternal = draft.value
@@ -34,7 +33,6 @@ internal class NativeDraftSynchronizer(initialDraft: NativeInputDraft) {
 
     fun finishComposition(): TextFieldValue? {
         val deferred = deferredExternal ?: return null
-        deferredExternal = null
         return acceptCommand(deferred)
     }
 

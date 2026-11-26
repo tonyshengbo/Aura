@@ -413,17 +413,50 @@ internal fun SettingsTextInput(
 }
 
 @Composable
-internal fun rememberSettingsTextInputState(text: String): MutableState<TextFieldValue> {
-    val inputState = remember { mutableStateOf(TextFieldValue(text = text, selection = TextRange(text.length))) }
-    LaunchedEffect(text) {
-        if (inputState.value.text != text) {
-            inputState.value = TextFieldValue(
-                text = text,
-                selection = TextRange(text.length),
-            )
+internal fun rememberSettingsTextInputState(
+    text: String,
+    identityKey: Any? = Unit,
+    externalRevision: Long = 0,
+): MutableState<TextFieldValue> {
+    val inputState = remember(identityKey) { SettingsTextInputState(text, externalRevision) }
+    LaunchedEffect(text, externalRevision) { inputState.acceptExternal(text, externalRevision) }
+    return inputState
+}
+
+/** Store 的逐字回传只持久化；同一编辑器内只有显式外部版本才能替换实时输入。 */
+internal class SettingsTextInputState(initialText: String, initialRevision: Long = 0) : MutableState<TextFieldValue> {
+    private val local = mutableStateOf(TextFieldValue(initialText, TextRange(initialText.length)))
+    private var edited = false
+    private var externalRevision = initialRevision
+    private var deferredExternal: String? = null
+
+    override var value: TextFieldValue
+        get() = local.value
+        set(value) {
+            edited = true
+            local.value = value
+            if (value.composition == null) deferredExternal?.let(::replace)
+        }
+
+    override fun component1(): TextFieldValue = value
+    override fun component2(): (TextFieldValue) -> Unit = { value = it }
+
+    fun acceptExternal(text: String, revision: Long) {
+        if (revision < externalRevision) return
+        val explicitReplacement = revision != externalRevision
+        externalRevision = revision
+        if (!explicitReplacement && edited) return
+        if (value.composition != null) {
+            deferredExternal = text
+        } else if (value.text != text) {
+            replace(text)
         }
     }
-    return inputState
+
+    private fun replace(text: String) {
+        deferredExternal = null
+        local.value = TextFieldValue(text, TextRange(text.length))
+    }
 }
 
 @Composable

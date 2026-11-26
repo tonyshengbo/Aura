@@ -38,10 +38,8 @@ import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptStore
 import com.auracode.assistant.toolwindow.external.ExternalRequestRouter
 import com.auracode.assistant.toolwindow.input.LocalMainInputController
-import com.auracode.assistant.toolwindow.input.LocalNativeInputProject
-import com.auracode.assistant.toolwindow.input.LocalNativeInputVisible
-import com.auracode.assistant.toolwindow.popup.LocalWindowPopupOwner
-import com.auracode.assistant.toolwindow.input.NativeInputController
+import com.auracode.assistant.toolwindow.input.LocalInputEnabled
+import com.auracode.assistant.toolwindow.input.InputController
 import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
 import com.auracode.assistant.toolwindow.sessions.SessionTabCoordinator
 import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
@@ -146,7 +144,7 @@ class ComposeToolWindowPanel(
     parentDisposable: Disposable,
 ) : JPanel(BorderLayout()), Disposable {
     private val hostToolWindow = toolWindow
-    private val inputController = NativeInputController()
+    private val inputController = InputController()
     private var toolWindowAnchor by mutableStateOf(hostToolWindow.anchor ?: ToolWindowAnchor.RIGHT)
     private val chatService = project.getService(AgentChatService::class.java)
     private val editorContextProvider = EditorContextProvider.getInstance(project)
@@ -338,9 +336,7 @@ class ComposeToolWindowPanel(
         add(composePanel, BorderLayout.CENTER)
         composePanel.setContent {
             CompositionLocalProvider(
-                LocalNativeInputProject provides project,
                 LocalMainInputController provides inputController,
-                LocalWindowPopupOwner provides composePanel,
             ) {
                 val sessionTabsState by sessionTabsStore.state.collectAsState()
                 val executionStatusState by executionStatusStore.state.collectAsState()
@@ -372,7 +368,7 @@ class ComposeToolWindowPanel(
                             Surface(modifier = Modifier) {
                                 DiagramFullscreenHost(palette, Modifier.fillMaxSize(), diagramFullscreenState) {
                                     CompositionLocalProvider(
-                                        LocalNativeInputVisible provides (
+                                        LocalInputEnabled provides (
                                             sidePanelState.kind == SidePanelKind.NONE && diagramFullscreenState.content == null
                                         ),
                                     ) {

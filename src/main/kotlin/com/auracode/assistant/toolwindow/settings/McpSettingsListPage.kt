@@ -23,7 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import com.auracode.assistant.toolwindow.popup.WindowDropdownMenu
+import androidx.compose.material.DropdownMenu
 import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -251,7 +251,7 @@ private fun McpServerActionsMenu(
                 modifier = Modifier.size(18.dp),
             )
         }
-        WindowDropdownMenu(
+        DropdownMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
         ) {

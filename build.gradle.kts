@@ -1,10 +1,11 @@
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "2.0.21"
-    id("org.jetbrains.kotlin.plugin.compose") version "2.0.21"
+    id("org.jetbrains.kotlin.jvm") version "2.1.21"
+    id("org.jetbrains.kotlin.plugin.compose") version "2.1.21"
     id("org.jetbrains.intellij.platform") version "2.10.2"
-    id("org.jetbrains.compose") version "1.7.3"
-    kotlin("plugin.serialization") version "2.0.21"
+    // Includes Skiko 0.9.4.2, which avoids changing NSWindow shadows from the AWT thread.
+    id("org.jetbrains.compose") version "1.8.2"
+    kotlin("plugin.serialization") version "2.1.21"
 }
 
 group = "com.auracode.assistant"
@@ -56,43 +57,31 @@ kotlin {
 
 // 平台测试会启动 IntelliJ Application；单独 JVM 执行，避免污染纯 Kotlin 测试的调度环境。
 tasks.test {
-    exclude("**/NativeEditorInputPlatformTest.class")
-    exclude("**/NativeTextInputUiTest.class")
+    exclude("**/ComposeTextInputUiTest.class")
     exclude("**/ConversationTitleUiTest.class")
-    exclude("**/WindowPopupUiTest.class")
-    exclude("**/WindowPopupVisualTest.class")
+    exclude("**/ComposePopupUiTest.class")
+    exclude("**/ComposePopupVisualTest.class")
 }
 
-val nativeInputPlatformTest by intellijPlatformTesting.testIde.registering {
+// 需要桌面会话：挂载生产 ComposePanel，验证 IME、草稿同步、焦点及菜单交互。
+val composeInputUiTest by intellijPlatformTesting.testIde.registering {
     testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     task {
-        include("**/NativeEditorInputPlatformTest.class")
-    }
-}
-
-// 需要桌面会话：实际挂载 ComposePanel 与原生编辑器，验证渲染、输入和遮罩显隐。
-val nativeInputUiTest by intellijPlatformTesting.testIde.registering {
-    testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
-    task {
-        include("**/NativeTextInputUiTest.class")
+        include("**/ComposeTextInputUiTest.class")
         include("**/ConversationTitleUiTest.class")
-        include("**/WindowPopupUiTest.class")
+        include("**/ComposePopupUiTest.class")
         systemProperty("java.awt.headless", "false")
     }
 }
 
-// 使用生产环境的 Skia 画布检查透明窗口；Swing 离屏渲染会掩盖不透明画布导致的黑边。
+// 使用生产环境的 Skia 画布检查 Compose 菜单的主题与边缘绘制。
 val windowPopupVisualTest by intellijPlatformTesting.testIde.registering {
     testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     task {
-        include("**/WindowPopupVisualTest.class")
+        include("**/ComposePopupVisualTest.class")
         systemProperty("java.awt.headless", "false")
         systemProperty("compose.swing.render.on.graphics", "false")
     }
-}
-
-tasks.check {
-    dependsOn(tasks.named("nativeInputPlatformTest"))
 }
 
 intellijPlatform {
@@ -101,12 +90,12 @@ intellijPlatform {
             sinceBuild = "233"
         }
         changeNotes = """
-            <p>Aura Code 1.2.0 adds Mermaid flowcharts, native text input, and follow-up messages during execution.</p>
+            <p>Aura Code 1.2.0 adds Mermaid flowcharts, Compose text input, and follow-up messages during execution.</p>
             <ul>
               <li>Renders Mermaid flowcharts locally with zoom, pan, fullscreen, and source fallback.</li>
               <li>Supports sending follow-up messages to running Codex and Claude sessions, plus persistent Codex asynchronous questions.</li>
-              <li>Uses native IDE text fields for improved IME composition, editing, and undo support.</li>
-              <li>Improves Markdown tables, conversation titles, scrollable session tabs, and window-level menus.</li>
+              <li>Uses Compose text fields and menus with isolated editing state and IME submission protection.</li>
+              <li>Improves Markdown tables, conversation titles, scrollable session tabs, and Compose menus.</li>
             </ul>
         """.trimIndent()
     }

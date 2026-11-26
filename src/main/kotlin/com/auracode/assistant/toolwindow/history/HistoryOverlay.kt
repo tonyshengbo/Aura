@@ -27,12 +27,18 @@ import androidx.compose.material.Text
 import androidx.compose.material.TextField
 import androidx.compose.material.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
@@ -51,6 +57,11 @@ internal fun HistoryOverlay(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
+    // 搜索框持有实时文档与组合态；Store 的异步搜索回传不重写正在编辑的内容。
+    // 历史抽屉重新打开时才从已保存的查询初始化。
+    var searchValue by remember {
+        mutableStateOf(TextFieldValue(state.historyQuery, TextRange(state.historyQuery.length)))
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
@@ -93,8 +104,11 @@ internal fun HistoryOverlay(
         }
         Spacer(Modifier.height(t.spacing.md))
         TextField(
-            value = state.historyQuery,
-            onValueChange = { onIntent(UiIntent.EditHistorySearchQuery(it)) },
+            value = searchValue,
+            onValueChange = {
+                searchValue = it
+                if (it.composition == null) onIntent(UiIntent.EditHistorySearchQuery(it.text))
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = t.spacing.md),

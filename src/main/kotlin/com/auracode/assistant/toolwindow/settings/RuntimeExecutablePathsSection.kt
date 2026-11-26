@@ -23,6 +23,8 @@ internal data class RuntimeExecutablePathsUiModel(
     val nodePathValue: String,
     val nodePathError: String? = null,
     val readinessText: String? = null,
+    val cliPathRevision: Long = 0,
+    val nodePathRevision: Long = 0,
 )
 
 /** Renders the shared executable-path layout for both Codex and Claude runtime tabs. */
@@ -34,8 +36,8 @@ internal fun RuntimeExecutablePathsSection(
     onNodePathChange: (String) -> Unit,
 ) {
     val t = assistantUiTokens()
-    val cliPathInputState = rememberSettingsTextInputState(model.cliPathValue)
-    val nodePathInputState = rememberSettingsTextInputState(model.nodePathValue)
+    val cliPathInputState = rememberSettingsTextInputState(model.cliPathValue, Unit, model.cliPathRevision)
+    val nodePathInputState = rememberSettingsTextInputState(model.nodePathValue, Unit, model.nodePathRevision)
     SettingsField(
         p = p,
         title = AuraCodeBundle.message("settings.runtime.paths.title"),
@@ -59,7 +61,7 @@ internal fun RuntimeExecutablePathsSection(
                 errorText = model.cliPathError,
                 onValueChange = {
                     cliPathInputState.value = it
-                    onCliPathChange(it.text)
+                    onCliPathChange(cliPathInputState.value.text)
                 },
             )
             RuntimePathInput(
@@ -70,7 +72,7 @@ internal fun RuntimeExecutablePathsSection(
                 errorText = model.nodePathError,
                 onValueChange = {
                     nodePathInputState.value = it
-                    onNodePathChange(it.text)
+                    onNodePathChange(nodePathInputState.value.text)
                 },
             )
         }

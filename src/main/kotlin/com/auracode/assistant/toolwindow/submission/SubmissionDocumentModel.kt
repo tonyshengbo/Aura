@@ -159,6 +159,16 @@ internal fun syncMentions(
         suffix++
     }
 
+    // 同名提及可能紧挨着出现；删除后的光标标识实际删掉的那一段。
+    val removedLength = oldText.length - newText.length
+    val deletionStart = newValue.selection.start
+    if (removedLength > 0 && newValue.selection.collapsed &&
+        deletionStart + removedLength <= oldText.length &&
+        oldText.removeRange(deletionStart, deletionStart + removedLength) == newText) {
+        prefix = deletionStart
+        suffix = oldText.length - deletionStart - removedLength
+    }
+
     val oldChangedEnd = oldText.length - suffix
     val newChangedEnd = newText.length - suffix
     val delta = newChangedEnd - oldChangedEnd

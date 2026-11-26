@@ -28,7 +28,7 @@ import com.auracode.assistant.toolwindow.execution.ToolUserInputChoiceKind
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptState
 import com.auracode.assistant.toolwindow.execution.inlineDescription
 import com.auracode.assistant.toolwindow.execution.presentedChoices
-import com.auracode.assistant.toolwindow.input.NativeInputController
+import com.auracode.assistant.toolwindow.input.InputController
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
@@ -45,7 +45,7 @@ internal fun SubmissionToolUserInputSection(
     val asynchronous = current.delivery == SessionInputDelivery.ASYNC
     val t = assistantUiTokens()
     val cardFocusRequester = remember { FocusRequester() }
-    val inputFocusRequester = remember { NativeInputController() }
+    val inputFocusRequester = remember { InputController() }
     val draft = state.answerDrafts[question.id] ?: ToolUserInputAnswerDraftUiModel()
     val choices = question.presentedChoices()
     val otherPlaceholder = AuraCodeBundle.message("toolInput.prompt.otherDescription")
@@ -82,6 +82,7 @@ internal fun SubmissionToolUserInputSection(
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                if (inputFocusRequester.session?.state?.composition != null) return@onPreviewKeyEvent false
                 if (state.submitting) return@onPreviewKeyEvent true
                 when (event.key) {
                     Key.DirectionDown -> {

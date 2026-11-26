@@ -13,6 +13,14 @@ import kotlin.test.assertTrue
 
 class SubmissionDocumentModelTest {
     @Test
+    fun `deleting first duplicate label preserves the second mention identity and position`() {
+        val first = MentionEntry("first", path = "/first/foo", displayName = "foo", start = 0, endExclusive = 4)
+        val second = MentionEntry("second", path = "/second/foo", displayName = "foo", start = 4, endExclusive = 8)
+        val result = syncMentions(listOf(first, second), "@foo@foo", TextFieldValue("@foo", TextRange.Zero))
+        assertEquals(listOf(second.copy(start = 0, endExclusive = 4)), result)
+    }
+
+    @Test
     fun `slash query is resolved at input start`() {
         val query = findSlashQuery(
             value = TextFieldValue("/pl", TextRange(3)),

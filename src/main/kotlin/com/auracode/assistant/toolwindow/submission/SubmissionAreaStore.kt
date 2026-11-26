@@ -19,7 +19,7 @@ import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.execution.PlanCompletionPromptUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptUiModel
 import com.auracode.assistant.toolwindow.execution.compactPreview
-import com.auracode.assistant.toolwindow.input.NativeDraftOrigin
+import com.auracode.assistant.toolwindow.input.DraftOrigin
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -158,7 +158,7 @@ internal data class SubmissionAreaState(
     val currentSessionId: String? = null,
     val document: TextFieldValue = TextFieldValue(""),
     val documentVersion: Long = 0L,
-    val documentOrigin: NativeDraftOrigin? = null,
+    val documentOrigin: DraftOrigin? = null,
     val executionMode: SubmissionMode = SubmissionMode.AUTO,
     val planEnabled: Boolean = false,
     val planModeAvailable: Boolean = true,
@@ -858,7 +858,7 @@ internal class SubmissionAreaStore(
         )
     }
 
-    fun applyDocumentUpdate(value: TextFieldValue, origin: NativeDraftOrigin? = null): SubmissionLookupRequest? {
+    fun applyDocumentUpdate(value: TextFieldValue, origin: DraftOrigin? = null): SubmissionLookupRequest? {
         val current = _state.value
         val normalizedValue = normalizeMentionSelection(current.document, value, current.mentionEntries)
         val syncedMentions = syncMentions(current.mentionEntries, current.document.text, normalizedValue)
@@ -1191,7 +1191,7 @@ internal class SubmissionAreaStore(
     private fun SubmissionAreaState.nextDocumentState(
         document: TextFieldValue,
         mentionEntries: List<MentionEntry>,
-        origin: NativeDraftOrigin? = null,
+        origin: DraftOrigin? = null,
     ): SubmissionAreaState {
         val slashMatch = findSlashQuery(document, mentionEntries)
         val slashQuery = slashMatch?.query.orEmpty()

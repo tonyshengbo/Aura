@@ -8,8 +8,10 @@ import androidx.compose.foundation.ContextMenuState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -23,17 +25,29 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.rememberPopupPositionProviderAtPosition
 import com.auracode.assistant.toolwindow.popup.PopupSurface
-import com.auracode.assistant.toolwindow.popup.WindowPopup
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
@@ -95,19 +109,35 @@ private class ConversationContextMenuRepresentation(
         val status = state.status
         if (status !is ContextMenuState.Status.Open) return
 
-        WindowPopup(
+        Popup(
             onDismissRequest = { state.status = ContextMenuState.Status.Closed },
             popupPositionProvider = rememberPopupPositionProviderAtPosition(
                 positionPx = status.rect.center,
             ),
             properties = PopupProperties(focusable = true),
         ) {
+            val focusManager = LocalFocusManager.current
+            val inputModeManager = LocalInputModeManager.current
+            val focusRequester = remember { FocusRequester() }
+            LaunchedEffect(Unit) { focusRequester.requestFocus() }
             PopupSurface(
                 color = appearance.backgroundColor,
                 borderColor = appearance.borderColor,
             ) {
                 Column(
                     modifier = Modifier
+                        .focusRequester(focusRequester)
+                        .onKeyEvent { event ->
+                            if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                            val direction = when (event.key) {
+                                Key.DirectionDown -> FocusDirection.Next
+                                Key.DirectionUp -> FocusDirection.Previous
+                                else -> return@onKeyEvent false
+                            }
+                            inputModeManager.requestInputMode(InputMode.Keyboard)
+                            focusManager.moveFocus(direction)
+                        }
+                        .focusable()
                         .padding(vertical = 4.dp)
                         .width(IntrinsicSize.Max)
                         .verticalScroll(rememberScrollState()),
@@ -140,12 +170,14 @@ private fun ConversationContextMenuItem(
     val tokens = assistantUiTokens()
     val interactionSource = remember(item.label) { MutableInteractionSource() }
     val hovered by interactionSource.collectIsHoveredAsState()
+    val focused by interactionSource.collectIsFocusedAsState()
+    val highlighted = hovered || focused
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .sizeIn(minWidth = 120.dp, maxWidth = 280.dp, minHeight = 32.dp)
             .hoverable(interactionSource = interactionSource)
-            .background(if (hovered) appearance.itemHoverColor else Color.Transparent)
+            .background(if (highlighted) appearance.itemHoverColor else Color.Transparent)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,
@@ -156,7 +188,7 @@ private fun ConversationContextMenuItem(
     ) {
         Text(
             text = item.label,
-            color = if (hovered) appearance.hoveredTextColor else appearance.textColor,
+            color = if (highlighted) appearance.hoveredTextColor else appearance.textColor,
             style = MaterialTheme.typography.body2,
         )
     }

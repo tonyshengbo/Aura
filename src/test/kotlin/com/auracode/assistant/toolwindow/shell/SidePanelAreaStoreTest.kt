@@ -2,6 +2,9 @@ package com.auracode.assistant.toolwindow.shell
 
 import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.settings.SavedAgentDefinition
+import com.auracode.assistant.settings.UiLanguageMode
+import com.auracode.assistant.settings.UiThemeMode
 import com.auracode.assistant.toolwindow.settings.RuntimeSettingsTab
 import com.auracode.assistant.toolwindow.settings.SettingsSection
 import com.auracode.assistant.toolwindow.settings.SkillsSettingsTab
@@ -14,6 +17,69 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 
 class SidePanelAreaStoreTest {
+    @Test
+    fun `settings refresh preserves dirty agent fields and save acknowledgement advances clean baseline`() {
+        val store = SidePanelAreaStore()
+        val saved = SavedAgentDefinition("agent-a", "原名称", "原提示词")
+        store.onEvent(settingsSnapshot(saved))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSettingsSection(SettingsSection.AGENTS)))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSavedAgentForEdit(saved.id)))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.EditAgentDraftName("新名称")))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.EditAgentDraftPrompt("新提示词")))
+
+        store.onEvent(settingsSnapshot(saved))
+        assertEquals("新名称", store.state.value.agentDraftName)
+        assertEquals("新提示词", store.state.value.agentDraftPrompt)
+        assertEquals(saved.id, store.state.value.editingAgentId)
+
+        val acknowledged = saved.copy(name = "新名称", prompt = "新提示词")
+        store.onEvent(settingsSnapshot(acknowledged))
+        assertEquals(acknowledged, store.state.value.savedAgents.single())
+        store.onEvent(settingsSnapshot(acknowledged.copy(name = "外部名称", prompt = "外部提示词")))
+        assertEquals("外部名称", store.state.value.agentDraftName)
+        assertEquals("外部提示词", store.state.value.agentDraftPrompt)
+    }
+
+    @Test
+    fun `agent refresh accepts clean field while retaining dirty sibling`() {
+        val store = SidePanelAreaStore()
+        val saved = SavedAgentDefinition("agent-a", "原名称", "原提示词")
+        store.onEvent(settingsSnapshot(saved))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSavedAgentForEdit(saved.id)))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.EditAgentDraftName("未保存名称")))
+
+        store.onEvent(settingsSnapshot(saved.copy(prompt = "外部提示词")))
+
+        assertEquals("未保存名称", store.state.value.agentDraftName)
+        assertEquals("外部提示词", store.state.value.agentDraftPrompt)
+    }
+
+    @Test
+    fun `new agent draft keeps null identity and text across settings refresh`() {
+        val store = SidePanelAreaStore()
+        val saved = SavedAgentDefinition("agent-a", "已存在", "已有提示词")
+        store.onEvent(settingsSnapshot(saved))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectSettingsSection(SettingsSection.AGENTS)))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.CreateNewAgentDraft))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.EditAgentDraftName("新智能体")))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.EditAgentDraftPrompt("新草稿")))
+
+        store.onEvent(settingsSnapshot(saved, SavedAgentDefinition("agent-b", "另一个", "另一提示词")))
+
+        assertNull(store.state.value.editingAgentId)
+        assertEquals(AgentSettingsPage.EDITOR, store.state.value.agentSettingsPage)
+        assertEquals("新智能体", store.state.value.agentDraftName)
+        assertEquals("新草稿", store.state.value.agentDraftPrompt)
+    }
+
+    private fun settingsSnapshot(vararg agents: SavedAgentDefinition) = AppEvent.SettingsSnapshotUpdated(
+        codexCliPath = "codex",
+        languageMode = UiLanguageMode.FOLLOW_IDE,
+        themeMode = UiThemeMode.FOLLOW_IDE,
+        autoContextEnabled = true,
+        savedAgents = agents.toList(),
+    )
+
     @Test
     fun `select skills settings tab updates only skills tab state`() {
         val store = SidePanelAreaStore()

@@ -2,7 +2,6 @@ package com.auracode.assistant.toolwindow.submission
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,7 +18,6 @@ import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.Icon
 import androidx.compose.material.Text
@@ -43,10 +41,11 @@ import androidx.compose.ui.window.PopupProperties
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.input.LocalMainInputController
-import com.auracode.assistant.toolwindow.input.NativeInputDraft
-import com.auracode.assistant.toolwindow.input.NativeInputHighlight
-import com.auracode.assistant.toolwindow.input.NativeTextInput
-import com.auracode.assistant.toolwindow.popup.WindowDropdownMenu
+import com.auracode.assistant.toolwindow.input.LocalInputEnabled
+import com.auracode.assistant.toolwindow.input.InputDraft
+import com.auracode.assistant.toolwindow.input.InputHighlight
+import com.auracode.assistant.toolwindow.input.ComposeTextInput
+import androidx.compose.material.DropdownMenu
 import com.auracode.assistant.toolwindow.shared.AssistantUiText
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.FileTypeIcon
@@ -64,6 +63,7 @@ internal fun SubmissionInputSection(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
+    val inputEnabled = LocalInputEnabled.current
     val density = LocalDensity.current
     var popupRootCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var editorCoordinates by remember { mutableStateOf<LayoutCoordinates?>(null) }
@@ -89,35 +89,26 @@ internal fun SubmissionInputSection(
                 .fillMaxWidth()
                 .onGloballyPositioned { popupRootCoordinates = it },
         ) {
-            Column(
+            ComposeTextInput(
+                draft = InputDraft(state.document, state.documentVersion, state.documentOrigin),
+                identityKey = state.currentSessionId,
+                controller = LocalMainInputController.current,
+                palette = p,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = with(density) { SubmissionOutlinedTextFieldTopPadding.toDp() })
-                    .background(p.timelineCardBg, RoundedCornerShape(t.spacing.sm))
-                    .border(1.dp, p.markdownDivider.copy(alpha = 0.55f), RoundedCornerShape(t.spacing.sm))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text(
-                    text = AssistantUiText.COMPOSER_HINT,
-                    color = p.textMuted,
-                    style = androidx.compose.material.MaterialTheme.typography.body2,
-                )
-                NativeTextInput(
-                    draft = NativeInputDraft(state.document, state.documentVersion, state.documentOrigin),
-                    identityKey = state.currentSessionId,
-                    controller = LocalMainInputController.current,
-                    palette = p,
-                    modifier = Modifier.onGloballyPositioned { editorCoordinates = it },
-                    onValueChange = { onIntent(UiIntent.UpdateDocument(it.value, it.origin)) },
-                    highlights = state.mentionEntries.map { NativeInputHighlight(it.start, it.endExclusive) },
-                    resolveCommand = { key, document ->
-                        resolveSubmissionEditorCommand(state, document, key, onIntent)
-                    },
-                    onCaretBoundsChange = { caretBounds = it },
-                    onDropFiles = { onIntent(UiIntent.AddAttachments(it)) },
-                )
-            }
+                    .padding(top = with(density) { SubmissionOutlinedTextFieldTopPadding.toDp() }),
+                outlinedLabel = AssistantUiText.COMPOSER_HINT,
+                onTextPositioned = { editorCoordinates = it },
+                onValueChange = { onIntent(UiIntent.UpdateDocument(it.value, it.origin)) },
+                highlights = state.mentionEntries.map { InputHighlight(it.start, it.endExclusive) },
+                resolveCommand = { key, document ->
+                    resolveSubmissionEditorCommand(state, document, key, onIntent)
+                },
+                onCaretBoundsChange = { caretBounds = it },
+                normalizeValue = { previous, updated ->
+                    normalizeMentionSelection(previous, updated, state.mentionEntries)
+                },
+            )
             val maxPopupHeight = maxHeight * 0.52f
             val popupMode = when {
                 state.slashPopupVisible -> SubmissionPopupMode.SLASH
@@ -151,8 +142,8 @@ internal fun SubmissionInputSection(
                     .offset { (popupAnchor ?: SubmissionPopupAnchor(x = 0, y = 0)).toIntOffset() }
                     .size(1.dp),
             ) {
-                WindowDropdownMenu(
-                    expanded = state.slashPopupVisible || state.mentionPopupVisible || state.agentPopupVisible,
+                DropdownMenu(
+                    expanded = inputEnabled && (state.slashPopupVisible || state.mentionPopupVisible || state.agentPopupVisible),
                     onDismissRequest = {
                         if (state.slashPopupVisible) {
                             onIntent(UiIntent.DismissSlashPopup)
@@ -164,12 +155,11 @@ internal fun SubmissionInputSection(
                     },
                     modifier = Modifier.heightIn(max = maxPopupHeight),
                     properties = PopupProperties(focusable = false),
+                    scrollState = popupScrollState,
                 ) {
                     Column(
                         modifier = Modifier
-                            .width(360.dp)
-                            .heightIn(max = maxPopupHeight)
-                            .verticalScroll(popupScrollState),
+                            .width(360.dp),
                     ) {
                         popupContent.rows.forEachIndexed { index, row ->
                             when (row) {

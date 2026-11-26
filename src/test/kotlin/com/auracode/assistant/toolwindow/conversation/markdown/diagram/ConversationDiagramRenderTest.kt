@@ -5,8 +5,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.InternalComposeUiApi
@@ -24,6 +25,8 @@ import com.auracode.assistant.toolwindow.shared.EffectiveTheme
 import com.auracode.assistant.toolwindow.shared.assistantPalette
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -71,7 +74,7 @@ class ConversationDiagramRenderTest {
             MaterialTheme {
                 CompositionLocalProvider(
                     LocalDiagramRenderer provides DiagramRenderer { requests++; error("Must not render") },
-                    LocalClipboardManager provides clipboard,
+                    LocalClipboard provides clipboard,
                 ) {
                     ConversationMarkdown(
                         "```mermaid\nsequenceDiagram\nA->>B: hello\n```",
@@ -103,9 +106,19 @@ class ConversationDiagramRenderTest {
 
     private var frame = 0L
 
-    private class TestClipboard : ClipboardManager {
+    private class TestClipboard : Clipboard {
+        private var entry: ClipEntry? = null
         var copied: AnnotatedString? = null
-        override fun getText() = copied
-        override fun setText(annotatedString: AnnotatedString) { copied = annotatedString }
+            private set
+
+        override suspend fun getClipEntry() = entry
+
+        override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+            entry = clipEntry
+            val transferable = clipEntry?.nativeClipEntry as? Transferable
+            copied = transferable?.getTransferData(DataFlavor.stringFlavor)?.toString()?.let(::AnnotatedString)
+        }
+
+        override val nativeClipboard: Any = java.awt.datatransfer.Clipboard("Diagram test clipboard")
     }
 }

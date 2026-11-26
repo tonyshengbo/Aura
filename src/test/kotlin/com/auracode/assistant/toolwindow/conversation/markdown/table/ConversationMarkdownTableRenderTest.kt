@@ -15,12 +15,15 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Constraints
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.m2.Markdown
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -66,7 +69,7 @@ class ConversationMarkdownTableRenderTest {
         val scrollState = ScrollState(0)
         var height = 0
         val scene = ImageComposeScene(240, 600) {
-            CompositionLocalProvider(LocalClipboardManager provides clipboard) {
+            CompositionLocalProvider(LocalClipboard provides clipboard) {
                 MaterialTheme {
                     TableMarkdown(
                         "| Details |\n| --- |\n| Copyable text |",
@@ -180,13 +183,19 @@ class ConversationMarkdownTableRenderTest {
 
     private var frameTimeNanos = 0L
 
-    private class TableTestClipboard : ClipboardManager {
+    private class TableTestClipboard : Clipboard {
+        private var entry: ClipEntry? = null
         var copiedText: AnnotatedString? = null
+            private set
 
-        override fun getText(): AnnotatedString? = copiedText
+        override suspend fun getClipEntry() = entry
 
-        override fun setText(annotatedString: AnnotatedString) {
-            copiedText = annotatedString
+        override suspend fun setClipEntry(clipEntry: ClipEntry?) {
+            entry = clipEntry
+            val transferable = clipEntry?.nativeClipEntry as? Transferable
+            copiedText = transferable?.getTransferData(DataFlavor.stringFlavor)?.toString()?.let(::AnnotatedString)
         }
+
+        override val nativeClipboard: Any = java.awt.datatransfer.Clipboard("Table test clipboard")
     }
 }

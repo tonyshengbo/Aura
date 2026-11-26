@@ -20,7 +20,7 @@ import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import com.auracode.assistant.toolwindow.popup.WindowDropdownMenu
+import androidx.compose.material.DropdownMenu
 import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -164,7 +164,7 @@ internal fun SkillRowActionsMenu(
                 modifier = Modifier.size(18.dp),
             )
         }
-        WindowDropdownMenu(
+        DropdownMenu(
             expanded = expanded,
             onDismissRequest = { onExpandedChange(false) },
         ) {

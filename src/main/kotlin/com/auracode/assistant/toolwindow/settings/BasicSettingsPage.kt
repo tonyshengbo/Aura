@@ -18,7 +18,7 @@ import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.settings.UiLanguageMode
 import com.auracode.assistant.settings.UiScaleMode
 import com.auracode.assistant.settings.UiThemeMode
-import com.auracode.assistant.toolwindow.popup.WindowDropdownMenu
+import androidx.compose.material.DropdownMenu
 import com.auracode.assistant.toolwindow.shell.SidePanelAreaState
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.shared.DesignPalette
@@ -114,7 +114,7 @@ private fun UiScaleModeDropdown(
             modifier = modifier,
             onClick = { expanded = true },
         )
-        WindowDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(onClick = { expanded = false; onSelect(UiScaleMode.P80) }) {
                 Text(AuraCodeBundle.message("settings.fontScale.80"))
             }
@@ -150,7 +150,7 @@ private fun LanguageModeDropdown(
             modifier = modifier,
             onClick = { expanded = true },
         )
-        WindowDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(onClick = { expanded = false; onSelect(UiLanguageMode.FOLLOW_IDE) }) {
                 Text(AuraCodeBundle.message("settings.language.followIde"))
             }
@@ -186,7 +186,7 @@ private fun ThemeModeDropdown(
             modifier = modifier,
             onClick = { expanded = true },
         )
-        WindowDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(onClick = { expanded = false; onSelect(UiThemeMode.FOLLOW_IDE) }) {
                 Text(AuraCodeBundle.message("settings.theme.followIde"))
             }

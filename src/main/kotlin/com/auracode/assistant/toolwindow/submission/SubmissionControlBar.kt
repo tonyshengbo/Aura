@@ -35,7 +35,7 @@ import com.auracode.assistant.toolwindow.eventing.SubmissionMode
 import com.auracode.assistant.toolwindow.eventing.SubmissionReasoning
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.eventing.localizedLabel
-import com.auracode.assistant.toolwindow.popup.WindowDropdownMenu
+import androidx.compose.material.DropdownMenu
 import com.auracode.assistant.toolwindow.settings.SettingsTextInput
 import com.auracode.assistant.toolwindow.settings.rememberSettingsTextInputState
 import com.auracode.assistant.toolwindow.shared.DesignPalette
@@ -326,7 +326,7 @@ private fun DropdownChip(
                 modifier = Modifier.size(20.dp),
             )
         }
-        WindowDropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             content()
         }
     }

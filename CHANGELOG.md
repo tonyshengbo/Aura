@@ -12,9 +12,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Replaced Compose text fields with native IDE input for improved IME composition, editing, and undo support.
+- Uses Compose text fields with isolated editing state, IME submission protection, and undo support.
 - Improved Markdown table rendering, conversation titles, and scrollable session tabs.
-- Moved dropdown and context menus into window-level popups so they display above native input fields.
+- Uses Compose dropdown and context menus in the same scene as text inputs.
 
 ## [1.1.1] - 2026-09-22
 
