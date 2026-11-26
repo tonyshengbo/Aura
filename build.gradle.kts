@@ -44,6 +44,7 @@ dependencies {
     testImplementation(kotlin("test"))
     intellijPlatform {
         intellijIdeaCommunity("2024.3.1")
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     }
 }
 kotlin {
@@ -51,6 +52,47 @@ kotlin {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
     }
+}
+
+// 平台测试会启动 IntelliJ Application；单独 JVM 执行，避免污染纯 Kotlin 测试的调度环境。
+tasks.test {
+    exclude("**/NativeEditorInputPlatformTest.class")
+    exclude("**/NativeTextInputUiTest.class")
+    exclude("**/ConversationTitleUiTest.class")
+    exclude("**/WindowPopupUiTest.class")
+    exclude("**/WindowPopupVisualTest.class")
+}
+
+val nativeInputPlatformTest by intellijPlatformTesting.testIde.registering {
+    testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+    task {
+        include("**/NativeEditorInputPlatformTest.class")
+    }
+}
+
+// 需要桌面会话：实际挂载 ComposePanel 与原生编辑器，验证渲染、输入和遮罩显隐。
+val nativeInputUiTest by intellijPlatformTesting.testIde.registering {
+    testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+    task {
+        include("**/NativeTextInputUiTest.class")
+        include("**/ConversationTitleUiTest.class")
+        include("**/WindowPopupUiTest.class")
+        systemProperty("java.awt.headless", "false")
+    }
+}
+
+// 使用生产环境的 Skia 画布检查透明窗口；Swing 离屏渲染会掩盖不透明画布导致的黑边。
+val windowPopupVisualTest by intellijPlatformTesting.testIde.registering {
+    testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
+    task {
+        include("**/WindowPopupVisualTest.class")
+        systemProperty("java.awt.headless", "false")
+        systemProperty("compose.swing.render.on.graphics", "false")
+    }
+}
+
+tasks.check {
+    dependsOn(tasks.named("nativeInputPlatformTest"))
 }
 
 intellijPlatform {

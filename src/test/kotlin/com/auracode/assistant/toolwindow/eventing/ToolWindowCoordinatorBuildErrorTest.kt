@@ -4,31 +4,33 @@ import com.auracode.assistant.integration.build.BuildErrorAuraRequest
 import com.auracode.assistant.integration.build.BuildErrorSnapshot
 import com.auracode.assistant.integration.ide.IdeExternalRequest
 import com.auracode.assistant.integration.ide.IdeRequestSource
-import com.auracode.assistant.model.ContextFile
 import com.auracode.assistant.model.AgentRequest
-import com.auracode.assistant.protocol.TurnOutcome
+import com.auracode.assistant.model.ContextFile
 import com.auracode.assistant.protocol.ProviderEvent
+import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.provider.AgentProvider
 import com.auracode.assistant.provider.AgentProviderFactory
 import com.auracode.assistant.provider.EngineCapabilities
 import com.auracode.assistant.provider.EngineDescriptor
 import com.auracode.assistant.provider.ProviderRegistry
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
 import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.settings.AgentSettingsService
-import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
-import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
-import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
-import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
+import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
+import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
+import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
 import java.nio.file.Files
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 
 class ToolWindowCoordinatorBuildErrorTest {
     @Test
@@ -57,7 +59,7 @@ class ToolWindowCoordinatorBuildErrorTest {
     }
 
     @Test
-    fun `build error request queues while a run is active`() {
+    fun `build error request is delivered to the active runtime`() {
         val harness = CoordinatorHarness()
         harness.eventHub.publishUiIntent(UiIntent.InputChanged("existing prompt"))
         harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
@@ -71,17 +73,15 @@ class ToolWindowCoordinatorBuildErrorTest {
                         detail = "details",
                         source = "Build",
                     ),
-                    prompt = "Analyze this queued build error",
+                    prompt = "Analyze this live build error",
                 ),
             ),
         )
 
-        harness.waitUntil { harness.submissionStore.state.value.pendingSubmissions.size == 1 }
+        harness.waitUntil { harness.provider.liveInputs.size == 1 }
         assertEquals(1, harness.provider.requests.size)
-
-        harness.provider.completeTurn("turn-1")
-        harness.waitUntil { harness.provider.requests.size == 2 }
-        assertEquals("Analyze this queued build error", harness.provider.requests.last().prompt)
+        assertEquals("Analyze this live build error", harness.provider.liveInputs.single().prompt)
+        harness.waitUntil { harness.submissionStore.state.value.inputText.isBlank() }
 
         harness.dispose()
     }
@@ -179,6 +179,11 @@ class ToolWindowCoordinatorBuildErrorTest {
 
     private class RecordingProvider : AgentProvider {
         val requests = CopyOnWriteArrayList<AgentRequest>()
+        val liveInputs = CopyOnWriteArrayList<LiveInput>()
+        override suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult {
+            liveInputs += input
+            return LiveInputResult.Accepted("turn-1")
+        }
         private var sink: (ProviderEvent) -> Unit = {}
         private var nextThreadIndex: Int = 1
 

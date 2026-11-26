@@ -9,6 +9,49 @@ import kotlin.test.assertTrue
 
 class ToolUserInputPromptStoreTest {
     @Test
+    fun `reused blocking request ids do not reuse drafts from a previous tool call`() {
+        val store = ToolUserInputPromptStore()
+        val first = prompt("0", "First question").copy(itemId = "call-first")
+        val second = first.copy(itemId = "call-second")
+        fun project(prompts: List<ToolUserInputPromptUiModel>) = store.onEvent(
+            AppEvent.ExecutionUiProjectionUpdated(approvals = emptyList(), toolUserInputs = prompts, turnStatus = null),
+        )
+        project(listOf(first))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectToolUserInputOption("builder_demo_target", "Reuse existing demo")))
+        assertTrue(store.state.value.canSubmit)
+        project(emptyList())
+        project(listOf(second))
+        assertFalse(store.state.value.canSubmit)
+        assertEquals(null, store.state.value.answerDrafts["builder_demo_target"]?.selectedOptionLabel)
+    }
+
+    @Test
+    fun `async drafts and send errors survive tab switches while blocking questions take priority`() {
+        val store = ToolUserInputPromptStore()
+        val async = prompt("async-1", "Question one").copy(
+            delivery = com.auracode.assistant.session.kernel.SessionInputDelivery.ASYNC,
+        )
+        fun project(prompts: List<ToolUserInputPromptUiModel>) = store.onEvent(
+            AppEvent.ExecutionUiProjectionUpdated(approvals = emptyList(), toolUserInputs = prompts, turnStatus = null),
+        )
+        project(listOf(async))
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.SelectToolUserInputOption("builder_demo_target", "Reuse existing demo")))
+        store.onEvent(AppEvent.ToolUserInputSubmissionUpdated("thread-1", "async-1", true))
+        project(listOf(prompt("session-2", "Other session").copy(threadId = "thread-2")))
+        store.onEvent(AppEvent.ToolUserInputSubmissionUpdated("thread-1", "async-1", false, "write failed"))
+        project(listOf(async))
+        assertEquals("Reuse existing demo", store.state.value.answerDrafts["builder_demo_target"]?.selectedOptionLabel)
+        assertEquals("write failed", store.state.value.error)
+        assertFalse(store.state.value.submitting)
+        store.onEvent(AppEvent.ClearToolUserInputs)
+        assertEquals("async-1", store.state.value.current?.requestId)
+        project(listOf(async, prompt("blocking", "Blocking")))
+        assertEquals("blocking", store.state.value.current?.requestId)
+        project(listOf(async))
+        assertEquals("Reuse existing demo", store.state.value.answerDrafts["builder_demo_target"]?.selectedOptionLabel)
+    }
+
+    @Test
     fun `tool user input prompts are queued and current draft starts empty`() {
         val store = ToolUserInputPromptStore()
 

@@ -6,23 +6,17 @@ import com.auracode.assistant.conversation.ConversationRef
 import com.auracode.assistant.conversation.ConversationSummary
 import com.auracode.assistant.conversation.ConversationSummaryPage
 import com.auracode.assistant.diff.FileChangeMetrics
+import com.auracode.assistant.logging.CliDebugLogger
 import com.auracode.assistant.model.AgentApprovalMode
 import com.auracode.assistant.model.AgentCollaborationMode
 import com.auracode.assistant.model.AgentRequest
-import com.auracode.assistant.provider.AgentProvider
-import com.auracode.assistant.provider.CodexProviderFactory
-import com.auracode.assistant.provider.PromptContextStripper
-import com.auracode.assistant.provider.session.ProviderProtocolDomainMapper
-import com.auracode.assistant.provider.codex.protocol.CodexMcpToolContentFormatter
 import com.auracode.assistant.protocol.ApprovalDecision
 import com.auracode.assistant.protocol.ItemKind
 import com.auracode.assistant.protocol.ItemStatus
-import com.auracode.assistant.protocol.TurnOutcome
-import com.auracode.assistant.protocol.ProviderApprovalRequest
-import com.auracode.assistant.protocol.ProviderApprovalRequestKind
 import com.auracode.assistant.protocol.ProviderAgentSnapshot
 import com.auracode.assistant.protocol.ProviderAgentStatus
-import com.auracode.assistant.protocol.TurnUsage
+import com.auracode.assistant.protocol.ProviderApprovalRequest
+import com.auracode.assistant.protocol.ProviderApprovalRequestKind
 import com.auracode.assistant.protocol.ProviderEvent
 import com.auracode.assistant.protocol.ProviderFileChange
 import com.auracode.assistant.protocol.ProviderItem
@@ -34,17 +28,39 @@ import com.auracode.assistant.protocol.ProviderToolUserInputOption
 import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
 import com.auracode.assistant.protocol.ProviderToolUserInputQuestion
 import com.auracode.assistant.protocol.ProviderToolUserInputSubmission
-import com.auracode.assistant.settings.AgentSettingsService
+import com.auracode.assistant.protocol.TurnOutcome
+import com.auracode.assistant.protocol.TurnUsage
+import com.auracode.assistant.provider.AgentProvider
+import com.auracode.assistant.provider.CodexProviderFactory
+import com.auracode.assistant.provider.PromptContextStripper
+import com.auracode.assistant.provider.codex.input.CodexAsyncQuestionParser
+import com.auracode.assistant.provider.codex.protocol.CodexMcpToolContentFormatter
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
+import com.auracode.assistant.provider.session.ProviderProtocolDomainMapper
 import com.auracode.assistant.session.kernel.SessionDomainEvent
+import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.toolwindow.execution.ApprovalAction
-import com.auracode.assistant.logging.CliDebugLogger
 import com.intellij.openapi.diagnostic.Logger
-import kotlinx.coroutines.DelicateCoroutinesApi
+import java.io.File
+import java.net.URI
+import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.io.path.extension
+import kotlin.io.path.fileSize
+import kotlin.io.path.isRegularFile
+import kotlin.io.path.name
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
@@ -63,15 +79,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.io.File
-import java.net.URI
-import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
-import kotlin.io.path.extension
-import kotlin.io.path.fileSize
-import kotlin.io.path.isRegularFile
-import kotlin.io.path.name
 
 /** Streams Codex app-server events and exposes Codex-specific provider capabilities. */
 internal class CodexRuntimeProvider(
@@ -146,7 +153,7 @@ internal class CodexRuntimeProvider(
             return@callbackFlow
         }
 
-        val active = ActiveRequest(process = process)
+        val active = ActiveRequest(process = process, request = request)
         running[request.requestId] = active
 
         launch(Dispatchers.IO) {
@@ -200,6 +207,7 @@ internal class CodexRuntimeProvider(
                     }
                 }
                 runAppServerStartupStep("turn/start", active, process) { bridge.startTurn(threadId) }
+                active.inputReady.complete(client)
                 launchSilentExitCompletionWatcher(
                     process = process,
                     active = active,
@@ -223,6 +231,8 @@ internal class CodexRuntimeProvider(
                     ),
                 )
             } finally {
+                active.inputReady.cancel()
+                session.close()
                 running.remove(request.requestId)
                 process.destroy()
                 close()
@@ -231,6 +241,45 @@ internal class CodexRuntimeProvider(
 
         awaitClose {
             running.remove(request.requestId)?.cancel()
+        }
+    }
+
+    /** Uses turn/steer so a follow-up never cancels or restarts the original run. */
+    override suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult {
+        val active = running[requestId]
+            ?: return LiveInputResult.Rejected("Codex is starting or finishing. Please try again.")
+        if (active.turnCompleted.isCompleted) return LiveInputResult.Inactive
+        val original = active.request ?: return LiveInputResult.Rejected("Codex input is not ready.")
+        return try {
+            val client = withTimeout(APP_SERVER_HANDSHAKE_TIMEOUT_MS) { active.inputReady.await() }
+            if (active.turnCompleted.isCompleted) return LiveInputResult.Inactive
+            val turnId = withTimeout(APP_SERVER_HANDSHAKE_TIMEOUT_MS) {
+                client.steerTurn(
+                    original.copy(
+                        prompt = input.prompt,
+                        systemInstructions = input.systemInstructions,
+                        contextFiles = input.contextFiles,
+                        imageAttachments = input.imageAttachments,
+                        fileAttachments = input.fileAttachments,
+                    ),
+                    active.threadId ?: error("Codex thread is not ready."),
+                    active.turnId ?: error("Codex turn is not ready."),
+                )
+            }
+            LiveInputResult.Accepted(turnId)
+        } catch (error: CodexRuntimeRpcException) {
+            if (active.turnCompleted.isCompleted || error.message.orEmpty().contains("no active turn", ignoreCase = true)) {
+                LiveInputResult.Inactive
+            } else {
+                LiveInputResult.Rejected(error.message.orEmpty())
+            }
+        } catch (error: TimeoutCancellationException) {
+            LiveInputResult.Rejected("Codex did not acknowledge the input. Delivery is unconfirmed; it was not resent.")
+        } catch (error: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            LiveInputResult.Rejected("Codex stopped before accepting input.")
+        } catch (error: Exception) {
+            LiveInputResult.Rejected(error.message ?: "Codex input failed.")
         }
     }
 
@@ -311,6 +360,8 @@ internal class CodexRuntimeProvider(
             val agentStatesByThreadId: Map<String, JsonObject>,
         )
 
+        private val asyncQuestionItemIds = mutableSetOf<String>()
+        private val emittedAsyncQuestionIds = mutableSetOf<String>()
         private val narrativeBuffers = mutableMapOf<String, StringBuilder>()
         private val activityOutputBuffers = mutableMapOf<String, StringBuilder>()
         private val planBuffers = mutableMapOf<String, StringBuilder>()
@@ -431,6 +482,8 @@ internal class CodexRuntimeProvider(
                         return emptyList()
                     }
                     val item = params.objectValue("item") ?: return emptyList()
+                    activeThreadId = params.string("threadId") ?: activeThreadId
+                    activeTurnId = params.string("turnId") ?: activeTurnId
                     parseItemLifecycle(
                         item = item,
                         method = method,
@@ -442,6 +495,7 @@ internal class CodexRuntimeProvider(
                     if (isTrackedChildThreadEvent(params)) {
                         return emptyList()
                     }
+                    if (params.string("itemId") in asyncQuestionItemIds) return emptyList()
                     parseNarrativeDelta(
                         params = params,
                         itemName = "message",
@@ -607,6 +661,16 @@ internal class CodexRuntimeProvider(
             method: String,
             includeUserMessages: Boolean,
         ): List<ProviderEvent> {
+            val asyncPrompt = CodexAsyncQuestionParser.parse(item, activeThreadId, activeTurnId)
+            if (asyncPrompt != null) {
+                asyncQuestionItemIds.add(asyncPrompt.itemId)
+                // Native started/completed notifications share one question identity.
+                return if (method == "item/completed" && emittedAsyncQuestionIds.add(asyncPrompt.itemId)) {
+                    listOf(ProviderEvent.ToolUserInputRequested(asyncPrompt))
+                } else {
+                    emptyList()
+                }
+            }
             val status = if (method == "item/completed") {
                 parseStatus(item.string("status"), ItemStatus.SUCCESS)
             } else {

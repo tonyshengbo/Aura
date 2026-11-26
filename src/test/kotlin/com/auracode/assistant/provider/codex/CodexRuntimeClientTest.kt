@@ -2,6 +2,8 @@ package com.auracode.assistant.provider.codex
 
 import com.auracode.assistant.model.AgentApprovalMode
 import com.auracode.assistant.model.AgentRequest
+import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -10,13 +12,32 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * 验证 Aura 在不同执行模式下发送给 Codex app-server 的线程与 turn 参数。
  */
 class CodexRuntimeClientTest {
+    @Test
+    fun `live input targets the active turn without overriding its execution settings`() = runBlocking {
+        val session = RecordingCodexRuntimeSession().apply {
+            response("turn/steer", buildJsonObject { put("turnId", "turn-active") })
+        }
+        val client = CodexRuntimeClient(session, {})
+        val result = client.steerTurn(
+            AgentRequest(
+                engineId = "codex", model = "ignored", prompt = "follow up",
+                contextFiles = emptyList(), workingDirectory = "/tmp/project",
+            ),
+            "thread-active", "turn-active",
+        )
+        val request = session.singleRequest()
+        assertEquals("turn-active", result)
+        assertEquals("turn/steer", request.method)
+        assertEquals(setOf("threadId", "expectedTurnId", "input"), request.params.keys)
+        assertEquals("turn-active", request.params.getValue("expectedTurnId").jsonPrimitive.content)
+        assertEquals("follow up", request.params.getValue("input").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content)
+    }
+
     @Test
     fun `approval mode thread start uses on request and workspace write sandbox`() = runBlocking {
         val session = RecordingCodexRuntimeSession().apply {

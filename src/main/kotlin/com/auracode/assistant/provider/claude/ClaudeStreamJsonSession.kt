@@ -3,6 +3,8 @@ package com.auracode.assistant.provider.claude
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal interface ClaudeStreamJsonSession {
@@ -11,8 +13,10 @@ internal interface ClaudeStreamJsonSession {
         onStderrLine: suspend (String) -> Unit,
     ): Int
 
-    /** 向 Claude CLI 的 stdin 写入一行 JSON，用于发送 control_response。 */
+    /** Writes one complete user input or control response; failures must reach the caller. */
     suspend fun writeStdin(line: String)
+
+    suspend fun closeInput() {}
 
     fun cancel()
 }
@@ -21,6 +25,7 @@ internal class ProcessClaudeStreamJsonSession(
     private val process: Process,
 ) : ClaudeStreamJsonSession {
     private val stdinWriter = process.outputStream.bufferedWriter(Charsets.UTF_8)
+    private val writerMutex = Mutex()
 
     override suspend fun collect(
         onStdoutLine: suspend (String) -> Unit,
@@ -49,15 +54,19 @@ internal class ProcessClaudeStreamJsonSession(
         exitCode
     }
 
-    /** 向 stdin 写入一行 JSON；进程已退出时静默忽略，避免 IOException 上抛。 */
+    /** Serializes live input and approval responses so JSON lines cannot interleave. */
     override suspend fun writeStdin(line: String) {
         withContext(Dispatchers.IO) {
-            runCatching {
+            writerMutex.withLock {
                 stdinWriter.write(line)
                 stdinWriter.newLine()
                 stdinWriter.flush()
             }
         }
+    }
+
+    override suspend fun closeInput() = withContext(Dispatchers.IO) {
+        writerMutex.withLock { stdinWriter.close() }
     }
 
     override fun cancel() {

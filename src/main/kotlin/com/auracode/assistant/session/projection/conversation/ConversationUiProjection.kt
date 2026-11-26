@@ -1,19 +1,20 @@
 package com.auracode.assistant.session.projection.conversation
 
+import com.auracode.assistant.conversation.presentation.ActivityTitleFormatter
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.model.MessageRole
-import com.auracode.assistant.conversation.presentation.ActivityTitleFormatter
 import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.session.kernel.SessionActivityStatus
 import com.auracode.assistant.session.kernel.SessionApprovalDecision
 import com.auracode.assistant.session.kernel.SessionConversationEntry
+import com.auracode.assistant.session.kernel.SessionInputDelivery
 import com.auracode.assistant.session.kernel.SessionMessageRole
 import com.auracode.assistant.session.kernel.SessionState
+import com.auracode.assistant.toolwindow.conversation.ConversationActivityItem
+import com.auracode.assistant.toolwindow.conversation.ConversationAttachmentKind
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChangeKind
 import com.auracode.assistant.toolwindow.conversation.ConversationMessageAttachment
-import com.auracode.assistant.toolwindow.conversation.ConversationActivityItem
-import com.auracode.assistant.toolwindow.conversation.ConversationAttachmentKind
 import com.auracode.assistant.toolwindow.shared.AssistantUiText
 import java.nio.file.Path
 import kotlin.io.path.name
@@ -292,6 +293,9 @@ internal class ConversationUiProjectionBuilder {
         val body = when {
             !responseSummary.isNullOrBlank() -> responseSummary
             status == SessionActivityStatus.FAILED -> AuraCodeBundle.message("timeline.userInput.cancelled")
+            request.delivery == SessionInputDelivery.ASYNC ->
+                request.questions.joinToString("\n\n") { it.promptKey } + "\n\n" +
+                    AuraCodeBundle.message("timeline.userInput.waiting")
             else -> AuraCodeBundle.message("timeline.userInput.waiting")
         }
         return ConversationActivityItem.UserInputNode(

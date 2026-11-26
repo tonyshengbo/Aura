@@ -3,48 +3,49 @@ package com.auracode.assistant.toolwindow.eventing
 import androidx.compose.ui.text.input.TextFieldValue
 import com.auracode.assistant.conversation.ConversationCapabilities
 import com.auracode.assistant.conversation.ConversationSummary
+import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.integration.build.BuildErrorAuraRequest
 import com.auracode.assistant.integration.ide.IdeExternalRequest
+import com.auracode.assistant.provider.claude.ClaudeCliVersionSnapshot
+import com.auracode.assistant.provider.codex.CodexCliVersionSnapshot
+import com.auracode.assistant.provider.codex.CodexEnvironmentCheckResult
+import com.auracode.assistant.provider.runtime.RuntimeExecutableCheckResult
 import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.settings.SavedAgentDefinition
 import com.auracode.assistant.settings.UiLanguageMode
 import com.auracode.assistant.settings.UiScaleMode
 import com.auracode.assistant.settings.UiThemeMode
-import com.auracode.assistant.settings.skills.ManagedSkillEntry
 import com.auracode.assistant.settings.mcp.McpBusyState
 import com.auracode.assistant.settings.mcp.McpRuntimeStatus
 import com.auracode.assistant.settings.mcp.McpServerDraft
 import com.auracode.assistant.settings.mcp.McpServerSummary
 import com.auracode.assistant.settings.mcp.McpTestResult
 import com.auracode.assistant.settings.mcp.McpValidationErrors
-import com.auracode.assistant.provider.claude.ClaudeCliVersionSnapshot
-import com.auracode.assistant.provider.codex.CodexEnvironmentCheckResult
-import com.auracode.assistant.provider.codex.CodexCliVersionSnapshot
-import com.auracode.assistant.provider.runtime.RuntimeExecutableCheckResult
+import com.auracode.assistant.settings.skills.ManagedSkillEntry
+import com.auracode.assistant.toolwindow.conversation.ConversationActivityItem
+import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
 import com.auracode.assistant.toolwindow.execution.ApprovalAction
-import com.auracode.assistant.toolwindow.submission.SubmissionRunningPlanState
-import com.auracode.assistant.toolwindow.submission.MentionSuggestion
-import com.auracode.assistant.toolwindow.submission.PlanCompletionAction
-import com.auracode.assistant.toolwindow.submission.PendingSubmission
-import com.auracode.assistant.toolwindow.submission.SessionSubagentUiModel
+import com.auracode.assistant.toolwindow.execution.ExecutionTurnStatusUiState
 import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
-import com.auracode.assistant.toolwindow.submission.ContextEntry
-import com.auracode.assistant.toolwindow.submission.FocusedContextSnapshot
-import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.execution.PlanCompletionPromptUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptUiModel
+import com.auracode.assistant.toolwindow.input.NativeDraftOrigin
+import com.auracode.assistant.toolwindow.settings.McpSettingsTab
 import com.auracode.assistant.toolwindow.settings.RuntimeSettingsTab
 import com.auracode.assistant.toolwindow.settings.SettingsSection
 import com.auracode.assistant.toolwindow.settings.SkillsSettingsTab
-import com.auracode.assistant.toolwindow.settings.McpSettingsTab
 import com.auracode.assistant.toolwindow.settings.TokenUsageRange
 import com.auracode.assistant.toolwindow.settings.TokenUsageSettingsTab
 import com.auracode.assistant.toolwindow.settings.TokenUsageStatsSnapshot
-import com.auracode.assistant.toolwindow.shell.RuntimeCliInstallDialogState
 import com.auracode.assistant.toolwindow.shared.UiText
-import com.auracode.assistant.toolwindow.execution.ExecutionTurnStatusUiState
-import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
-import com.auracode.assistant.toolwindow.conversation.ConversationActivityItem
+import com.auracode.assistant.toolwindow.shell.RuntimeCliInstallDialogState
+import com.auracode.assistant.toolwindow.submission.ContextEntry
+import com.auracode.assistant.toolwindow.submission.FocusedContextSnapshot
+import com.auracode.assistant.toolwindow.submission.MentionSuggestion
+import com.auracode.assistant.toolwindow.submission.PlanCompletionAction
+import com.auracode.assistant.toolwindow.submission.SessionSubagentUiModel
+import com.auracode.assistant.toolwindow.submission.SubmissionDraftSnapshot
+import com.auracode.assistant.toolwindow.submission.SubmissionRunningPlanState
 
 internal sealed interface UiIntent {
     data object NewSession : UiIntent
@@ -63,13 +64,12 @@ internal sealed interface UiIntent {
     data class ToggleNodeExpanded(val nodeId: String) : UiIntent
     data class OpenConversationFileChange(val change: ConversationFileChange) : UiIntent
     data class OpenConversationFilePath(val path: String) : UiIntent
-    data class UpdateDocument(val value: TextFieldValue) : UiIntent
+    data class UpdateDocument(val value: TextFieldValue, val origin: NativeDraftOrigin? = null) : UiIntent
     data class InputChanged(val value: String) : UiIntent
     data class SubmitBuildErrorRequest(val request: BuildErrorAuraRequest) : UiIntent
     data class SubmitExternalRequest(val request: IdeExternalRequest) : UiIntent
     data object SendPrompt : UiIntent
     data object CancelRun : UiIntent
-    data class RemovePendingSubmission(val id: String) : UiIntent
     data class SelectMode(val mode: SubmissionMode) : UiIntent
     data object ToggleExecutionMode : UiIntent
     data object TogglePlanMode : UiIntent
@@ -390,12 +390,16 @@ internal sealed interface AppEvent {
     data class ToolUserInputResolved(
         val requestId: String,
     ) : AppEvent
+    data class ToolUserInputSubmissionUpdated(
+        val threadId: String,
+        val requestId: String,
+        val submitting: Boolean,
+        val error: String? = null,
+    ) : AppEvent
     data object ActiveRunCancelled : AppEvent
     data object ClearToolUserInputs : AppEvent
-    data class PendingSubmissionsUpdated(
-        val submissions: List<PendingSubmission>,
-        val clearSubmissionDraft: Boolean = false,
-    ) : AppEvent
+    data class LiveInputSending(val sending: Boolean) : AppEvent
+    data class SubmissionDraftAccepted(val draft: SubmissionDraftSnapshot) : AppEvent
     data class PlanCompletionPromptUpdated(
         val prompt: PlanCompletionPromptUiModel?,
     ) : AppEvent

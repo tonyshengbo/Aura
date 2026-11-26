@@ -10,19 +10,30 @@ import com.auracode.assistant.model.FileAttachment
 import com.auracode.assistant.model.ImageAttachment
 import com.auracode.assistant.persistence.chat.PersistedAttachmentKind
 import com.auracode.assistant.protocol.ItemStatus
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
 import com.auracode.assistant.session.kernel.SessionDomainEvent
 import com.auracode.assistant.session.kernel.SessionTurnOutcome
-import com.auracode.assistant.toolwindow.submission.SubmissionAreaState
-import com.auracode.assistant.toolwindow.submission.PendingSubmission
-import com.auracode.assistant.toolwindow.submission.supportsInitSlashCommand
 import com.auracode.assistant.toolwindow.shared.UiText
+import com.auracode.assistant.toolwindow.submission.ConversationSubmission
+import com.auracode.assistant.toolwindow.submission.SubmissionAreaState
+import com.auracode.assistant.toolwindow.submission.SubmissionDraftSnapshot
+import com.auracode.assistant.toolwindow.submission.draftSnapshot
+import com.auracode.assistant.toolwindow.submission.supportsInitSlashCommand
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 
 internal class ConversationFlowHandler(
     private val context: ToolWindowCoordinatorContext,
     private val workspaceHandler: WorkspaceInteractionHandler,
 ) {
+    private val submittingSessions = ConcurrentHashMap.newKeySet<String>()
+
     companion object {
         private const val AGENTS_MD_FILE_NAME: String = "AGENTS.md"
     }
@@ -31,7 +42,6 @@ internal class ConversationFlowHandler(
         if (!context.chatService.deleteSession(sessionId)) return
         context.dropSessionViewState(sessionId)
         context.sessionAttentionStore.drop(sessionId)
-        context.pendingSubmissionsBySessionId.remove(sessionId)
         context.activePlanRunContexts.remove(sessionId)
         context.publishSessionSnapshot()
         context.publishSettingsSnapshot()
@@ -51,13 +61,12 @@ internal class ConversationFlowHandler(
         if (!context.restoreSessionViewState(sessionId)) {
             onRestoreHistory()
         }
-        publishPendingSubmissions(sessionId = sessionId)
     }
 
     fun submitPromptIfAllowed() {
         val submissionState = context.submissionStore.state.value
-        val submission = buildPendingSubmission(submissionState) ?: return
-        dispatchSubmissionOrQueue(submissionState, submission)
+        val submission = buildConversationSubmission(submissionState) ?: return
+        dispatchSubmissionOrAppend(submissionState, submission)
     }
 
     /** Routes IDE-originated requests through the same submission pipeline as composer prompts. */
@@ -68,7 +77,7 @@ internal class ConversationFlowHandler(
             ),
         )
         val submission = buildExternalSubmission(request)
-        dispatchSubmissionOrQueue(context.submissionStore.state.value, submission)
+        dispatchSubmissionOrAppend(context.submissionStore.state.value, submission)
     }
 
     /** Submits the shared Aura `/init` prompt without consuming the current composer draft. */
@@ -119,20 +128,6 @@ internal class ConversationFlowHandler(
         )
     }
 
-    fun removePendingSubmission(id: String) {
-        val sessionId = context.activeSessionId()
-        val removed = context.pendingSubmissionQueue(sessionId).removeAll { it.id == id }
-        if (!removed) return
-        publishPendingSubmissions(sessionId = sessionId)
-    }
-
-    fun dispatchNextPendingSubmissionIfIdle(sessionId: String, allowTurnCompletedBypass: Boolean = false) {
-        if (!allowTurnCompletedBypass && context.chatService.listSessions().firstOrNull { it.id == sessionId }?.isRunning == true) return
-        val next = context.pendingSubmissionQueue(sessionId).removeFirstOrNull() ?: return
-        publishPendingSubmissions(sessionId = sessionId)
-        dispatchSubmission(next, sessionId)
-    }
-
     fun requestAgentSuggestions(query: String, documentVersion: Long, mentionLimit: Int) {
         val normalizedQuery = query.trim()
         val suggestions = context.settingsService.savedAgents()
@@ -147,9 +142,10 @@ internal class ConversationFlowHandler(
         )
     }
 
-    private fun buildPendingSubmission(
-        submissionState: com.auracode.assistant.toolwindow.submission.SubmissionAreaState,
-    ): PendingSubmission? {
+    private fun buildConversationSubmission(
+        submissionState: SubmissionAreaState,
+    ): ConversationSubmission? {
+        if (submissionState.document.composition != null) return null
         val disabledSkills = context.engineSkillsService.findDisabledSkillMentions(
             engineId = submissionState.selectedEngineId,
             cwd = context.chatService.currentWorkingDirectory(),
@@ -168,8 +164,7 @@ internal class ConversationFlowHandler(
             sessionId = context.chatService.getCurrentSessionId(),
             attachments = submissionState.attachments,
         )
-        return PendingSubmission(
-            id = ToolWindowCoordinatorIds.newPendingSubmissionId(submissionState),
+        return ConversationSubmission(
             engineId = submissionState.selectedEngineId,
             prompt = prompt,
             systemInstructions = systemInstructions,
@@ -192,10 +187,9 @@ internal class ConversationFlowHandler(
     }
 
     /** IDE entrypoints may supply their own explicit context files while reusing the active composer settings. */
-    private fun buildExternalSubmission(request: IdeExternalRequest): PendingSubmission {
+    private fun buildExternalSubmission(request: IdeExternalRequest): ConversationSubmission {
         val submissionState = context.submissionStore.state.value
-        return PendingSubmission(
-            id = ToolWindowCoordinatorIds.newExternalSubmissionId(context.pendingSubmissionQueue(context.activeSessionId())),
+        return ConversationSubmission(
             engineId = submissionState.selectedEngineId,
             prompt = request.prompt,
             systemInstructions = submissionState.serializedSystemInstructions(),
@@ -213,9 +207,8 @@ internal class ConversationFlowHandler(
     /** Builds one provider-agnostic `/init` submission while preserving the current draft state. */
     private fun buildInitSlashSubmission(
         submissionState: SubmissionAreaState,
-    ): PendingSubmission {
-        return PendingSubmission(
-            id = ToolWindowCoordinatorIds.newPendingSubmissionId(submissionState),
+    ): ConversationSubmission {
+        return ConversationSubmission(
             engineId = submissionState.selectedEngineId,
             prompt = SlashInitCommandPrompt.load(),
             systemInstructions = submissionState.serializedSystemInstructions(),
@@ -231,40 +224,149 @@ internal class ConversationFlowHandler(
         )
     }
 
-    /** Dispatches immediately when idle and otherwise keeps the existing queued-send behavior. */
-    private fun dispatchSubmissionOrQueue(
+    /** Sends once to the active runtime; only a confirmed inactive runtime permits a new turn. */
+    private fun dispatchSubmissionOrAppend(
         submissionState: SubmissionAreaState,
-        submission: PendingSubmission,
+        submission: ConversationSubmission,
     ) {
-        if (submissionState.sessionIsRunning || context.conversationStore.state.value.isRunning) {
-            enqueuePendingSubmission(submission)
-        } else {
-            dispatchSubmission(submission)
+        val sessionId = context.activeSessionId()
+        if (sessionId in submittingSessions) return
+        if (context.chatService.listSessions().none { it.id == sessionId && it.isRunning }) {
+            dispatchSubmission(submission, sessionId)
+            return
+        }
+        if (!submittingSessions.add(sessionId)) return
+        val draft = submissionState.draftSnapshot()
+        context.dispatchSessionEvent(sessionId, AppEvent.LiveInputSending(true))
+        context.coroutineLauncher.launch("liveInput:$sessionId") {
+            try {
+                when (val result = context.chatService.submitLiveInput(
+                    sessionId,
+                    LiveInput(
+                        prompt = submission.prompt,
+                        systemInstructions = submission.systemInstructions,
+                        contextFiles = submission.contextFiles,
+                        imageAttachments = submission.imageAttachments,
+                        fileAttachments = submission.fileAttachments,
+                    ),
+                )) {
+                    is LiveInputResult.Accepted -> {
+                        val message = context.chatService.recordUserMessage(
+                            sessionId = sessionId,
+                            prompt = submission.prompt,
+                            turnId = result.turnId,
+                            attachments = submission.stagedAttachments,
+                        )
+                        message?.let {
+                            context.publishLocalUserMessage(
+                                sessionId, it.sourceId, it.prompt, it.timestamp, it.turnId, it.attachments, false,
+                            )
+                        }
+                        context.dispatchSessionEvent(sessionId, AppEvent.SubmissionDraftAccepted(draft))
+                        context.publishSessionSnapshot()
+                    }
+                    LiveInputResult.Inactive -> dispatchSubmission(submission, sessionId, draft)
+                    is LiveInputResult.Rejected -> reportSendFailure(sessionId, result.message)
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                reportSendFailure(sessionId, error.message.orEmpty())
+            } finally {
+                submittingSessions.remove(sessionId)
+                context.dispatchSessionEvent(sessionId, AppEvent.LiveInputSending(false))
+            }
         }
     }
 
-    private fun enqueuePendingSubmission(submission: PendingSubmission) {
-        val sessionId = context.activeSessionId()
-        context.pendingSubmissionQueue(sessionId).addLast(submission)
-        publishPendingSubmissions(sessionId = sessionId, clearSubmissionDraft = true)
-    }
-
-    private fun publishPendingSubmissions(sessionId: String, clearSubmissionDraft: Boolean = false) {
+    private fun reportSendFailure(sessionId: String, message: String) {
         context.dispatchSessionEvent(
             sessionId,
-            AppEvent.PendingSubmissionsUpdated(
-                submissions = context.pendingSubmissionQueue(sessionId).toList(),
-                clearSubmissionDraft = clearSubmissionDraft,
-            ),
+            AppEvent.StatusTextUpdated(UiText.bundle("composer.send.failed", message)),
         )
     }
 
+    /** A question response never consumes the composer draft or another outstanding interaction. */
+    suspend fun sendAsyncAnswer(
+        sessionId: String,
+        threadId: String,
+        answerText: String,
+        settings: SubmissionAreaState,
+    ): LiveInputResult {
+        if (!submittingSessions.add(sessionId)) return LiveInputResult.Rejected("Another message is being sent. Please try again.")
+        try {
+            if (!context.chatService.ownsAsyncQuestion(sessionId, threadId)) return LiveInputResult.Inactive
+            val result = context.chatService.submitLiveInput(sessionId, LiveInput(answerText))
+            if (result is LiveInputResult.Accepted) {
+                context.chatService.recordUserMessage(sessionId, answerText, result.turnId)?.let { message ->
+                    context.publishLocalUserMessage(
+                        sessionId, message.sourceId, message.prompt, message.timestamp, message.turnId, message.attachments, false,
+                    )
+                }
+                context.publishSessionSnapshot()
+                return result
+            }
+            if (result is LiveInputResult.Rejected) return result
+            if (!context.chatService.ownsAsyncQuestion(sessionId, threadId)) return LiveInputResult.Inactive
+            val started = CompletableDeferred<LiveInputResult>()
+            dispatchSubmission(
+                ConversationSubmission(
+                    prompt = answerText,
+                    systemInstructions = emptyList(),
+                    contextFiles = emptyList(),
+                    imageAttachments = emptyList(),
+                    fileAttachments = emptyList(),
+                    stagedAttachments = emptyList(),
+                    selectedModel = settings.selectedModel,
+                    selectedReasoning = settings.selectedReasoning,
+                    executionMode = settings.executionMode,
+                    planEnabled = settings.planEnabled,
+                    engineId = "codex",
+                    clearSubmissionDraftOnAccept = false,
+                ),
+                sessionId = sessionId,
+                preserveInteractions = true,
+                deferUserMessage = true,
+                onRunEvent = { event ->
+                    when (event) {
+                        is SessionDomainEvent.TurnStarted -> started.complete(LiveInputResult.Accepted(event.turnId))
+                        is SessionDomainEvent.ErrorAppended -> if (event.terminal) started.complete(LiveInputResult.Rejected(event.message))
+                        is SessionDomainEvent.TurnCompleted -> started.complete(LiveInputResult.Rejected("The task ended before accepting the answer."))
+                        else -> Unit
+                    }
+                },
+                onRunStopped = { started.complete(LiveInputResult.Rejected("The engine stopped before accepting the answer.")) },
+            )
+            val accepted = try {
+                withTimeout(30_000) { started.await() }
+            } catch (error: TimeoutCancellationException) {
+                LiveInputResult.Rejected("Answer delivery is unconfirmed. It was not sent again.")
+            }
+            if (accepted is LiveInputResult.Accepted) {
+                context.chatService.recordUserMessage(sessionId, answerText, accepted.turnId)?.let { message ->
+                    context.publishLocalUserMessage(
+                        sessionId, message.sourceId, message.prompt, message.timestamp, message.turnId, message.attachments, false,
+                    )
+                }
+                context.publishSessionSnapshot()
+            }
+            return accepted
+        } finally {
+            submittingSessions.remove(sessionId)
+        }
+    }
+
     private fun dispatchSubmission(
-        submission: PendingSubmission,
+        submission: ConversationSubmission,
         sessionId: String = context.activeSessionId(),
-    ) {
+        draft: SubmissionDraftSnapshot? = null,
+        preserveInteractions: Boolean = false,
+        deferUserMessage: Boolean = false,
+        onRunEvent: (SessionDomainEvent) -> Unit = {},
+        onRunStopped: () -> Unit = {},
+    ): String {
         val localTurnId = ToolWindowCoordinatorIds.newLocalTurnId()
-        val localMessage = if (submission.prompt.isBlank()) {
+        val localMessage = if (submission.prompt.isBlank() || deferUserMessage) {
             null
         } else {
             context.chatService.recordUserMessage(
@@ -283,15 +385,18 @@ internal class ConversationFlowHandler(
             context.activePlanRunContexts.remove(sessionId)
         }
         context.dispatchSessionEvent(sessionId, AppEvent.PlanCompletionPromptUpdated(prompt = null))
-        context.dispatchSessionEvent(sessionId, AppEvent.ClearToolUserInputs)
-        context.dispatchSessionEvent(
-            sessionId,
-            AppEvent.PromptAccepted(
-                prompt = submission.prompt,
-                localTurnId = localTurnId,
-                clearSubmissionDraft = submission.clearSubmissionDraftOnAccept,
-            ),
-        )
+        if (!preserveInteractions) {
+            context.dispatchSessionEvent(sessionId, AppEvent.ClearToolUserInputs)
+            context.dispatchSessionEvent(
+                sessionId,
+                AppEvent.PromptAccepted(
+                    prompt = submission.prompt,
+                    localTurnId = localTurnId,
+                    clearSubmissionDraft = submission.clearSubmissionDraftOnAccept && draft == null,
+                ),
+            )
+        }
+        draft?.let { context.dispatchSessionEvent(sessionId, AppEvent.SubmissionDraftAccepted(it)) }
         localMessage?.let { message ->
             context.publishLocalUserMessage(
                 sessionId,
@@ -300,6 +405,7 @@ internal class ConversationFlowHandler(
                 message.timestamp,
                 message.turnId,
                 message.attachments,
+                true,
             )
         }
         context.publishSessionSnapshot()
@@ -317,9 +423,16 @@ internal class ConversationFlowHandler(
             approvalMode = submission.executionMode.toApprovalMode(),
             collaborationMode = if (submission.planEnabled) AgentCollaborationMode.PLAN else AgentCollaborationMode.DEFAULT,
             onTurnPersisted = { context.publishSessionSnapshot() },
-            onSessionDomainEvents = { events -> context.applySessionDomainEvents(sessionId, events) },
-            onRunStateChanged = { context.publishSessionSnapshot() },
+            onSessionDomainEvents = { events ->
+                events.forEach(onRunEvent)
+                context.applySessionDomainEvents(sessionId, events)
+            },
+            onRunStateChanged = {
+                context.publishSessionSnapshot()
+                if (context.chatService.listSessions().none { it.id == sessionId && it.isRunning }) onRunStopped()
+            },
         )
+        return localTurnId
     }
 
     /** Resolves the best-known live turn id before cancellation clears runtime state. */

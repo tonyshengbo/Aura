@@ -5,8 +5,6 @@ import com.auracode.assistant.protocol.ItemKind
 import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.protocol.ProviderAgentSnapshot
 import com.auracode.assistant.protocol.ProviderAgentStatus
-import com.auracode.assistant.protocol.TurnOutcome
-import com.auracode.assistant.protocol.TurnUsage
 import com.auracode.assistant.protocol.ProviderApprovalRequest
 import com.auracode.assistant.protocol.ProviderApprovalRequestKind
 import com.auracode.assistant.protocol.ProviderEvent
@@ -15,12 +13,14 @@ import com.auracode.assistant.protocol.ProviderRunningPlanPresentation
 import com.auracode.assistant.protocol.ProviderToolUserInputOption
 import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
 import com.auracode.assistant.protocol.ProviderToolUserInputQuestion
+import com.auracode.assistant.protocol.TurnOutcome
+import com.auracode.assistant.protocol.TurnUsage
+import java.util.Locale
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import java.util.Locale
 
 /**
  * 将 Claude 语义事件映射为 Aura 统一事件。
@@ -393,6 +393,11 @@ internal class ClaudeProviderEventMapper(
             permissionSuggestions = event.permissionSuggestions,
             toolInputJson = event.toolInputJson,
         )
+    }
+
+    /** The native result ended one response, but accepted follow-ups still belong to this logical run. */
+    fun awaitContinuation() {
+        completed = false
     }
 
     /** 在 Claude 进程退出后补发必要的终止事件。 */

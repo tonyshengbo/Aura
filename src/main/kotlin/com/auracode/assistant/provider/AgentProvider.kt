@@ -6,6 +6,8 @@ import com.auracode.assistant.conversation.ConversationRef
 import com.auracode.assistant.conversation.ConversationSummaryPage
 import com.auracode.assistant.model.AgentRequest
 import com.auracode.assistant.protocol.ProviderToolUserInputAnswerDraft
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
 import com.auracode.assistant.session.kernel.SessionDomainEvent
 import com.auracode.assistant.toolwindow.execution.ApprovalAction
 import kotlinx.coroutines.flow.Flow
@@ -14,6 +16,8 @@ internal interface AgentProvider {
     val providerId: String
         get() = CodexProviderFactory.ENGINE_ID
     fun stream(request: AgentRequest): Flow<SessionDomainEvent>
+    suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult =
+        LiveInputResult.Rejected("This engine does not support live input.")
     suspend fun loadInitialHistory(ref: ConversationRef, pageSize: Int): ConversationHistoryPage =
         ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
 

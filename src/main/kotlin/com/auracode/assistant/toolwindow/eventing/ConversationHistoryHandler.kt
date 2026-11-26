@@ -114,7 +114,7 @@ internal class ConversationHistoryHandler(
         onResetPlanFlowState()
         context.dispatchSessionEvent(sessionId, AppEvent.ConversationReset)
         context.coroutineLauncher.launch("restoreCurrentSessionHistory") {
-            val page = context.chatService.loadCurrentConversationReplay(limit = context.historyPageSize)
+            val page = context.chatService.loadCurrentConversationReplay(limit = context.historyPageSize, sessionId = sessionId)
             context.restoreSessionHistory(sessionId, page, false)
         }
     }
@@ -129,6 +129,7 @@ internal class ConversationHistoryHandler(
             val page = context.chatService.loadOlderConversationReplay(
                 cursor = beforeCursor,
                 limit = context.historyPageSize,
+                sessionId = sessionId,
             )
             context.restoreSessionHistory(sessionId, page, true)
         }

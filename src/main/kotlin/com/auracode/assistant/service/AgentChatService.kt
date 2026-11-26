@@ -1,11 +1,11 @@
 package com.auracode.assistant.service
 
-import com.auracode.assistant.coroutine.AppCoroutineManager
-import com.auracode.assistant.coroutine.ManagedCoroutineScope
-import com.auracode.assistant.conversation.ConversationHistoryPage
 import com.auracode.assistant.conversation.ConversationCapabilities
+import com.auracode.assistant.conversation.ConversationHistoryPage
 import com.auracode.assistant.conversation.ConversationRef
 import com.auracode.assistant.conversation.ConversationSummaryPage
+import com.auracode.assistant.coroutine.AppCoroutineManager
+import com.auracode.assistant.coroutine.ManagedCoroutineScope
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.logging.CliDebugLogger
 import com.auracode.assistant.model.AgentAction
@@ -19,35 +19,41 @@ import com.auracode.assistant.model.ImageAttachment
 import com.auracode.assistant.model.MessageRole
 import com.auracode.assistant.model.TurnUsageSnapshot
 import com.auracode.assistant.persistence.chat.ChatSessionRepository
-import com.auracode.assistant.persistence.chat.PersistedSessionUsageLedgerEntry
-import com.auracode.assistant.persistence.chat.PersistedMessageAttachment
 import com.auracode.assistant.persistence.chat.PersistedChatSession
-import com.auracode.assistant.persistence.chat.SessionUsageLedgerRepository
+import com.auracode.assistant.persistence.chat.PersistedMessageAttachment
+import com.auracode.assistant.persistence.chat.PersistedSessionUsageLedgerEntry
 import com.auracode.assistant.persistence.chat.SQLiteChatSessionRepository
+import com.auracode.assistant.persistence.chat.SessionUsageLedgerRepository
+import com.auracode.assistant.persistence.input.AsyncQuestionRepository
 import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.protocol.ProviderToolUserInputAnswerDraft
 import com.auracode.assistant.provider.CodexProviderFactory
 import com.auracode.assistant.provider.EngineDescriptor
 import com.auracode.assistant.provider.ProviderRegistry
-import com.auracode.assistant.session.kernel.SessionMessageAttachment
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
+import com.auracode.assistant.service.input.AsyncQuestionHistory
+import com.auracode.assistant.session.kernel.SessionActivityStatus
 import com.auracode.assistant.session.kernel.SessionDomainEvent
+import com.auracode.assistant.session.kernel.SessionMessageAttachment
 import com.auracode.assistant.session.kernel.SessionMessageRole
 import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.toolwindow.execution.ApprovalAction
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.execution.process.CapturingProcessHandler
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.application.PathManager
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collect
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
 
 @Service(Service.Level.PROJECT)
 class AgentChatService private constructor(
@@ -128,6 +134,9 @@ class AgentChatService private constructor(
     private val usageLedgerRepository: SessionUsageLedgerRepository =
         repository as? SessionUsageLedgerRepository ?: NoOpSessionUsageLedgerRepository
 
+    private val asyncQuestionRepository = repository as? AsyncQuestionRepository
+    private val asyncQuestionHistory = asyncQuestionRepository?.let { AsyncQuestionHistory(it) }
+
     private val sessions = linkedMapOf<String, SessionData>()
     private val sessionRuns = SessionRunRegistry()
     private val acceptedRunRequestIdsBySessionId = linkedMapOf<String, String>()
@@ -176,8 +185,11 @@ class AgentChatService private constructor(
     /** Returns the working directory currently used for provider requests. */
     fun currentWorkingDirectory(): String = workingDirectoryProvider()
 
-    internal suspend fun loadCurrentConversationHistory(limit: Int): ConversationHistoryPage {
-        val session = synchronized(stateLock) { sessions[currentSessionId] }
+    internal suspend fun loadCurrentConversationHistory(
+        limit: Int,
+        sessionId: String = getCurrentSessionId(),
+    ): ConversationHistoryPage {
+        val session = synchronized(stateLock) { sessions[sessionId] }
             ?: return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
         val conversationId = session.remoteConversationId.trim()
         if (conversationId.isBlank()) {
@@ -191,11 +203,15 @@ class AgentChatService private constructor(
             )
         }.getOrElse {
             ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
-        }.attachLocalAssets(session.id)
+        }.attachLocalAssets(session.id).attachAsyncQuestions(session.id, conversationId, includeMissing = true)
     }
 
-    internal suspend fun loadOlderConversationHistory(cursor: String, limit: Int): ConversationHistoryPage {
-        val session = synchronized(stateLock) { sessions[currentSessionId] }
+    internal suspend fun loadOlderConversationHistory(
+        cursor: String,
+        limit: Int,
+        sessionId: String = getCurrentSessionId(),
+    ): ConversationHistoryPage {
+        val session = synchronized(stateLock) { sessions[sessionId] }
             ?: return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
         val conversationId = session.remoteConversationId.trim()
         if (conversationId.isBlank()) {
@@ -210,7 +226,7 @@ class AgentChatService private constructor(
             )
         }.getOrElse {
             ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
-        }.attachLocalAssets(session.id)
+        }.attachLocalAssets(session.id).attachAsyncQuestions(session.id, conversationId, includeMissing = false)
     }
 
     fun listSessions(): List<SessionSummary> {
@@ -288,7 +304,9 @@ class AgentChatService private constructor(
             provider.loadInitialHistory(ref = ref, pageSize = pageSize)
         }.getOrElse {
             return ConversationHistoryPage(events = emptyList(), hasOlder = false, olderCursor = null)
-        }.attachLocalAssetsIfAvailable(sessionId)
+        }.attachLocalAssetsIfAvailable(sessionId).let { page ->
+            if (sessionId == null) page else page.attachAsyncQuestions(sessionId, normalizedRemoteId, includeMissing = false)
+        }
         if (!initialPage.hasOlder || initialPage.olderCursor.isNullOrBlank()) {
             return initialPage
         }
@@ -299,7 +317,9 @@ class AgentChatService private constructor(
                 provider.loadOlderHistory(ref = ref, cursor = cursor, pageSize = pageSize)
             } catch (_: Throwable) {
                 break
-            }.attachLocalAssetsIfAvailable(sessionId)
+            }.attachLocalAssetsIfAvailable(sessionId).let { page ->
+                if (sessionId == null) page else page.attachAsyncQuestions(sessionId, normalizedRemoteId, includeMissing = false)
+            }
             if (page.events.isNotEmpty()) {
                 events.addAll(0, page.events)
             }
@@ -561,6 +581,7 @@ class AgentChatService private constructor(
                 currentSessionId
             }
         }
+        asyncQuestionRepository?.deleteAsyncQuestions(sessionId)
         repository.deleteSession(sessionId)
         deleteSessionAssets(sessionId)
         if (fallbackSessionId == null) {
@@ -667,7 +688,10 @@ class AgentChatService private constructor(
             sessionRuns.ensureSession(sessionId)
             acceptedRunRequestIdsBySessionId[sessionId] = request.requestId
         }
+        val registered = CompletableDeferred<Unit>()
         val job = scope.launch(label = "stream:${request.requestId}") {
+            // Publish run ownership before the provider can finish or accept follow-up input.
+            registered.await()
             val assistantBuffer = StringBuilder()
             var activeTurnId = localTurnId?.trim().orEmpty()
             val countedAssistantItems = mutableSetOf<String>()
@@ -741,16 +765,20 @@ class AgentChatService private constructor(
         }
         synchronized(stateLock) {
             sessionRuns.ensureSession(sessionId)
-            sessionRuns.replaceRun(sessionId, request.requestId, job)
+            sessionRuns.replaceRun(sessionId, request.requestId, job, request)
         }
         onRunStateChanged()
+        registered.complete(Unit)
     }
 
     /**
      * Loads the current remote conversation history and normalizes it for kernel replay.
      */
-    internal suspend fun loadCurrentConversationReplay(limit: Int): SessionHistoryReplayPage {
-        val page = loadCurrentConversationHistory(limit)
+    internal suspend fun loadCurrentConversationReplay(
+        limit: Int,
+        sessionId: String = getCurrentSessionId(),
+    ): SessionHistoryReplayPage {
+        val page = loadCurrentConversationHistory(limit, sessionId)
         return SessionHistoryReplayPage(
             events = page.events,
             hasOlder = page.hasOlder,
@@ -761,14 +789,63 @@ class AgentChatService private constructor(
     /**
      * Loads one older history page and normalizes it for kernel prepend replay.
      */
-    internal suspend fun loadOlderConversationReplay(cursor: String, limit: Int): SessionHistoryReplayPage {
-        val page = loadOlderConversationHistory(cursor, limit)
+    internal suspend fun loadOlderConversationReplay(
+        cursor: String,
+        limit: Int,
+        sessionId: String = getCurrentSessionId(),
+    ): SessionHistoryReplayPage {
+        val page = loadOlderConversationHistory(cursor, limit, sessionId)
         return SessionHistoryReplayPage(
             events = page.events,
             hasOlder = page.hasOlder,
             olderCursor = page.olderCursor,
         )
     }
+
+    /** Routes follow-ups through the originating run, independent of the selected tab or model. */
+    internal suspend fun submitLiveInput(
+        sessionId: String,
+        input: LiveInput,
+    ): LiveInputResult {
+        val run = synchronized(stateLock) { sessionRuns.currentRun(sessionId) }
+            ?: return LiveInputResult.Inactive
+        val request = run.request
+            ?: return LiveInputResult.Rejected("The running task is not ready for input.")
+        val result = registry.providerOrDefault(request.engineId).submitLiveInput(request.requestId, input)
+        if (result == LiveInputResult.Inactive) {
+            val currentRequestId = synchronized(stateLock) { sessionRuns.requestId(sessionId) }
+            if (currentRequestId != null && currentRequestId != request.requestId) {
+                return LiveInputResult.Rejected("The active task changed. Please send again.")
+            }
+        }
+        return result
+    }
+
+    /** Rejects answers when a session was deleted, branched, or rebound to another engine/thread. */
+    internal fun ownsAsyncQuestion(sessionId: String, threadId: String): Boolean = synchronized(stateLock) {
+        val session = sessions[sessionId]
+        session?.providerId == CodexProviderFactory.ENGINE_ID &&
+            threadId.isNotBlank() && session.remoteConversationId == threadId
+    }
+
+    internal fun resolveAsyncQuestion(
+        sessionId: String,
+        threadId: String,
+        requestId: String,
+        status: SessionActivityStatus,
+        summary: String,
+    ) {
+        check(ownsAsyncQuestion(sessionId, threadId)) { "The question no longer belongs to this session." }
+        asyncQuestionHistory?.resolve(sessionId, threadId, requestId, status, summary)
+    }
+
+    private fun ConversationHistoryPage.attachAsyncQuestions(
+        sessionId: String,
+        threadId: String,
+        includeMissing: Boolean,
+    ): ConversationHistoryPage = copy(
+        events = asyncQuestionHistory?.replay(sessionId, threadId, events, includeMissing) ?: events,
+    )
 
     fun cancelCurrent() {
         cancelSessionRun(getCurrentSessionId())
@@ -903,6 +980,9 @@ class AgentChatService private constructor(
     ): PersistResult {
         var nextTurnId = activeTurnId
         when (event) {
+            is SessionDomainEvent.ToolUserInputRequested -> asyncQuestionHistory?.remember(
+                sessionId, event.request.threadId.ifBlank { currentRemoteConversationId(sessionId).orEmpty() }, event.request,
+            )
             is SessionDomainEvent.ThreadStarted -> updateCurrentRemoteConversationId(sessionId, event.threadId)
             is SessionDomainEvent.UsageUpdated -> {
                 val previousUsageSnapshot = currentPersistedUsageSnapshot(sessionId)
@@ -1232,12 +1312,12 @@ class AgentChatService private constructor(
     }
 
     /** Maps persisted attachment status into the session-domain activity status enum. */
-    private fun ItemStatus.toSessionActivityStatus(): com.auracode.assistant.session.kernel.SessionActivityStatus {
+    private fun ItemStatus.toSessionActivityStatus(): SessionActivityStatus {
         return when (this) {
-            ItemStatus.RUNNING -> com.auracode.assistant.session.kernel.SessionActivityStatus.RUNNING
-            ItemStatus.SUCCESS -> com.auracode.assistant.session.kernel.SessionActivityStatus.SUCCESS
-            ItemStatus.FAILED -> com.auracode.assistant.session.kernel.SessionActivityStatus.FAILED
-            ItemStatus.SKIPPED -> com.auracode.assistant.session.kernel.SessionActivityStatus.SKIPPED
+            ItemStatus.RUNNING -> SessionActivityStatus.RUNNING
+            ItemStatus.SUCCESS -> SessionActivityStatus.SUCCESS
+            ItemStatus.FAILED -> SessionActivityStatus.FAILED
+            ItemStatus.SKIPPED -> SessionActivityStatus.SKIPPED
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.auracode.assistant.service
 
+import com.auracode.assistant.model.AgentRequest
 import kotlinx.coroutines.Job
 
 /**
@@ -25,12 +26,14 @@ internal class SessionRunRegistry {
         sessionId: String,
         requestId: String,
         job: Job,
+        request: AgentRequest? = null,
     ): SessionRunContext? {
         val previous = runsBySessionId.put(
             sessionId,
             SessionRunContext(
                 requestId = requestId,
                 job = job,
+                request = request,
             ),
         )
         return previous
@@ -50,12 +53,15 @@ internal class SessionRunRegistry {
 
     fun requestId(sessionId: String): String? = runsBySessionId[sessionId]?.requestId
 
+    fun currentRun(sessionId: String): SessionRunContext? = runsBySessionId[sessionId]?.takeIf { it.isRunning }
+
     fun isRunning(sessionId: String): Boolean = runsBySessionId[sessionId]?.isRunning == true
 }
 
 internal data class SessionRunContext(
     val requestId: String? = null,
     val job: Job? = null,
+    val request: AgentRequest? = null,
 ) {
     val isRunning: Boolean
         get() = requestId != null && job != null

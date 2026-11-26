@@ -11,21 +11,20 @@ import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.service.AgentChatService.SessionHistoryReplayPage
 import com.auracode.assistant.session.kernel.SessionDomainEvent
 import com.auracode.assistant.settings.AgentSettingsService
+import com.auracode.assistant.settings.mcp.McpManagementAdapterRegistry
 import com.auracode.assistant.settings.skills.EngineSkillsService
 import com.auracode.assistant.settings.skills.LocalSkillInstallPolicy
 import com.auracode.assistant.settings.skills.SkillProjectionManager
 import com.auracode.assistant.settings.skills.SkillRootScanner
 import com.auracode.assistant.settings.skills.SkillsRuntimeService
-import com.auracode.assistant.settings.mcp.McpManagementAdapterRegistry
-import com.auracode.assistant.toolwindow.execution.ApprovalAreaStore
-import com.auracode.assistant.toolwindow.submission.PendingSubmission
-import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
-import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
-import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
-import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
+import com.auracode.assistant.toolwindow.execution.ApprovalAreaStore
+import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptStore
+import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
+import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
+import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
 import kotlinx.coroutines.CoroutineScope
 
 internal class ToolWindowCoordinatorContext(
@@ -72,7 +71,6 @@ internal class ToolWindowCoordinatorContext(
     val historyPageSize: Int,
     val scope: CoroutineScope,
     val recentFocusedFiles: ArrayDeque<String>,
-    val pendingSubmissionsBySessionId: LinkedHashMap<String, ArrayDeque<PendingSubmission>>,
     val activePlanRunContexts: LinkedHashMap<String, ActivePlanRunContext>,
     val coroutineLauncher: CoordinatorCoroutineLauncher,
     val dispatchSessionEvent: (String, AppEvent) -> Unit,
@@ -89,6 +87,7 @@ internal class ToolWindowCoordinatorContext(
         timestamp: Long,
         turnId: String?,
         attachments: List<PersistedMessageAttachment>,
+        startTurn: Boolean,
     ) -> Unit,
     val restoreSessionHistory: (
         sessionId: String,
@@ -98,10 +97,6 @@ internal class ToolWindowCoordinatorContext(
     val applySessionDomainEvents: (String, List<SessionDomainEvent>) -> Unit,
 ) {
     fun activeSessionId(): String = chatService.getCurrentSessionId()
-
-    fun pendingSubmissionQueue(sessionId: String): ArrayDeque<PendingSubmission> {
-        return pendingSubmissionsBySessionId.getOrPut(sessionId) { ArrayDeque() }
-    }
 
     /** Returns the engine currently bound to the active session. */
     fun currentEngineId(): String = chatService.sessionProviderId(activeSessionId())

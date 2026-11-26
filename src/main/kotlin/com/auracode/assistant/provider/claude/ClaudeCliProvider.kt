@@ -6,25 +6,28 @@ import com.auracode.assistant.conversation.ConversationRef
 import com.auracode.assistant.conversation.ConversationSummaryPage
 import com.auracode.assistant.logging.CliDebugLogger
 import com.auracode.assistant.model.AgentRequest
-import com.auracode.assistant.provider.AgentProvider
-import com.auracode.assistant.provider.session.ProviderProtocolDomainMapper
 import com.auracode.assistant.protocol.ProviderEvent
 import com.auracode.assistant.protocol.ProviderToolUserInputAnswerDraft
 import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
+import com.auracode.assistant.provider.AgentProvider
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
+import com.auracode.assistant.provider.session.ProviderProtocolDomainMapper
 import com.auracode.assistant.session.kernel.SessionDomainEvent
 import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.toolwindow.execution.ApprovalAction
 import com.intellij.openapi.diagnostic.Logger
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Drives Claude CLI streaming sessions and outputs diagnostic logs at key boundaries.
@@ -37,7 +40,7 @@ internal class ClaudeCliProvider(
     private val diagnosticLogger: (String) -> Unit = { message -> CLI_LOGGER.info { message } },
 ) : AgentProvider {
     override val providerId: String = ClaudeProviderFactory.ENGINE_ID
-    private val running = ConcurrentHashMap<String, ClaudeStreamJsonSession>()
+    private val running = ConcurrentHashMap<String, ClaudeLiveInputSession>()
 
     /** Two-level mapping of requestId → (requestId → deferred), supporting multiple concurrent authorization requests within a single turn. */
     private val pendingApprovals = ConcurrentHashMap<String, ConcurrentHashMap<String, CompletableDeferred<ApprovalAction>>>()
@@ -64,7 +67,8 @@ internal class ClaudeCliProvider(
                 )
                 return@channelFlow
             }
-        running[request.requestId] = session
+        val liveSession = ClaudeLiveInputSession(session, request)
+        running[request.requestId] = liveSession
         val approvals = ConcurrentHashMap<String, CompletableDeferred<ApprovalAction>>()
         pendingApprovals[request.requestId] = approvals
         val toolInputs = ConcurrentHashMap<String, CompletableDeferred<Map<String, ProviderToolUserInputAnswerDraft>>>()
@@ -76,6 +80,7 @@ internal class ClaudeCliProvider(
         try {
             val exitCode = session.collect(
                 onStdoutLine = { line ->
+                    val completesRun = liveSession.observeStdout(line)
                     collectLine(
                         request = request,
                         channel = "stdout",
@@ -83,9 +88,23 @@ internal class ClaudeCliProvider(
                         accumulator = accumulator,
                         mapper = mapper,
                         emitProviderEvent = { unified ->
+                            if (unified is ProviderEvent.TurnCompleted && !completesRun) {
+                                mapper.awaitContinuation()
+                                return@collectLine
+                            }
                             if (unified is ProviderEvent.ApprovalRequested &&
                                 unified.request.title.trim().equals("ExitPlanMode", ignoreCase = true)
                             ) {
+                                if (!liveSession.finishPlanIfIdle()) {
+                                    // Let Claude consume follow-ups before accepting its final plan.
+                                    session.writeStdin(buildControlResponse(
+                                        approvalRequestId = unified.request.requestId,
+                                        decision = ApprovalAction.REJECT,
+                                        permissionSuggestions = unified.request.permissionSuggestions,
+                                        toolInputJson = unified.request.toolInputJson,
+                                    ))
+                                    return@collectLine
+                                }
                                 session.writeStdin(
                                     buildControlResponse(
                                         approvalRequestId = unified.request.requestId,
@@ -124,29 +143,31 @@ internal class ClaudeCliProvider(
                                             "approvalId=${unified.request.requestId}",
                                     )
                                 } else {
-                                // Register deferred to wait for UI layer to call submitApprovalDecision.
-                                val deferred = CompletableDeferred<ApprovalAction>()
-                                approvals[unified.request.requestId] = deferred
-                                emitDomainEvents(
-                                    request = request,
-                                    event = unified,
-                                    sessionEventMapper = sessionEventMapper,
-                                    emitDomain = { domainEvent -> send(domainEvent) },
-                                )
-                                val decision = deferred.await()
-                                approvals.remove(unified.request.requestId)
-                                session.writeStdin(
-                                    buildControlResponse(
-                                        approvalRequestId = unified.request.requestId,
-                                        decision = decision,
-                                        permissionSuggestions = unified.request.permissionSuggestions,
-                                        toolInputJson = unified.request.toolInputJson,
-                                    ),
-                                )
-                                diagnosticLogger(
-                                    "Claude CLI approval decision: requestId=${request.requestId} " +
-                                        "approvalId=${unified.request.requestId} decision=$decision",
-                                )
+                                    // Register deferred to wait for UI layer to call submitApprovalDecision.
+                                    val deferred = CompletableDeferred<ApprovalAction>()
+                                    approvals[unified.request.requestId] = deferred
+                                    emitDomainEvents(
+                                        request = request,
+                                        event = unified,
+                                        sessionEventMapper = sessionEventMapper,
+                                        emitDomain = { domainEvent -> send(domainEvent) },
+                                    )
+                                    launch {
+                                        val decision = deferred.await()
+                                        approvals.remove(unified.request.requestId)
+                                        session.writeStdin(
+                                            buildControlResponse(
+                                                approvalRequestId = unified.request.requestId,
+                                                decision = decision,
+                                                permissionSuggestions = unified.request.permissionSuggestions,
+                                                toolInputJson = unified.request.toolInputJson,
+                                            ),
+                                        )
+                                        diagnosticLogger(
+                                            "Claude CLI approval decision: requestId=${request.requestId} " +
+                                                "approvalId=${unified.request.requestId} decision=$decision",
+                                        )
+                                    }
                                 }
                             } else if (unified is ProviderEvent.ToolUserInputRequested) {
                                 // Register deferred to wait for UI layer to call submitToolUserInput.
@@ -158,19 +179,21 @@ internal class ClaudeCliProvider(
                                     sessionEventMapper = sessionEventMapper,
                                     emitDomain = { domainEvent -> send(domainEvent) },
                                 )
-                                val answers = deferred.await()
-                                toolInputs.remove(unified.prompt.requestId)
-                                session.writeStdin(
-                                    buildToolUserInputResponse(
-                                        controlRequestId = unified.prompt.requestId,
-                                        prompt = unified.prompt,
-                                        answers = answers,
-                                    ),
-                                )
-                                diagnosticLogger(
-                                    "Claude CLI tool user input answered: requestId=${request.requestId} " +
-                                        "controlId=${unified.prompt.requestId} answerCount=${answers.size}",
-                                )
+                                launch {
+                                    val answers = deferred.await()
+                                    toolInputs.remove(unified.prompt.requestId)
+                                    session.writeStdin(
+                                        buildToolUserInputResponse(
+                                            controlRequestId = unified.prompt.requestId,
+                                            prompt = unified.prompt,
+                                            answers = answers,
+                                        ),
+                                    )
+                                    diagnosticLogger(
+                                        "Claude CLI tool user input answered: requestId=${request.requestId} " +
+                                            "controlId=${unified.prompt.requestId} answerCount=${answers.size}",
+                                    )
+                                }
                             } else {
                                 emitDomainEvents(
                                     request = request,
@@ -201,7 +224,8 @@ internal class ClaudeCliProvider(
                 },
             )
             diagnosticLogger("Claude CLI exited: requestId=${request.requestId} exitCode=$exitCode")
-            mapper.onProcessExit(exitCode).forEach { unified ->
+            val finalExitCode = if (liveSession.hasUnconsumedInputs()) 1 else exitCode
+            mapper.onProcessExit(finalExitCode).forEach { unified ->
                 emitDomainEvents(
                     request = request,
                     event = unified,
@@ -232,6 +256,19 @@ internal class ClaudeCliProvider(
             running.remove(request.requestId)
             session.cancel()
             diagnosticLogger("Claude CLI finalized: requestId=${request.requestId}")
+        }
+    }
+
+    /** Writes directly into the existing CLI process; a failed write never becomes a queued message. */
+    override suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult {
+        val active = running[requestId]
+            ?: return LiveInputResult.Rejected("Claude is starting or finishing. Please try again.")
+        return try {
+            active.submit(input)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            LiveInputResult.Rejected(error.message ?: "Claude input failed.")
         }
     }
 
@@ -313,7 +350,7 @@ internal class ClaudeCliProvider(
     override fun cancel(requestId: String) {
         pendingApprovals.remove(requestId)?.values?.forEach { it.complete(ApprovalAction.REJECT) }
         pendingToolUserInputs.remove(requestId)?.values?.forEach { it.complete(emptyMap()) }
-        running.remove(requestId)?.cancel()
+        running.remove(requestId)?.session?.cancel()
         diagnosticLogger("Claude CLI cancelled: requestId=$requestId")
     }
 

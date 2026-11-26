@@ -2,28 +2,55 @@ package com.auracode.assistant.service
 
 import com.auracode.assistant.model.AgentRequest
 import com.auracode.assistant.persistence.chat.SQLiteChatSessionRepository
+import com.auracode.assistant.protocol.ProviderEvent
+import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.provider.AgentProvider
 import com.auracode.assistant.provider.AgentProviderFactory
 import com.auracode.assistant.provider.EngineCapabilities
 import com.auracode.assistant.provider.EngineDescriptor
 import com.auracode.assistant.provider.ProviderRegistry
-import com.auracode.assistant.protocol.TurnOutcome
-import com.auracode.assistant.protocol.ProviderEvent
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
 import com.auracode.assistant.session.kernel.SessionDomainEvent
 import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.test.providerEventFlow
+import kotlin.io.path.createTempDirectory
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
-import kotlin.io.path.createTempDirectory
-import kotlin.test.Test
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
-import kotlin.test.assertEquals
 
 class AgentChatServiceMultiSessionRunTest {
+    @Test
+    fun `live input stays bound to its originating request after switching sessions`() = runBlocking {
+        val provider = BlockingProvider()
+        val service = createService(provider)
+        try {
+            val sessionA = service.getCurrentSessionId()
+            val started = CompletableDeferred<Unit>()
+            service.runAgent(
+                sessionId = sessionA, engineId = "codex", model = "gpt-5.3-codex",
+                prompt = "run-a", contextFiles = emptyList(),
+                onSessionDomainEvents = { started.complete(Unit) },
+            )
+            withTimeout(5_000) { started.await() }
+            val sessionB = service.createSession()
+            service.switchSession(sessionB)
+            assertEquals(LiveInputResult.Accepted("turn-live"), service.submitLiveInput(sessionA, LiveInput("follow-a")))
+            assertEquals("follow-a", provider.liveInputs.single().second.prompt)
+            assertTrue(service.listSessions().first { it.id == sessionA }.isRunning)
+            assertEquals(LiveInputResult.Inactive, service.submitLiveInput(sessionB, LiveInput("idle")))
+            assertEquals(1, provider.liveInputs.size)
+        } finally {
+            service.dispose()
+        }
+    }
+
     @Test
     fun `runs are isolated per session and cancel independently`() = runBlocking {
         val provider = BlockingProvider()
@@ -242,6 +269,12 @@ class AgentChatServiceMultiSessionRunTest {
     }
 
     private class BlockingProvider : AgentProvider {
+        val liveInputs = mutableListOf<Pair<String, LiveInput>>()
+        override suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult {
+            check(requestId in requestIdsByPrompt.values)
+            liveInputs += requestId to input
+            return LiveInputResult.Accepted("turn-live")
+        }
         private val completionSignals = mutableMapOf<String, CompletableDeferred<Unit>>()
         private val cancelSignals = mutableMapOf<String, CompletableDeferred<Unit>>()
         private val requestIdsByPrompt = mutableMapOf<String, String>()

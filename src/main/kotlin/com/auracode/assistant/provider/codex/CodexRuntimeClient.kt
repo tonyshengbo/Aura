@@ -75,6 +75,16 @@ internal class CodexRuntimeClient(
         return result.objectValue("turn")?.string("id")
     }
 
+    /** Appends content to exactly the active turn without changing its execution settings. */
+    suspend fun steerTurn(request: AgentRequest, threadId: String, expectedTurnId: String): String {
+        val result = session.request("turn/steer", buildJsonObject {
+            put("threadId", threadId)
+            put("expectedTurnId", expectedTurnId)
+            put("input", buildInputPayload(request))
+        })
+        return result.string("turnId") ?: error("App-server did not acknowledge the follow-up input.")
+    }
+
     /** Reads all historical turns for the supplied thread id. */
     suspend fun readThreadTurns(threadId: String): List<JsonObject> {
         val result = session.request(

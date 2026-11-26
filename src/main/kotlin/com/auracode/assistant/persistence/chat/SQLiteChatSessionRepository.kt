@@ -2,6 +2,8 @@ package com.auracode.assistant.persistence.chat
 
 import com.auracode.assistant.model.MessageRole
 import com.auracode.assistant.model.TurnUsageSnapshot
+import com.auracode.assistant.persistence.input.AsyncQuestionRepository
+import com.auracode.assistant.persistence.input.SQLiteAsyncQuestionRepository
 import com.auracode.assistant.protocol.ItemStatus
 import java.nio.file.Files
 import java.nio.file.Path
@@ -68,7 +70,9 @@ internal interface ChatSessionRepository {
 
 internal class SQLiteChatSessionRepository(
     private val dbPath: Path,
-) : ChatSessionRepository, SessionUsageLedgerRepository {
+) : ChatSessionRepository,
+    SessionUsageLedgerRepository,
+    AsyncQuestionRepository by SQLiteAsyncQuestionRepository(dbPath) {
     private val usageLedgerRepository = SQLiteSessionUsageLedgerRepository(
         dbPath = dbPath,
         ensureSchema = false,

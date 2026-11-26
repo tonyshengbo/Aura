@@ -1,71 +1,78 @@
 package com.auracode.assistant.toolwindow.shell
 
-import androidx.compose.material.MaterialTheme
 import androidx.compose.foundation.layout.fillMaxSize
-import com.auracode.assistant.diagram.ui.DiagramFullscreenHost
+import androidx.compose.material.MaterialTheme
 import androidx.compose.material.Surface
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.awt.ComposePanel
-import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.context.EditorContextProvider
 import com.auracode.assistant.context.SmartFileSearchService
+import com.auracode.assistant.diagram.ui.DiagramFullscreenHost
+import com.auracode.assistant.diagram.ui.DiagramFullscreenState
 import com.auracode.assistant.i18n.AuraCodeBundle
-import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.notification.ChatCompletionNotificationService
 import com.auracode.assistant.notification.IdeAttentionState
 import com.auracode.assistant.notification.IdeAttentionStateProvider
+import com.auracode.assistant.service.AgentChatService
+import com.auracode.assistant.settings.AgentSettingsService
 import com.auracode.assistant.settings.skills.EngineSkillsService
 import com.auracode.assistant.settings.skills.SkillsManagementAdapterRegistry
 import com.auracode.assistant.settings.skills.SkillsRuntimeService
-import com.auracode.assistant.toolwindow.execution.ApprovalAreaStore
-import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
-import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
-import com.auracode.assistant.toolwindow.eventing.AppEvent
-import com.auracode.assistant.toolwindow.eventing.ToolWindowCoordinator
-import com.auracode.assistant.toolwindow.eventing.ToolWindowEventHub
-import com.auracode.assistant.toolwindow.eventing.UiIntent
-import com.auracode.assistant.toolwindow.external.ExternalRequestRouter
-import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
-import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptStore
-import com.auracode.assistant.toolwindow.sessions.SessionTabCoordinator
-import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
-import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChangePreview
 import com.auracode.assistant.toolwindow.dragdrop.AttachmentDropHost
+import com.auracode.assistant.toolwindow.eventing.AppEvent
+import com.auracode.assistant.toolwindow.eventing.ToolWindowCoordinator
+import com.auracode.assistant.toolwindow.eventing.ToolWindowEventHub
+import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.execution.ApprovalAreaStore
+import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
+import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptStore
+import com.auracode.assistant.toolwindow.external.ExternalRequestRouter
+import com.auracode.assistant.toolwindow.input.LocalMainInputController
+import com.auracode.assistant.toolwindow.input.LocalNativeInputProject
+import com.auracode.assistant.toolwindow.input.LocalNativeInputVisible
+import com.auracode.assistant.toolwindow.popup.LocalWindowPopupOwner
+import com.auracode.assistant.toolwindow.input.NativeInputController
+import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
+import com.auracode.assistant.toolwindow.sessions.SessionTabCoordinator
+import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
 import com.auracode.assistant.toolwindow.shared.assistantMaterialColors
 import com.auracode.assistant.toolwindow.shared.assistantPalette
 import com.auracode.assistant.toolwindow.shared.assistantTypography
 import com.auracode.assistant.toolwindow.shared.currentIdeDarkTheme
 import com.auracode.assistant.toolwindow.shared.resolveEffectiveTheme
-import com.intellij.ide.ui.LafManagerListener
-import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.Disposable
-import com.intellij.openapi.fileChooser.FileChooser
-import com.intellij.openapi.fileChooser.FileChooserFactory
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-import com.intellij.openapi.fileChooser.FileSaverDescriptor
-import com.intellij.openapi.editor.EditorFactory
-import com.intellij.openapi.editor.event.SelectionEvent
-import com.intellij.openapi.editor.event.SelectionListener
-import com.intellij.openapi.fileEditor.FileEditorManagerEvent
-import com.intellij.openapi.fileEditor.FileEditorManagerListener
-import com.intellij.openapi.fileEditor.OpenFileDescriptor
-import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.project.Project
-import com.intellij.openapi.wm.ToolWindow
-import com.intellij.openapi.wm.ToolWindowAnchor
-import com.intellij.openapi.wm.ex.ToolWindowEx
+import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
+import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
 import com.intellij.diff.DiffContentFactory
 import com.intellij.diff.DiffManager
 import com.intellij.diff.requests.SimpleDiffRequest
+import com.intellij.ide.ui.LafManagerListener
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.event.SelectionEvent
+import com.intellij.openapi.editor.event.SelectionListener
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.fileChooser.FileChooserFactory
+import com.intellij.openapi.fileChooser.FileSaverDescriptor
+import com.intellij.openapi.fileEditor.FileEditorManagerEvent
+import com.intellij.openapi.fileEditor.FileEditorManagerListener
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.wm.ToolWindow
+import com.intellij.openapi.wm.ToolWindowAnchor
+import com.intellij.openapi.wm.ex.ToolWindowEx
 import java.awt.BorderLayout
 import java.awt.KeyboardFocusManager
 import java.io.File
@@ -139,6 +146,7 @@ class ComposeToolWindowPanel(
     parentDisposable: Disposable,
 ) : JPanel(BorderLayout()), Disposable {
     private val hostToolWindow = toolWindow
+    private val inputController = NativeInputController()
     private var toolWindowAnchor by mutableStateOf(hostToolWindow.anchor ?: ToolWindowAnchor.RIGHT)
     private val chatService = project.getService(AgentChatService::class.java)
     private val editorContextProvider = EditorContextProvider.getInstance(project)
@@ -285,7 +293,8 @@ class ComposeToolWindowPanel(
         },
     )
 
-    private val composePanel = ComposePanel()
+    private val composeHost = ToolWindowComposeHost()
+    private val composePanel = composeHost.panel
 
     init {
         sessionTabCoordinator = SessionTabCoordinator(
@@ -328,47 +337,60 @@ class ComposeToolWindowPanel(
 
         add(composePanel, BorderLayout.CENTER)
         composePanel.setContent {
-            val sessionTabsState by sessionTabsStore.state.collectAsState()
-            val executionStatusState by executionStatusStore.state.collectAsState()
-            val conversationState by conversationStore.state.collectAsState()
-            val submissionState by submissionStore.state.collectAsState()
-            val sidePanelState by sidePanelStore.state.collectAsState()
-            val approvalState by approvalStore.state.collectAsState()
-            val toolUserInputPromptState by toolUserInputPromptStore.state.collectAsState()
-            val languageVersion by settingsService.languageVersion.collectAsState()
-            val appearanceVersion by settingsService.appearanceVersion.collectAsState()
-            val themeMode = sidePanelState.themeMode
-            val effectiveTheme = resolveEffectiveTheme(themeMode, currentIdeDarkTheme())
-            val palette = assistantPalette(effectiveTheme)
-
-            MaterialTheme(
-                colors = assistantMaterialColors(effectiveTheme, palette),
-                typography = assistantTypography(),
+            CompositionLocalProvider(
+                LocalNativeInputProject provides project,
+                LocalMainInputController provides inputController,
+                LocalWindowPopupOwner provides composePanel,
             ) {
-                LaunchedEffect(languageVersion, appearanceVersion) {
-                    refreshWindowChrome()
-                }
-                key(languageVersion, appearanceVersion) {
-                    // 整窗接收本地文件拖放：松手后复用附件 intent，落到当前会话的输入框附件区。
-                    AttachmentDropHost(
-                        palette = palette,
-                        onDropPaths = { paths -> dispatchIntent(UiIntent.AddAttachments(paths)) },
-                    ) {
-                        Surface(modifier = Modifier) {
-                            DiagramFullscreenHost(palette, Modifier.fillMaxSize()) {
-                                ToolWindowScreen(
-                                    sessionTabsState = sessionTabsState,
-                                    executionStatusState = executionStatusState,
-                                    conversationState = conversationState,
-                                    submissionState = submissionState,
-                                    sidePanelState = sidePanelState,
-                                    approvalState = approvalState,
-                                    toolUserInputPromptState = toolUserInputPromptState,
-                                    anchor = toolWindowAnchor,
-                                    themeMode = themeMode,
-                                    onIntent = ::dispatchIntent,
-                                    onConversationScrollSnapshotChanged = conversationStore::updateScrollSnapshot,
-                                )
+                val sessionTabsState by sessionTabsStore.state.collectAsState()
+                val executionStatusState by executionStatusStore.state.collectAsState()
+                val conversationState by conversationStore.state.collectAsState()
+                val submissionState by submissionStore.state.collectAsState()
+                val sidePanelState by sidePanelStore.state.collectAsState()
+                val approvalState by approvalStore.state.collectAsState()
+                val toolUserInputPromptState by toolUserInputPromptStore.state.collectAsState()
+                val languageVersion by settingsService.languageVersion.collectAsState()
+                val appearanceVersion by settingsService.appearanceVersion.collectAsState()
+                val themeMode = sidePanelState.themeMode
+                val effectiveTheme = resolveEffectiveTheme(themeMode, currentIdeDarkTheme())
+                val palette = assistantPalette(effectiveTheme)
+                val diagramFullscreenState = remember { DiagramFullscreenState() }
+
+                MaterialTheme(
+                    colors = assistantMaterialColors(effectiveTheme, palette),
+                    typography = assistantTypography(),
+                ) {
+                    LaunchedEffect(languageVersion, appearanceVersion) {
+                        refreshWindowChrome()
+                    }
+                    key(languageVersion, appearanceVersion) {
+                        // 整窗接收本地文件拖放：松手后复用附件 intent，落到当前会话的输入框附件区。
+                        AttachmentDropHost(
+                            palette = palette,
+                            onDropPaths = { paths -> dispatchIntent(UiIntent.AddAttachments(paths)) },
+                        ) {
+                            Surface(modifier = Modifier) {
+                                DiagramFullscreenHost(palette, Modifier.fillMaxSize(), diagramFullscreenState) {
+                                    CompositionLocalProvider(
+                                        LocalNativeInputVisible provides (
+                                            sidePanelState.kind == SidePanelKind.NONE && diagramFullscreenState.content == null
+                                        ),
+                                    ) {
+                                        ToolWindowScreen(
+                                            sessionTabsState = sessionTabsState,
+                                            executionStatusState = executionStatusState,
+                                            conversationState = conversationState,
+                                            submissionState = submissionState,
+                                            sidePanelState = sidePanelState,
+                                            approvalState = approvalState,
+                                            toolUserInputPromptState = toolUserInputPromptState,
+                                            anchor = toolWindowAnchor,
+                                            themeMode = themeMode,
+                                            onIntent = ::dispatchIntent,
+                                            onConversationScrollSnapshotChanged = conversationStore::updateScrollSnapshot,
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -402,9 +424,13 @@ class ComposeToolWindowPanel(
     }
 
     private fun dispatchIntent(intent: UiIntent) {
+        if (intent == UiIntent.SendPrompt && !inputController.prepareSubmission()) return
+        if (intent is UiIntent.SwitchSession || intent == UiIntent.NewSession || intent is UiIntent.OpenRemoteConversation) {
+            inputController.prepareSubmission()
+        }
         when (intent) {
             is UiIntent.UpdateDocument -> {
-                submissionStore.applyDocumentUpdate(intent.value)?.let { request ->
+                submissionStore.applyDocumentUpdate(intent.value, intent.origin)?.let { request ->
                     request.mention?.let { mention ->
                         eventHub.publishUiIntent(
                             UiIntent.RequestMentionSuggestions(
@@ -452,6 +478,7 @@ class ComposeToolWindowPanel(
     override fun dispose() {
         externalRequestRegistration.dispose()
         coordinator.dispose()
+        composeHost.dispose()
     }
 
     private fun publishFocusedContextSnapshot() {

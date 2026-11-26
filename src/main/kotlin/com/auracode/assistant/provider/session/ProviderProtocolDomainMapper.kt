@@ -10,10 +10,12 @@ import com.auracode.assistant.protocol.ProviderEvent
 import com.auracode.assistant.protocol.ProviderItem
 import com.auracode.assistant.protocol.ProviderRunningPlanPresentation
 import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
+import com.auracode.assistant.protocol.UserInputDelivery
 import com.auracode.assistant.session.kernel.SessionActivityStatus
 import com.auracode.assistant.session.kernel.SessionApprovalRequest
 import com.auracode.assistant.session.kernel.SessionApprovalRequestKind
 import com.auracode.assistant.session.kernel.SessionDomainEvent
+import com.auracode.assistant.session.kernel.SessionInputDelivery
 import com.auracode.assistant.session.kernel.SessionMessageAttachment
 import com.auracode.assistant.session.kernel.SessionMessageRole
 import com.auracode.assistant.session.kernel.SessionRunningPlan
@@ -391,6 +393,11 @@ internal class ProviderProtocolDomainMapper(
             threadId = prompt.threadId,
             turnId = prompt.turnId ?: activeTurnId,
             itemId = prompt.itemId,
+            delivery = if (prompt.delivery == UserInputDelivery.ASYNC) {
+                SessionInputDelivery.ASYNC
+            } else {
+                SessionInputDelivery.BLOCKING
+            },
             questions = prompt.questions.map { question ->
                 SessionToolUserInputQuestion(
                     id = question.id,

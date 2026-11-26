@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -20,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.input.NativeInputController
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
@@ -47,9 +49,9 @@ internal fun SubmissionPlanCompletionSection(
     onIntent: (UiIntent) -> Unit,
 ) {
     val t = assistantUiTokens()
-    val cardFocusRequester = FocusRequester()
-    val revisionFocusRequester = FocusRequester()
-    val revisionInputState = rememberInlineTextFieldValue(
+    val cardFocusRequester = remember { FocusRequester() }
+    val revisionFocusRequester = remember { NativeInputController() }
+    val revisionInputState = rememberInlineInputDraft(
         identityKey = state.turnId,
         text = state.revisionDraft,
     )
@@ -180,10 +182,11 @@ internal fun SubmissionPlanCompletionSection(
                         selectedAction = state.selectedAction,
                     ),
                     focusRequester = revisionFocusRequester,
+                    identityKey = state.turnId,
                     modifier = Modifier.fillMaxWidth(),
                     onValueChange = { value ->
                         revisionInputState.value = value
-                        onIntent(UiIntent.EditPlanRevisionDraft(value.text))
+                        onIntent(UiIntent.EditPlanRevisionDraft(value.value.text))
                     },
                     onMovePrevious = {
                         onIntent(UiIntent.SelectPlanCompletionAction(PlanCompletionAction.CANCEL))
@@ -194,7 +197,7 @@ internal fun SubmissionPlanCompletionSection(
                         true
                     },
                     onSubmit = {
-                        if (!canSubmitInlineTextField(revisionInputState.value) || revisionInputState.value.text.isBlank()) {
+                        if (!canSubmitInlineTextField(revisionInputState.value.value) || revisionInputState.value.value.text.isBlank()) {
                             false
                         } else {
                             onIntent(UiIntent.SubmitPlanRevision)

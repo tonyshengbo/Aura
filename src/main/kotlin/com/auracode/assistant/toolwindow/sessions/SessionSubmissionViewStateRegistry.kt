@@ -1,8 +1,8 @@
 package com.auracode.assistant.toolwindow.sessions
 
+import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.submission.SubmissionAreaState
 import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
-import com.auracode.assistant.toolwindow.eventing.AppEvent
 
 /**
  * Stores only per-session composer view state that is not reconstructed from kernel projections.
@@ -51,7 +51,8 @@ internal class SessionSubmissionViewStateRegistry {
 /** Returns true when the event affects composer-local state that projections do not rebuild on session switch. */
 private fun AppEvent.affectsBackgroundSubmissionState(): Boolean {
     return when (this) {
-        is AppEvent.PendingSubmissionsUpdated,
+        is AppEvent.LiveInputSending,
+        is AppEvent.SubmissionDraftAccepted,
         is AppEvent.RunningPlanUpdated,
         is AppEvent.PlanCompletionPromptUpdated,
         is AppEvent.SessionNavigationUiProjectionUpdated,
@@ -71,6 +72,7 @@ private fun SubmissionAreaState.clearTransientExecutionState(): SubmissionAreaSt
     runningPlanExpanded = true,
     planCompletion = null,
     sessionIsRunning = false,
+    sendingInput = false,
     pendingApprovalCount = 0,
     pendingToolInputCount = 0,
     approvalQueue = emptyList(),

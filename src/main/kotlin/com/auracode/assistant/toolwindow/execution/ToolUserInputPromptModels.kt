@@ -2,6 +2,8 @@ package com.auracode.assistant.toolwindow.execution
 
 import com.auracode.assistant.protocol.ProviderToolUserInputAnswerDraft
 import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
+import com.auracode.assistant.protocol.UserInputDelivery
+import com.auracode.assistant.session.kernel.SessionInputDelivery
 
 internal const val TOOL_USER_INPUT_OTHER_OPTION: String = "__tool_user_input_other__"
 
@@ -40,6 +42,7 @@ internal data class ToolUserInputPromptUiModel(
     val turnId: String?,
     val itemId: String,
     val questions: List<ToolUserInputQuestionUiModel>,
+    val delivery: SessionInputDelivery = SessionInputDelivery.BLOCKING,
     val queuePosition: Int = 1,
     val queueSize: Int = 1,
 )
@@ -57,6 +60,8 @@ internal data class ToolUserInputPromptState(
     val activeChoiceIndex: Int = 0,
     val freeformActive: Boolean = false,
     val visible: Boolean = false,
+    val submitting: Boolean = false,
+    val error: String? = null,
     val canSubmit: Boolean = false,
 ) {
     val activeQuestion: ToolUserInputQuestionUiModel?
@@ -162,6 +167,11 @@ internal fun ProviderToolUserInputPrompt.toUiModel(): ToolUserInputPromptUiModel
         threadId = threadId,
         turnId = turnId,
         itemId = itemId,
+        delivery = if (delivery == UserInputDelivery.ASYNC) {
+            SessionInputDelivery.ASYNC
+        } else {
+            SessionInputDelivery.BLOCKING
+        },
         questions = questions.map { question ->
             ToolUserInputQuestionUiModel(
                 id = question.id,

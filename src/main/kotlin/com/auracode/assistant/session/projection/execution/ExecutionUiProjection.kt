@@ -2,13 +2,14 @@ package com.auracode.assistant.session.projection.execution
 
 import com.auracode.assistant.protocol.ProviderApprovalRequestKind
 import com.auracode.assistant.session.kernel.SessionApprovalRequestKind
+import com.auracode.assistant.session.kernel.SessionInputDelivery
 import com.auracode.assistant.session.kernel.SessionState
-import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
-import com.auracode.assistant.toolwindow.shared.UiText
 import com.auracode.assistant.toolwindow.execution.ExecutionTurnStatusUiState
+import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputOptionUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputQuestionUiModel
+import com.auracode.assistant.toolwindow.shared.UiText
 
 /**
  * Stores the projected execution-facing UI models derived from session state.
@@ -47,6 +48,7 @@ internal class ExecutionUiProjectionBuilder {
                 threadId = request.threadId,
                 turnId = request.turnId,
                 itemId = request.itemId,
+                delivery = request.delivery,
                 questions = request.questions.map { question ->
                     ToolUserInputQuestionUiModel(
                         id = question.id,
@@ -70,7 +72,7 @@ internal class ExecutionUiProjectionBuilder {
             approvals = approvals,
             toolUserInputs = toolUserInputs,
             turnStatus = when {
-                toolUserInputs.isNotEmpty() -> ExecutionTurnStatusUiState(
+                state.execution.toolUserInputs.values.any { it.delivery == SessionInputDelivery.BLOCKING } -> ExecutionTurnStatusUiState(
                     label = UiText.Bundle("status.waitingInput"),
                     startedAtMs = state.runtime.turnStartedAtMs ?: 0L,
                     turnId = state.runtime.activeTurnId,

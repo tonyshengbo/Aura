@@ -6,6 +6,10 @@ import com.auracode.assistant.model.AgentRequest
 import com.auracode.assistant.conversation.ConversationCapabilities
 import com.auracode.assistant.protocol.ItemKind
 import com.auracode.assistant.protocol.ItemStatus
+import com.auracode.assistant.protocol.UserInputDelivery
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
+import kotlinx.coroutines.CompletableDeferred
 import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.protocol.ProviderEvent
 import com.auracode.assistant.protocol.ProviderItem
@@ -44,6 +48,133 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ToolWindowToolUserInputFlowTest {
+    @Test
+    fun `async answer uses live input without stopping the run or consuming composer draft`() {
+        val harness = CoordinatorHarness()
+        try {
+            harness.startAsyncQuestion()
+            harness.eventHub.publishUiIntent(UiIntent.InputChanged("keep draft"))
+            harness.chooseAnswer()
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            harness.waitUntil { !harness.toolUserInputStore.state.value.visible }
+            assertEquals(1, harness.provider.requests.size)
+            assertEquals(1, harness.provider.liveInputs.size)
+            assertTrue(harness.provider.liveInputs.single().prompt.contains("Reuse existing demo"))
+            assertTrue(harness.provider.submissions.isEmpty())
+            assertTrue(harness.provider.cancelledRequestIds.isEmpty())
+            assertEquals("keep draft", harness.submissionStore.state.value.inputText)
+            val entry = harness.conversationStore.state.value.nodes.filterIsInstance<ConversationActivityItem.UserInputNode>().single()
+            assertEquals(ItemStatus.SUCCESS, entry.status)
+            assertTrue(entry.body.contains("Reuse existing demo"))
+        } finally { harness.dispose() }
+    }
+
+    @Test
+    fun `async answer starts a continuation after completion and keeps other unanswered questions`() {
+        val harness = CoordinatorHarness()
+        try {
+            harness.startAsyncQuestion()
+            harness.provider.emitToolUserInput(prompt().copy(
+                requestId = "async-2", itemId = "async-2", delivery = UserInputDelivery.ASYNC,
+            ))
+            harness.waitUntil { harness.toolUserInputStore.state.value.queue.size == 2 }
+            harness.provider.completeTurn()
+            harness.waitUntil { harness.service.listSessions().none { it.isRunning } }
+            assertTrue(harness.toolUserInputStore.state.value.visible)
+            harness.chooseAnswer()
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            harness.waitUntil { harness.provider.requests.size == 2 }
+            harness.waitUntil { harness.toolUserInputStore.state.value.current?.requestId == "async-2" }
+            assertEquals("thread-1", harness.provider.requests.last().remoteConversationId)
+            assertTrue(harness.provider.liveInputs.isEmpty())
+            assertTrue(harness.provider.submissions.isEmpty())
+        } finally { harness.dispose() }
+    }
+
+    @Test
+    fun `failed async answer keeps selected response and permits retry`() {
+        val harness = CoordinatorHarness()
+        try {
+            harness.startAsyncQuestion()
+            harness.provider.liveResult = LiveInputResult.Rejected("pipe failed")
+            harness.chooseAnswer()
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            harness.waitUntil { harness.toolUserInputStore.state.value.error != null }
+            assertTrue(harness.toolUserInputStore.state.value.visible)
+            assertEquals("Reuse existing demo", harness.toolUserInputStore.state.value.answerDrafts["builder_demo_target"]?.selectedOptionLabel)
+            assertEquals(1, harness.provider.requests.size)
+            harness.provider.liveResult = LiveInputResult.Accepted("turn-1")
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            harness.waitUntil { !harness.toolUserInputStore.state.value.visible }
+            assertEquals(2, harness.provider.liveInputs.size)
+        } finally { harness.dispose() }
+    }
+
+    @Test
+    fun `continuation launch failure keeps the async question answer available`() {
+        val harness = CoordinatorHarness()
+        try {
+            harness.startAsyncQuestion()
+            harness.provider.completeTurn()
+            harness.waitUntil { harness.service.listSessions().none { it.isRunning } }
+            harness.provider.failNextStart = true
+            harness.chooseAnswer()
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            harness.waitUntil { harness.toolUserInputStore.state.value.error != null }
+            assertTrue(harness.toolUserInputStore.state.value.visible)
+            assertEquals("Reuse existing demo", harness.toolUserInputStore.state.value.answerDrafts["builder_demo_target"]?.selectedOptionLabel)
+            assertTrue(harness.provider.liveInputs.isEmpty())
+        } finally { harness.dispose() }
+    }
+
+    @Test
+    fun `skipping async question does not cancel task or send an empty tool response`() {
+        val harness = CoordinatorHarness()
+        try {
+            harness.startAsyncQuestion()
+            harness.eventHub.publishUiIntent(UiIntent.CancelToolUserInputPrompt)
+            harness.waitUntil { !harness.toolUserInputStore.state.value.visible }
+            assertTrue(harness.provider.cancelledRequestIds.isEmpty())
+            assertTrue(harness.provider.submissions.isEmpty())
+            assertTrue(harness.provider.liveInputs.isEmpty())
+            assertTrue(harness.service.listSessions().single().isRunning)
+            assertEquals(ItemStatus.SKIPPED, harness.conversationStore.state.value.nodes.filterIsInstance<ConversationActivityItem.UserInputNode>().single().status)
+        } finally { harness.dispose() }
+    }
+
+    @Test
+    fun `duplicate async answer clicks send once and background acknowledgement stays isolated`() {
+        val harness = CoordinatorHarness()
+        try {
+            harness.startAsyncQuestion()
+            harness.provider.liveGate = CompletableDeferred()
+            val original = harness.service.getCurrentSessionId()
+            harness.chooseAnswer()
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            harness.waitUntil { harness.provider.liveInputs.size == 1 }
+            harness.eventHub.publishUiIntent(UiIntent.SubmitToolUserInputPrompt)
+            val other = harness.service.createSession()
+            harness.service.switchSession(original)
+            harness.eventHub.publishUiIntent(UiIntent.SwitchSession(other))
+            harness.waitUntil { harness.service.getCurrentSessionId() == other }
+            harness.eventHub.publishUiIntent(UiIntent.InputChanged("other draft"))
+            harness.waitUntil { harness.submissionStore.state.value.inputText == "other draft" }
+            harness.provider.liveGate!!.complete(LiveInputResult.Accepted("turn-1"))
+            harness.waitUntil {
+                kotlinx.coroutines.runBlocking {
+                    // Read the durable resolution without changing the active session.
+                    val db = harness.workingDir.resolve("chat.db")
+                    com.auracode.assistant.persistence.input.SQLiteAsyncQuestionRepository(db)
+                        .loadAsyncQuestions(original, "thread-1").singleOrNull()?.status == "SUCCESS"
+                }
+            }
+            assertEquals("other draft", harness.submissionStore.state.value.inputText)
+            assertEquals(1, harness.provider.liveInputs.size)
+            harness.eventHub.publishUiIntent(UiIntent.SwitchSession(original))
+            harness.waitUntil { harness.service.getCurrentSessionId() == original && !harness.toolUserInputStore.state.value.visible }
+        } finally { harness.dispose() }
+    }
+
     @Test
     fun `tool user input submission updates status prompt and timeline summary`() {
         val harness = CoordinatorHarness()
@@ -332,11 +463,11 @@ class ToolWindowToolUserInputFlowTest {
     }
 
     private class CoordinatorHarness {
-        private val workingDir = createTempDirectory("tool-user-input-flow")
+        val workingDir = createTempDirectory("tool-user-input-flow")
         private val testDispatcher = Dispatchers.Default.limitedParallelism(1)
         val provider = RecordingToolUserInputProvider()
         private val settings = AgentSettingsService().apply { loadState(AgentSettingsService.State()) }
-        private val service = AgentChatService(
+        val service = AgentChatService(
             repository = SQLiteChatSessionRepository(workingDir.resolve("chat.db")),
             registry = ProviderRegistry(
                 descriptors = listOf(
@@ -383,6 +514,26 @@ class ToolWindowToolUserInputFlowTest {
             scopeDispatcher = testDispatcher,
         )
 
+        fun startAsyncQuestion() {
+            eventHub.publishUiIntent(UiIntent.InputChanged("Run this task"))
+            eventHub.publishUiIntent(UiIntent.SendPrompt)
+            waitUntil { provider.requests.isNotEmpty() }
+            provider.emitToolUserInput(ProviderToolUserInputPrompt(
+                requestId = "async-1", threadId = "thread-1", turnId = "turn-1", itemId = "async-1",
+                questions = listOf(ProviderToolUserInputQuestion(
+                    id = "builder_demo_target", header = "", question = "Which demo?",
+                    options = listOf(ProviderToolUserInputOption("Reuse existing demo", "")), isOther = true,
+                )),
+                delivery = UserInputDelivery.ASYNC,
+            ))
+            waitUntil { toolUserInputStore.state.value.current?.requestId == "async-1" }
+        }
+
+        fun chooseAnswer() {
+            eventHub.publishUiIntent(UiIntent.SelectToolUserInputOption("builder_demo_target", "Reuse existing demo"))
+            waitUntil { toolUserInputStore.state.value.canSubmit }
+        }
+
         fun waitUntil(timeoutMs: Long = 20_000, condition: () -> Boolean) {
             val start = System.currentTimeMillis()
             while (!condition()) {
@@ -402,6 +553,15 @@ class ToolWindowToolUserInputFlowTest {
 
     private class RecordingToolUserInputProvider : AgentProvider {
         val requests = CopyOnWriteArrayList<AgentRequest>()
+        val liveInputs = CopyOnWriteArrayList<LiveInput>()
+        var liveResult: LiveInputResult = LiveInputResult.Accepted("turn-1")
+        var liveGate: CompletableDeferred<LiveInputResult>? = null
+        var failNextStart = false
+        override suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult {
+            liveInputs += input
+            return liveGate?.await() ?: liveResult
+        }
+        fun completeTurn() { sink(ProviderEvent.TurnCompleted("turn-1", TurnOutcome.SUCCESS)) }
         val submissions = CopyOnWriteArrayList<Pair<String, Map<String, ProviderToolUserInputAnswerDraft>>>()
         val cancelledRequestIds = CopyOnWriteArrayList<String>()
         private var sink: (ProviderEvent) -> Unit = {}
@@ -419,6 +579,12 @@ class ToolWindowToolUserInputFlowTest {
 
         override fun stream(request: AgentRequest): kotlinx.coroutines.flow.Flow<com.auracode.assistant.session.kernel.SessionDomainEvent> = callbackFlow {
             requests += request
+            if (failNextStart) {
+                failNextStart = false
+                com.auracode.assistant.test.trySendProviderEvent(this, ProviderEvent.Error("launch failed"))
+                close()
+                return@callbackFlow
+            }
             sink = { event -> com.auracode.assistant.test.trySendProviderEvent(this, event); Unit }
             com.auracode.assistant.test.trySendProviderEvent(this, ProviderEvent.ThreadStarted("thread-1"))
             com.auracode.assistant.test.trySendProviderEvent(this, ProviderEvent.TurnStarted("turn-1", "thread-1"))

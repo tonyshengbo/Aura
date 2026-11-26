@@ -27,17 +27,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import com.auracode.assistant.i18n.AuraCodeBundle
+import com.auracode.assistant.toolwindow.conversation.title.ConversationCardTitle
 import com.auracode.assistant.protocol.ItemStatus
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
@@ -124,7 +119,7 @@ internal fun ConversationExpandableCard(
                                 palette = palette,
                             )
                         }
-                        ConversationExpandableCardTitle(
+                        ConversationCardTitle(
                             title = title,
                             titleIconPath = titleIconPath,
                             titleTargetLabel = titleTargetLabel,
@@ -381,72 +376,6 @@ private fun TimelineHeaderBadge(
             color = accentColor,
             style = androidx.compose.material.MaterialTheme.typography.caption,
             fontWeight = FontWeight.Medium,
-        )
-    }
-}
-
-@Composable
-private fun ConversationExpandableCardTitle(
-    title: String,
-    titleIconPath: String?,
-    titleTargetLabel: String?,
-    titleTargetPath: String?,
-    palette: DesignPalette,
-    onOpenTitleTarget: ((String) -> Unit)?,
-) {
-    val targetLabel = titleTargetLabel
-    val targetPath = titleTargetPath
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        titleIconPath?.let { iconPath ->
-            Icon(
-                painter = assistantPainterResource(iconPath),
-                contentDescription = null,
-                tint = palette.textSecondary,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-        }
-        if (targetLabel.isNullOrBlank() || targetPath.isNullOrBlank() || onOpenTitleTarget == null) {
-            Text(
-                text = title,
-                color = palette.timelineCardText,
-                fontWeight = FontWeight.Medium,
-                style = androidx.compose.material.MaterialTheme.typography.subtitle1,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            return@Row
-        }
-
-        val prefix = title.substringBefore(targetLabel).ifBlank { title.removeSuffix(targetLabel).trimEnd() }
-        val suffix = title.substringAfter(targetLabel, "")
-        val annotated = buildAnnotatedString {
-            append(prefix)
-            if (prefix.isNotBlank() && !prefix.endsWith(" ")) append(" ")
-            withLink(
-                LinkAnnotation.Clickable(
-                    tag = targetPath,
-                    styles = TextLinkStyles(
-                        style = SpanStyle(
-                            color = palette.linkColor,
-                            textDecoration = TextDecoration.Underline,
-                            fontWeight = FontWeight.Medium,
-                        ),
-                    ),
-                    linkInteractionListener = { onOpenTitleTarget(targetPath) },
-                ),
-            ) {
-                append(targetLabel)
-            }
-            append(suffix)
-        }
-        Text(
-            text = annotated,
-            color = palette.timelineCardText,
-            fontWeight = FontWeight.Medium,
-            style = androidx.compose.material.MaterialTheme.typography.subtitle1,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
     }
 }

@@ -17,15 +17,16 @@ import androidx.compose.material.Icon
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.auracode.assistant.toolwindow.input.NativeInputController
 import com.auracode.assistant.toolwindow.shared.DesignPalette
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
 
 internal enum class SubmissionCardActionEmphasisStyle {
@@ -52,11 +53,13 @@ internal fun restoreSubmissionInteractionFocusTarget(preferInput: Boolean): Subm
 internal fun restoreSubmissionInteractionFocus(
     target: SubmissionInteractionFocusTarget,
     cardFocusRequester: FocusRequester,
-    inputFocusRequester: FocusRequester? = null,
+    inputFocusRequester: NativeInputController? = null,
 ) {
     when (target) {
         SubmissionInteractionFocusTarget.CARD -> cardFocusRequester.requestFocus()
-        SubmissionInteractionFocusTarget.INPUT -> (inputFocusRequester ?: cardFocusRequester).requestFocus()
+        SubmissionInteractionFocusTarget.INPUT -> {
+            if (inputFocusRequester != null) inputFocusRequester.requestFocus() else cardFocusRequester.requestFocus()
+        }
     }
 }
 

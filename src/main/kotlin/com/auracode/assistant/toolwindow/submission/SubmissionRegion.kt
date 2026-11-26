@@ -9,12 +9,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.auracode.assistant.toolwindow.execution.ApprovalAreaState
+import com.auracode.assistant.toolwindow.conversation.ConversationAreaState
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.execution.ApprovalAreaState
+import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptState
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
-import com.auracode.assistant.toolwindow.conversation.ConversationAreaState
-import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptState
 
 /**
  * Describes which primary body the composer should show below the shared top strips.
@@ -76,14 +76,6 @@ internal fun SubmissionRegion(
             .background(p.submissionBg)
             .padding(start = t.spacing.md, end = t.spacing.md, top = t.spacing.xs, bottom = t.spacing.sm),
     ) {
-        PendingQueueSection(
-            p = p,
-            submissions = state.pendingSubmissions,
-            onIntent = onIntent,
-        )
-        if (state.pendingSubmissions.isNotEmpty()) {
-            Spacer(Modifier.height(t.spacing.xs))
-        }
         if (content.showSubagentTray) {
             SubmissionSubagentTray(
                 p = p,
@@ -114,6 +106,7 @@ internal fun SubmissionRegion(
                 p = p,
                 state = toolUserInputPromptState,
                 onIntent = onIntent,
+                running = running,
             )
 
             SubmissionRegionBodyKind.PLAN_COMPLETION -> {

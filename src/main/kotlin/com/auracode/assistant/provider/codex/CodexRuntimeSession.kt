@@ -2,16 +2,21 @@ package com.auracode.assistant.provider.codex
 
 import com.auracode.assistant.coroutine.AppCoroutineManager
 import com.auracode.assistant.coroutine.ManagedCoroutineScope
+import java.io.EOFException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicInteger
 
 /** Defines the shared JSON-RPC contract used by all Codex app-server callers. */
 internal interface CodexRuntimeSession {
@@ -47,6 +52,8 @@ internal class CodexProcessRuntimeSession(
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val writer = process.outputStream.bufferedWriter(Charsets.UTF_8)
     private val nextId = AtomicInteger(1)
+    private val writerMutex = Mutex()
+    private val closed = AtomicBoolean(false)
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JsonElement>>()
     private val callbackScope: ManagedCoroutineScope = AppCoroutineManager.createScope(
         scopeName = "CodexProcessRuntimeSession",
@@ -60,10 +67,14 @@ internal class CodexProcessRuntimeSession(
 
     override fun start() {
         callbackScope.launch(label = "processInput") {
-            process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
-                lines.forEach { line ->
-                    handleLine(line)
+            try {
+                process.inputStream.bufferedReader(Charsets.UTF_8).useLines { lines ->
+                    lines.forEach { line ->
+                        handleLine(line)
+                    }
                 }
+            } finally {
+                failPendingRequests()
             }
         }
     }
@@ -77,19 +88,23 @@ internal class CodexProcessRuntimeSession(
         val id = nextId.getAndIncrement().toString()
         val deferred = CompletableDeferred<JsonElement>()
         pending[id] = deferred
-        writeJson(
-            buildJsonObject {
-                put("jsonrpc", "2.0")
-                put("id", id)
-                put("method", method)
-                put("params", params)
-            },
-        )
-        val response = deferred.await()
-        pending.remove(id)
-        val obj = response as? JsonObject ?: buildJsonObject {}
-        obj["error"]?.let { error(it.toString()) }
-        return obj.objectValue("result") ?: obj
+        try {
+            check(!closed.get()) { "Codex app-server connection closed." }
+            writeJson(
+                buildJsonObject {
+                    put("jsonrpc", "2.0")
+                    put("id", id)
+                    put("method", method)
+                    put("params", params)
+                },
+            )
+            val response = deferred.await()
+            val obj = response as? JsonObject ?: buildJsonObject {}
+            obj["error"]?.let { throw CodexRuntimeRpcException(it.toString()) }
+            return obj.objectValue("result") ?: obj
+        } finally {
+            pending.remove(id)
+        }
     }
 
     override suspend fun notify(method: String, params: JsonObject) {
@@ -114,9 +129,25 @@ internal class CodexProcessRuntimeSession(
     private suspend fun writeJson(payload: JsonObject) {
         val serialized = json.encodeToString(JsonObject.serializer(), payload)
         diagnosticLogger("Codex app-server send: ${serialized.take(4000)}")
-        writer.write(serialized)
-        writer.newLine()
-        writer.flush()
+        withContext(Dispatchers.IO) {
+            writerMutex.withLock {
+                writer.write(serialized)
+                writer.newLine()
+                writer.flush()
+            }
+        }
+    }
+
+    /** Releases requests waiting on a process that has already stopped. */
+    fun close() {
+        failPendingRequests()
+        callbackScope.cancel()
+    }
+
+    private fun failPendingRequests() {
+        closed.set(true)
+        pending.values.forEach { it.completeExceptionally(EOFException("Codex app-server connection closed.")) }
+        pending.clear()
     }
 
     /**
@@ -145,3 +176,5 @@ internal class CodexProcessRuntimeSession(
         }
     }
 }
+
+internal class CodexRuntimeRpcException(message: String) : IllegalStateException(message)

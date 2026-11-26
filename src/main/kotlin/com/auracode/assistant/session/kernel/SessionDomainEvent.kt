@@ -1,5 +1,6 @@
 package com.auracode.assistant.session.kernel
 
+import kotlinx.serialization.Serializable
 /**
  * Describes one normalized domain event emitted into the session kernel.
  */
@@ -234,17 +235,23 @@ internal data class SessionApprovalRequest(
 /**
  * Stores one normalized tool user-input request in the execution slice.
  */
+@Serializable
 internal data class SessionToolUserInputRequest(
     val requestId: String,
     val threadId: String,
     val turnId: String?,
     val itemId: String,
     val questions: List<SessionToolUserInputQuestion>,
+    val delivery: SessionInputDelivery = SessionInputDelivery.BLOCKING,
 )
+
+@Serializable
+internal enum class SessionInputDelivery { BLOCKING, ASYNC }
 
 /**
  * Stores one normalized question inside a tool user-input request.
  */
+@Serializable
 internal data class SessionToolUserInputQuestion(
     val id: String,
     val headerKey: String,
@@ -257,6 +264,7 @@ internal data class SessionToolUserInputQuestion(
 /**
  * Stores one normalized option inside a tool user-input question.
  */
+@Serializable
 internal data class SessionToolUserInputOption(
     val label: String,
     val description: String,

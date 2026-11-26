@@ -9,37 +9,24 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.Icon
-import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import com.auracode.assistant.toolwindow.shared.assistantPainterResource
+import com.auracode.assistant.toolwindow.input.NativeInputCommand
+import com.auracode.assistant.toolwindow.input.NativeInputController
+import com.auracode.assistant.toolwindow.input.NativeInputDraft
+import com.auracode.assistant.toolwindow.input.NativeTextInput
 import com.auracode.assistant.toolwindow.shared.DesignPalette
-import com.auracode.assistant.toolwindow.shared.assistantBodyTextStyle
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
+import java.awt.event.KeyEvent
 
 internal const val INLINE_INPUT_MAX_LINES: Int = 4
 
@@ -83,41 +70,33 @@ internal fun shouldShowPlanCompletionKeyboardHint(
 }
 
 @Composable
-internal fun rememberInlineTextFieldValue(
+internal fun rememberInlineInputDraft(
     identityKey: Any,
     text: String,
-): MutableState<TextFieldValue> {
+): MutableState<NativeInputDraft> {
     val state = remember(identityKey) {
         mutableStateOf(
-            TextFieldValue(
-                text = text,
-                selection = TextRange(text.length),
-            ),
+            NativeInputDraft(TextFieldValue(text, TextRange(text.length))),
         )
     }
-    LaunchedEffect(identityKey, text) {
-        if (state.value.text != text && state.value.composition == null) {
-            state.value = TextFieldValue(
-                text = text,
-                selection = TextRange(text.length),
-            )
-        }
-    }
+    // 同一问题/回合内由原生输入拥有草稿；异步业务回传只作持久化，不覆盖正在编辑的文字。
+    // 切换问题或回合通过 identityKey 初始化恢复草稿。
     return state
 }
 
 @Composable
 internal fun InlineSubmissionInputChoice(
-    value: TextFieldValue,
+    value: NativeInputDraft,
     placeholder: String,
     emphasized: Boolean,
     isSecret: Boolean,
     p: DesignPalette,
     modifier: Modifier = Modifier,
     showKeyboardHintIcon: Boolean = false,
-    focusRequester: FocusRequester? = null,
+    focusRequester: NativeInputController? = null,
+    identityKey: Any = Unit,
     onFocusChanged: ((Boolean) -> Unit)? = null,
-    onValueChange: (TextFieldValue) -> Unit,
+    onValueChange: (NativeInputDraft) -> Unit,
     onMovePrevious: (() -> Boolean)? = null,
     onMoveNext: (() -> Boolean)? = null,
     onSubmit: () -> Boolean,
@@ -125,7 +104,6 @@ internal fun InlineSubmissionInputChoice(
 ) {
     val t = assistantUiTokens()
     val borderColor = if (emphasized) p.accent else p.markdownDivider.copy(alpha = 0.9f)
-    val focusModifier = if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
     Column(
         modifier = modifier
             .background(p.appBg, RoundedCornerShape(10.dp))
@@ -134,57 +112,32 @@ internal fun InlineSubmissionInputChoice(
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Box {
-            BasicTextField(
-                value = value,
+            NativeTextInput(
+                draft = value,
+                identityKey = identityKey,
+                palette = p.copy(timelineCardBg = p.appBg),
+                placeholder = placeholder,
+                secret = isSecret,
+                maxLines = INLINE_INPUT_MAX_LINES,
+                controller = focusRequester,
                 onValueChange = onValueChange,
+                onFocusChanged = { onFocusChanged?.invoke(it) },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .then(focusModifier)
-                    .onFocusChanged { onFocusChanged?.invoke(it.isFocused) }
                     .padding(end = if (showKeyboardHintIcon) t.controls.iconMd + t.spacing.sm else 0.dp)
-                    .padding(vertical = 2.dp)
-                    .onPreviewKeyEvent { event ->
-                        if (shouldConsumeImeTypedEvent(value, event)) {
-                            return@onPreviewKeyEvent true
+                    .padding(vertical = 2.dp),
+                resolveCommand = { key, document ->
+                    if (document.composition != null) {
+                        null
+                    } else {
+                        when (key.code) {
+                            KeyEvent.VK_UP -> onMovePrevious?.let { action -> NativeInputCommand.Invoke { action() } }
+                            KeyEvent.VK_DOWN -> onMoveNext?.let { action -> NativeInputCommand.Invoke { action() } }
+                            KeyEvent.VK_ENTER -> NativeInputCommand.Invoke { onSubmit() }
+                            KeyEvent.VK_ESCAPE -> NativeInputCommand.Invoke { onCancel() }
+                            else -> null
                         }
-                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        when (event.key) {
-                            Key.DirectionUp -> when (inlineInputKeyAction(value, InlineInputKey.UP)) {
-                                InlineInputKeyAction.MOVE_PREVIOUS -> onMovePrevious?.invoke() ?: false
-                                else -> false
-                            }
-
-                            Key.DirectionDown -> when (inlineInputKeyAction(value, InlineInputKey.DOWN)) {
-                                InlineInputKeyAction.MOVE_NEXT -> onMoveNext?.invoke() ?: false
-                                else -> false
-                            }
-
-                            Key.Enter,
-                            Key.NumPadEnter,
-                            -> if (canSubmitInlineTextField(value)) {
-                                onSubmit()
-                            } else {
-                                false
-                            }
-
-                            Key.Escape -> onCancel()
-                            else -> false
-                        }
-                    },
-                minLines = 1,
-                maxLines = INLINE_INPUT_MAX_LINES,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                textStyle = assistantBodyTextStyle(t).copy(color = p.textPrimary),
-                cursorBrush = SolidColor(p.accent),
-                visualTransformation = if (isSecret) PasswordVisualTransformation() else VisualTransformation.None,
-                decorationBox = { innerTextField ->
-                    if (value.text.isBlank()) {
-                        Text(
-                            text = placeholder,
-                            color = p.textMuted,
-                        )
                     }
-                    innerTextField()
                 },
             )
             if (showKeyboardHintIcon) {

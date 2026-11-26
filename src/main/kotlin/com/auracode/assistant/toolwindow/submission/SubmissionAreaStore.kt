@@ -3,28 +3,23 @@ package com.auracode.assistant.toolwindow.submission
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.auracode.assistant.i18n.AuraCodeBundle
-import com.auracode.assistant.model.ContextFile
-import com.auracode.assistant.model.FileAttachment
-import com.auracode.assistant.model.ImageAttachment
 import com.auracode.assistant.model.TurnUsageSnapshot
-import com.auracode.assistant.persistence.chat.PersistedMessageAttachment
 import com.auracode.assistant.provider.EngineDescriptor
 import com.auracode.assistant.provider.claude.ClaudeModelCatalog
 import com.auracode.assistant.provider.codex.CodexModelCatalog
+import com.auracode.assistant.session.kernel.SessionInputDelivery
 import com.auracode.assistant.settings.SavedAgentDefinition
+import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
 import com.auracode.assistant.toolwindow.engineDisplayLabel
-import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.SubmissionMode
 import com.auracode.assistant.toolwindow.eventing.SubmissionReasoning
 import com.auracode.assistant.toolwindow.eventing.UiIntent
+import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.execution.PlanCompletionPromptUiModel
-import com.auracode.assistant.toolwindow.execution.compactPreview
-import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptUiModel
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import com.auracode.assistant.toolwindow.execution.compactPreview
+import com.auracode.assistant.toolwindow.input.NativeDraftOrigin
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -32,6 +27,9 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.io.path.name
 import kotlin.math.min
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 internal data class ContextEntry(
     val path: String,
@@ -156,35 +154,11 @@ internal data class EngineSwitchConfirmationState(
     val targetEngineLabel: String,
 )
 
-internal data class PendingSubmission(
-    val id: String,
-    val prompt: String,
-    val systemInstructions: List<String>,
-    val contextFiles: List<ContextFile>,
-    val imageAttachments: List<ImageAttachment>,
-    val fileAttachments: List<FileAttachment>,
-    val stagedAttachments: List<PersistedMessageAttachment>,
-    val selectedModel: String,
-    val selectedReasoning: SubmissionReasoning,
-    val executionMode: SubmissionMode,
-    val planEnabled: Boolean,
-    val engineId: String = "codex",
-    val clearSubmissionDraftOnAccept: Boolean = true,
-    val createdAt: Long = System.currentTimeMillis(),
-) {
-    val summary: String
-        get() = prompt.lineSequence().firstOrNull { it.isNotBlank() }
-            ?: systemInstructions.firstOrNull { it.isNotBlank() }
-            ?: AuraCodeBundle.message("composer.pending.summary.empty")
-
-    val totalAttachmentCount: Int
-        get() = stagedAttachments.size
-}
-
 internal data class SubmissionAreaState(
     val currentSessionId: String? = null,
     val document: TextFieldValue = TextFieldValue(""),
     val documentVersion: Long = 0L,
+    val documentOrigin: NativeDraftOrigin? = null,
     val executionMode: SubmissionMode = SubmissionMode.AUTO,
     val planEnabled: Boolean = false,
     val planModeAvailable: Boolean = true,
@@ -240,7 +214,7 @@ internal data class SubmissionAreaState(
     val runningPlan: SubmissionRunningPlanState? = null,
     val runningPlanExpanded: Boolean = true,
     val planCompletion: SubmissionPlanCompletionState? = null,
-    val pendingSubmissions: List<PendingSubmission> = emptyList(),
+    val sendingInput: Boolean = false,
 ) {
     val subagentTrayVisible: Boolean
         get() = sessionSubagents.isNotEmpty() && !subagentTrayDismissed
@@ -344,7 +318,7 @@ internal class SubmissionAreaStore(
         when (event) {
             is AppEvent.UiIntentPublished -> {
                 when (val intent = event.intent) {
-                    is UiIntent.UpdateDocument -> applyDocumentUpdate(intent.value)
+                    is UiIntent.UpdateDocument -> applyDocumentUpdate(intent.value, intent.origin)
                     is UiIntent.InputChanged -> applyDocumentUpdate(
                         TextFieldValue(intent.value, TextRange(intent.value.length)),
                     )
@@ -703,10 +677,12 @@ internal class SubmissionAreaStore(
                 )
             }
 
-            AppEvent.ClearToolUserInputs -> _state.value = _state.value.copy(
-                toolUserInputQueue = emptyList(),
-                toolUserInputPrompt = null,
-            )
+            AppEvent.ClearToolUserInputs -> {
+                val retained = _state.value.toolUserInputQueue.filter {
+                    it.delivery == SessionInputDelivery.ASYNC
+                }.reindexedToolInputQueue()
+                _state.value = _state.value.copy(toolUserInputQueue = retained, toolUserInputPrompt = retained.firstOrNull())
+            }
 
             is AppEvent.PlanCompletionPromptUpdated -> {
                 _state.value = _state.value.copy(
@@ -778,16 +754,13 @@ internal class SubmissionAreaStore(
                 ).refreshSlashSuggestions()
             }
 
-            is AppEvent.PendingSubmissionsUpdated -> {
-                _state.value = _state.value
-                    .copy(pendingSubmissions = event.submissions)
-                    .let { current ->
-                        if (event.clearSubmissionDraft) {
-                            current.clearSubmissionDraft(clearInteractionQueues = false)
-                        } else {
-                            current
-                        }
-                    }
+            is AppEvent.LiveInputSending -> _state.value = _state.value.copy(sendingInput = event.sending)
+
+            is AppEvent.SubmissionDraftAccepted -> {
+                // Async acknowledgements must not erase edits made after the send click.
+                if (_state.value.draftSnapshot() == event.draft) {
+                    _state.value = _state.value.clearSubmissionDraft(clearInteractionQueues = false)
+                }
             }
 
             is AppEvent.SettingsSnapshotUpdated -> {
@@ -885,11 +858,15 @@ internal class SubmissionAreaStore(
         )
     }
 
-    fun applyDocumentUpdate(value: TextFieldValue): SubmissionLookupRequest? {
+    fun applyDocumentUpdate(value: TextFieldValue, origin: NativeDraftOrigin? = null): SubmissionLookupRequest? {
         val current = _state.value
         val normalizedValue = normalizeMentionSelection(current.document, value, current.mentionEntries)
         val syncedMentions = syncMentions(current.mentionEntries, current.document.text, normalizedValue)
-        val next = current.nextDocumentState(document = normalizedValue, mentionEntries = syncedMentions)
+        val next = current.nextDocumentState(
+            document = normalizedValue,
+            mentionEntries = syncedMentions,
+            origin = if (normalizedValue == value) origin else null,
+        )
         _state.value = next
         return next.activeLookup()
     }
@@ -911,6 +888,8 @@ internal class SubmissionAreaStore(
         val next = current.copy(
             attachments = attachments,
             document = nextDocument,
+            documentVersion = if (clearMention) current.documentVersion + 1 else current.documentVersion,
+            documentOrigin = if (clearMention) null else current.documentOrigin,
             mentionQuery = if (clearMention) "" else current.mentionQuery,
             mentionSuggestions = if (clearMention) emptyList() else current.mentionSuggestions,
             mentionPopupVisible = if (clearMention) false else current.mentionPopupVisible,
@@ -1007,6 +986,7 @@ internal class SubmissionAreaStore(
         _state.value = current.copy(
             document = nextDocument,
             documentVersion = current.documentVersion + 1,
+            documentOrigin = null,
             agentEntries = existing.values.toList(),
             agentQuery = "",
             agentSuggestions = emptyList(),
@@ -1189,8 +1169,6 @@ internal class SubmissionAreaStore(
             approvalPrompt = base.approvalPrompt,
             toolUserInputQueue = base.toolUserInputQueue,
             toolUserInputPrompt = base.toolUserInputPrompt,
-            // Restore queued submissions from the cached session-local composer state.
-            pendingSubmissions = pendingSubmissions,
         ).withResolvedContextEntries()
     }
 
@@ -1213,6 +1191,7 @@ internal class SubmissionAreaStore(
     private fun SubmissionAreaState.nextDocumentState(
         document: TextFieldValue,
         mentionEntries: List<MentionEntry>,
+        origin: NativeDraftOrigin? = null,
     ): SubmissionAreaState {
         val slashMatch = findSlashQuery(document, mentionEntries)
         val slashQuery = slashMatch?.query.orEmpty()
@@ -1236,6 +1215,7 @@ internal class SubmissionAreaStore(
         return copy(
             document = document,
             documentVersion = documentVersion + 1,
+            documentOrigin = origin,
             mentionEntries = mentionEntries,
             slashQuery = slashQuery,
             slashSuggestions = slashSuggestions,
@@ -1502,6 +1482,7 @@ private fun SubmissionAreaState.clearSubmissionDraft(clearInteractionQueues: Boo
     return copy(
         document = TextFieldValue(""),
         documentVersion = documentVersion + 1,
+        documentOrigin = null,
         attachments = emptyList(),
         previewAttachmentId = null,
         mentionEntries = emptyList(),
@@ -1519,8 +1500,12 @@ private fun SubmissionAreaState.clearSubmissionDraft(clearInteractionQueues: Boo
         activeSlashIndex = 0,
         approvalQueue = if (clearInteractionQueues) emptyList() else approvalQueue,
         approvalPrompt = if (clearInteractionQueues) null else approvalPrompt,
-        toolUserInputQueue = if (clearInteractionQueues) emptyList() else toolUserInputQueue,
-        toolUserInputPrompt = if (clearInteractionQueues) null else toolUserInputPrompt,
+        toolUserInputQueue = if (clearInteractionQueues) toolUserInputQueue.filter {
+            it.delivery == SessionInputDelivery.ASYNC
+        } else toolUserInputQueue,
+        toolUserInputPrompt = if (clearInteractionQueues) toolUserInputQueue.firstOrNull {
+            it.delivery == SessionInputDelivery.ASYNC
+        } else toolUserInputPrompt,
         planCompletion = if (clearInteractionQueues) null else planCompletion,
     )
 }

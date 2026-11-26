@@ -71,6 +71,9 @@ data class ProviderToolUserInputQuestion(
     val isSecret: Boolean = false,
 )
 
+/** Async questions are answered as conversation input, rather than a JSON-RPC response. */
+enum class UserInputDelivery { BLOCKING, ASYNC }
+
 data class ProviderToolUserInputPrompt(
     val requestId: String,
     val threadId: String,
@@ -80,6 +83,7 @@ data class ProviderToolUserInputPrompt(
     val rawQuestionsJson: String? = null,
     val responseSummary: String? = null,
     val status: ItemStatus = ItemStatus.RUNNING,
+    val delivery: UserInputDelivery = UserInputDelivery.BLOCKING,
 )
 
 data class ProviderToolUserInputAnswerDraft(

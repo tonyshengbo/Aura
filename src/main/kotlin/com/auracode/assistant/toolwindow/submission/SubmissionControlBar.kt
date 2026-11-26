@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.DropdownMenu
 import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.Icon
 import androidx.compose.material.IconButton
@@ -28,20 +27,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.auracode.assistant.i18n.AuraCodeBundle
+import com.auracode.assistant.model.TurnUsageSnapshot
 import com.auracode.assistant.toolwindow.eventing.SubmissionMode
 import com.auracode.assistant.toolwindow.eventing.SubmissionReasoning
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.eventing.localizedLabel
+import com.auracode.assistant.toolwindow.popup.WindowDropdownMenu
 import com.auracode.assistant.toolwindow.settings.SettingsTextInput
 import com.auracode.assistant.toolwindow.settings.rememberSettingsTextInputState
 import com.auracode.assistant.toolwindow.shared.DesignPalette
 import com.auracode.assistant.toolwindow.shared.HoverTooltip
+import com.auracode.assistant.toolwindow.shared.assistantPainterResource
 import com.auracode.assistant.toolwindow.shared.assistantUiTokens
-import com.auracode.assistant.model.TurnUsageSnapshot
 
 /** Represents the trailing composer button state derived from engine activity. */
 internal data class SubmissionTrailingActionState(
@@ -53,13 +53,7 @@ internal data class SubmissionTrailingActionState(
     val intent: UiIntent,
 )
 
-/**
- * Resolves the trailing composer button from engine state first.
- *
- * While the engine is running, the bottom-right action must stay bound to
- * cancellation so the user can always stop the active run. New prompt content
- * can still be submitted with Enter and queued separately by existing flow.
- */
+/** Keeps stopping an active run independent from sending additional content. */
 internal fun resolveSubmissionTrailingActionState(
     running: Boolean,
     hasPromptContent: Boolean,
@@ -113,7 +107,7 @@ internal fun SubmissionControlBar(
     val t = assistantUiTokens()
     val trailingActionState = resolveSubmissionTrailingActionState(
         running = running,
-        hasPromptContent = state.hasPromptContent(),
+        hasPromptContent = state.hasPromptContent() && !state.sendingInput && state.document.composition == null,
     )
     val engineSwitchEnabled = resolveEngineSwitchEnabled(running = running)
     Row(
@@ -254,6 +248,23 @@ internal fun SubmissionControlBar(
         //     ContextWindowIndicator(usage = usage, p = p)
         // }
         Spacer(Modifier.weight(1f))
+        if (running) {
+            val sendAction = resolveSubmissionTrailingActionState(
+                running = false,
+                hasPromptContent = state.hasPromptContent() && !state.sendingInput && state.document.composition == null,
+            )
+            HoverTooltip(text = sendAction.tooltip) {
+                TrailingActionChip(
+                    iconPath = sendAction.iconPath,
+                    contentDescription = sendAction.contentDescription,
+                    enabled = sendAction.enabled,
+                    running = false,
+                    p = p,
+                    onClick = { onIntent(sendAction.intent) },
+                )
+            }
+            Spacer(Modifier.width(t.spacing.xs))
+        }
         HoverTooltip(
             text = trailingActionState.tooltip,
         ) {
@@ -315,7 +326,7 @@ private fun DropdownChip(
                 modifier = Modifier.size(20.dp),
             )
         }
-        DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        WindowDropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
             content()
         }
     }

@@ -154,7 +154,12 @@ internal class SessionStateReducer {
             }
 
             is SessionDomainEvent.ToolUserInputRequested -> state.copy(
-                runtime = updateRuntimeForTurnScopedEvent(state.runtime, event.request.turnId),
+                // Async questions may be restored after their turn ended; never rewind the active turn.
+                runtime = if (event.request.delivery == SessionInputDelivery.ASYNC) {
+                    state.runtime
+                } else {
+                    updateRuntimeForTurnScopedEvent(state.runtime, event.request.turnId)
+                },
                 conversation = upsertConversationEntry(
                     conversation = state.conversation,
                     entry = SessionConversationEntry.ToolUserInput(
@@ -341,8 +346,10 @@ internal class SessionStateReducer {
                     conversation = updatedConversation,
                     execution = state.execution.copy(
                         approvalRequests = emptyMap(),
-                        toolUserInputs = emptyMap(),
-                        toolUserInputEntryIdsByRequestId = emptyMap(),
+                        toolUserInputs = state.execution.toolUserInputs.filterValues { it.delivery == SessionInputDelivery.ASYNC },
+                        toolUserInputEntryIdsByRequestId = state.execution.toolUserInputEntryIdsByRequestId.filterKeys { id ->
+                            state.execution.toolUserInputs[id]?.delivery == SessionInputDelivery.ASYNC
+                        },
                         runningPlan = null,
                     ),
                 )
@@ -519,7 +526,9 @@ internal class SessionStateReducer {
                 if (this.turnId == turnId && status == SessionActivityStatus.RUNNING) copy(status = terminalStatus) else this
 
             is SessionConversationEntry.ToolUserInput ->
-                if (this.turnId == turnId && status == SessionActivityStatus.RUNNING) copy(status = terminalStatus) else this
+                if (request.delivery != SessionInputDelivery.ASYNC && this.turnId == turnId && status == SessionActivityStatus.RUNNING) {
+                    copy(status = terminalStatus)
+                } else this
 
             is SessionConversationEntry.Plan ->
                 if (this.turnId == turnId && status == SessionActivityStatus.RUNNING) copy(status = terminalStatus) else this
@@ -556,7 +565,9 @@ internal class SessionStateReducer {
                 if (status == SessionActivityStatus.RUNNING) copy(status = terminalStatus) else this
 
             is SessionConversationEntry.ToolUserInput ->
-                if (status == SessionActivityStatus.RUNNING) copy(status = terminalStatus) else this
+                if (request.delivery != SessionInputDelivery.ASYNC && status == SessionActivityStatus.RUNNING) {
+                    copy(status = terminalStatus)
+                } else this
 
             is SessionConversationEntry.Plan ->
                 if (status == SessionActivityStatus.RUNNING) copy(status = terminalStatus) else this

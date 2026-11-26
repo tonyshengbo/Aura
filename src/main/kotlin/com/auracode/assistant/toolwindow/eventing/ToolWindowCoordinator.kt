@@ -1,55 +1,51 @@
 package com.auracode.assistant.toolwindow.eventing
 
+import com.auracode.assistant.context.MentionFileWhitelist
 import com.auracode.assistant.coroutine.AppCoroutineManager
 import com.auracode.assistant.coroutine.ManagedCoroutineScope
-import com.auracode.assistant.context.MentionFileWhitelist
 import com.auracode.assistant.i18n.AuraCodeBundle
+import com.auracode.assistant.logging.CliDebugLogger
 import com.auracode.assistant.notification.ChatCompletionNotificationService
 import com.auracode.assistant.persistence.chat.PersistedMessageAttachment
 import com.auracode.assistant.provider.claude.ClaudeCliVersionService
 import com.auracode.assistant.provider.codex.CodexCliVersionService
 import com.auracode.assistant.provider.codex.CodexEnvironmentDetector
 import com.auracode.assistant.provider.codex.CodexModelCatalogService
-import com.auracode.assistant.service.AgentChatService.SessionHistoryReplayPage
+import com.auracode.assistant.provider.runtime.RuntimeExecutableCheckService
 import com.auracode.assistant.service.AgentChatService
+import com.auracode.assistant.service.AgentChatService.SessionHistoryReplayPage
 import com.auracode.assistant.session.kernel.SessionDomainEvent
-import com.auracode.assistant.session.kernel.SessionTurnOutcome
 import com.auracode.assistant.session.kernel.SessionKernelManager
 import com.auracode.assistant.session.kernel.SessionMessageAttachment
 import com.auracode.assistant.session.kernel.SessionMessageRole
+import com.auracode.assistant.session.kernel.SessionTurnOutcome
 import com.auracode.assistant.session.projection.SessionUiProjectionBuilder
 import com.auracode.assistant.session.projection.execution.ExecutionUiProjection
 import com.auracode.assistant.settings.AgentSettingsService
+import com.auracode.assistant.settings.mcp.McpManagementAdapterRegistry
 import com.auracode.assistant.settings.skills.EngineSkillsService
 import com.auracode.assistant.settings.skills.LocalSkillInstallPolicy
 import com.auracode.assistant.settings.skills.SkillProjectionManager
 import com.auracode.assistant.settings.skills.SkillRootScanner
 import com.auracode.assistant.settings.skills.SkillsRuntimeService
-import com.auracode.assistant.settings.mcp.McpManagementAdapterRegistry
-import com.auracode.assistant.provider.runtime.RuntimeExecutableCheckService
-import com.auracode.assistant.toolwindow.execution.ApprovalAreaStore
-import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
-import com.auracode.assistant.toolwindow.submission.EditedFileAggregate
-import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
-import com.auracode.assistant.toolwindow.shell.SidePanelKind
-import com.auracode.assistant.toolwindow.settings.RuntimeSettingsTab
-import com.auracode.assistant.toolwindow.shared.UiText
-import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
-import com.auracode.assistant.toolwindow.sessions.SessionSubmissionViewStateRegistry
-import com.auracode.assistant.toolwindow.sessions.SessionConversationUiStateRegistry
-import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
-import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
+import com.auracode.assistant.toolwindow.execution.ApprovalAreaStore
+import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptStore
-import com.auracode.assistant.logging.CliDebugLogger
+import com.auracode.assistant.toolwindow.sessions.SessionAttentionStore
+import com.auracode.assistant.toolwindow.sessions.SessionConversationUiStateRegistry
+import com.auracode.assistant.toolwindow.sessions.SessionSubmissionViewStateRegistry
+import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
+import com.auracode.assistant.toolwindow.settings.RuntimeSettingsTab
+import com.auracode.assistant.toolwindow.shared.UiText
+import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
+import com.auracode.assistant.toolwindow.shell.SidePanelKind
+import com.auracode.assistant.toolwindow.submission.EditedFileAggregate
+import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.util.LowMemoryWatcher
-import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
 import java.awt.Desktop
 import java.net.URI
 import java.nio.charset.StandardCharsets
@@ -57,6 +53,10 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.io.path.isRegularFile
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 
 internal class ToolWindowCoordinator(
     private val chatService: AgentChatService,
@@ -161,7 +161,6 @@ internal class ToolWindowCoordinator(
     private val sessionHistoryTransientUiRegistry = SessionHistoryTransientUiRegistry()
     private val sessionSubmissionViewStateRegistry = SessionSubmissionViewStateRegistry()
     private val sessionConversationUiStateRegistry = SessionConversationUiStateRegistry()
-    private val pendingSubmissionsBySessionId = linkedMapOf<String, ArrayDeque<com.auracode.assistant.toolwindow.submission.PendingSubmission>>()
     private val activePlanRunContexts = linkedMapOf<String, ActivePlanRunContext>()
     private val sessionHistoryRebaseInFlight = ConcurrentHashMap.newKeySet<String>()
     private val projectionPerformanceTracker = SessionUiProjectionPerformanceTracker(
@@ -234,7 +233,6 @@ internal class ToolWindowCoordinator(
         historyPageSize = historyPageSize,
         scope = scope.coroutineScope,
         recentFocusedFiles = recentFocusedFiles,
-        pendingSubmissionsBySessionId = pendingSubmissionsBySessionId,
         activePlanRunContexts = activePlanRunContexts,
         coroutineLauncher = coroutineLauncher,
         dispatchSessionEvent = { sessionId, event -> dispatchSessionEvent(sessionId, event) },
@@ -244,7 +242,7 @@ internal class ToolWindowCoordinator(
         publishSessionSnapshot = { publishSessionSnapshot() },
         publishSettingsSnapshot = { publishSettingsSnapshot() },
         publishConversationCapabilities = { publishConversationCapabilities() },
-        publishLocalUserMessage = { sessionId, sourceId, text, timestamp, turnId, attachments ->
+        publishLocalUserMessage = { sessionId, sourceId, text, timestamp, turnId, attachments, startTurn ->
             publishLocalUserMessage(
                 sessionId = sessionId,
                 sourceId = sourceId,
@@ -252,6 +250,7 @@ internal class ToolWindowCoordinator(
                 timestamp = timestamp,
                 turnId = turnId,
                 attachments = attachments,
+                startTurn = startTurn,
             )
         },
         restoreSessionHistory = { sessionId, page, prepend ->
@@ -273,6 +272,7 @@ internal class ToolWindowCoordinator(
     private val planHandler = PlanFlowHandler(context, EXECUTE_APPROVED_PLAN_PROMPT)
     private val historyHandler = ConversationHistoryHandler(context) { planHandler.resetPlanFlowState() }
     private val conversationHandler = ConversationFlowHandler(context, workspaceHandler)
+    private val asyncQuestionHandler = AsyncQuestionFlowHandler(context, conversationHandler)
 
     init {
         LowMemoryWatcher.register(
@@ -343,7 +343,6 @@ internal class ToolWindowCoordinator(
             UiIntent.CancelRun -> conversationHandler.cancelPromptRun(
                 onResetPlanFlowState = { planHandler.resetPlanFlowState() },
             )
-            is UiIntent.RemovePendingSubmission -> conversationHandler.removePendingSubmission(intent.id)
             is UiIntent.DeleteSession -> conversationHandler.deleteSession(
                 onRestoreHistory = { historyHandler.restoreCurrentSessionHistory() },
                 sessionId = intent.sessionId,
@@ -415,6 +414,7 @@ internal class ToolWindowCoordinator(
                 planHandler.submitApprovalDecision(intent.action)
             }
             UiIntent.SubmitToolUserInputPrompt -> {
+                if (asyncQuestionHandler.submitIfAsync(skip = false)) return
                 planHandler.submitToolUserInputPrompt(cancelled = false) {
                     conversationHandler.cancelPromptRun(
                         onResetPlanFlowState = { planHandler.resetPlanFlowState() },
@@ -422,6 +422,7 @@ internal class ToolWindowCoordinator(
                 }
             }
             UiIntent.CancelToolUserInputPrompt -> {
+                if (asyncQuestionHandler.submitIfAsync(skip = true)) return
                 planHandler.submitToolUserInputPrompt(cancelled = true) {
                     conversationHandler.cancelPromptRun(
                         onResetPlanFlowState = { planHandler.resetPlanFlowState() },
@@ -485,7 +486,7 @@ internal class ToolWindowCoordinator(
         }
     }
 
-    /** Records one local user message into the session kernel before provider events arrive. */
+    /** Follow-ups append content without restarting the current turn or reviving a completed run. */
     private fun publishLocalUserMessage(
         sessionId: String,
         sourceId: String,
@@ -493,9 +494,10 @@ internal class ToolWindowCoordinator(
         timestamp: Long,
         turnId: String?,
         attachments: List<PersistedMessageAttachment>,
+        startTurn: Boolean,
     ) {
         val localEvents = buildList {
-            turnId?.takeIf { it.isNotBlank() }?.let { localTurnId ->
+            turnId?.takeIf { startTurn && it.isNotBlank() }?.let { localTurnId ->
                 add(
                     SessionDomainEvent.TurnStarted(
                         turnId = localTurnId,
@@ -605,17 +607,6 @@ internal class ToolWindowCoordinator(
             conversationEntryIds = incrementalConversationEntryIdsFor(events),
             immediate = events.any(::requiresImmediateProjection),
         )
-        if (events.any { event ->
-                event is SessionDomainEvent.TurnCompleted &&
-                    event.outcome in setOf(
-                        SessionTurnOutcome.SUCCESS,
-                        SessionTurnOutcome.FAILED,
-                        SessionTurnOutcome.CANCELLED,
-                    )
-            }
-        ) {
-            conversationHandler.dispatchNextPendingSubmissionIfIdle(sessionId, allowTurnCompletedBypass = true)
-        }
         events.filterIsInstance<SessionDomainEvent.TurnCompleted>()
             .lastOrNull()
             ?.let { completed -> scheduleConversationMemoryRebase(sessionId, completed.turnId) }
@@ -647,6 +638,7 @@ internal class ToolWindowCoordinator(
                 if (sessionId != activeSessionId()) return@launch
                 if (chatService.listSessions().firstOrNull { it.id == sessionId }?.isRunning == true) return@launch
                 val page = chatService.loadCurrentConversationReplay(
+                    sessionId = sessionId,
                     limit = minOf(historyPageSize, CONVERSATION_MEMORY_REBASE_PAGE_SIZE),
                 )
                 val containsCompletedTurn = page.events.any { event ->
@@ -934,6 +926,11 @@ internal class ToolWindowCoordinator(
         sessionId: String,
         event: AppEvent,
     ) {
+        // Sending can finish after switching tabs; update the question draft cache by thread/request identity.
+        if (event is AppEvent.ToolUserInputSubmissionUpdated) {
+            toolUserInputPromptStore.onEvent(event)
+            return
+        }
         if (sessionId == activeSessionId()) {
             executionStatusStore.onEvent(event)
             conversationStore.onEvent(event)

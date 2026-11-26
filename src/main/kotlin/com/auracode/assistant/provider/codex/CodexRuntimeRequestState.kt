@@ -1,22 +1,25 @@
 package com.auracode.assistant.provider.codex
 
-import com.auracode.assistant.protocol.TurnOutcome
+import com.auracode.assistant.model.AgentRequest
 import com.auracode.assistant.protocol.ProviderEvent
 import com.auracode.assistant.protocol.ProviderToolUserInputAnswerDraft
 import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
 import com.auracode.assistant.protocol.ProviderToolUserInputSubmission
+import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.toolwindow.execution.ApprovalAction
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
-import java.util.concurrent.ConcurrentHashMap
 
 /** Stores mutable request state that is shared across provider lifecycle helpers. */
 internal data class ActiveRequest(
     val process: Process,
+    val request: AgentRequest? = null,
+    val inputReady: CompletableDeferred<CodexRuntimeClient> = CompletableDeferred(),
     @Volatile var threadId: String? = null,
     @Volatile var turnId: String? = null,
     @Volatile var lastStderrLine: String? = null,
@@ -28,6 +31,7 @@ internal data class ActiveRequest(
     /** Cancels the running request and resolves pending user interactions defensively. */
     fun cancel() {
         cancelledLocally = true
+        inputReady.cancel()
         pendingApprovals.values.forEach { deferred ->
             if (!deferred.isCompleted) {
                 deferred.complete(ApprovalAction.REJECT)

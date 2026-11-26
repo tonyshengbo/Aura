@@ -2,31 +2,31 @@ package com.auracode.assistant.toolwindow.submission
 
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
-import com.auracode.assistant.protocol.ProviderApprovalRequestKind
 import com.auracode.assistant.conversation.ConversationCapabilities
 import com.auracode.assistant.model.ContextFile
 import com.auracode.assistant.model.TurnUsageSnapshot
-import com.auracode.assistant.provider.EngineDescriptor
+import com.auracode.assistant.protocol.ProviderApprovalRequestKind
 import com.auracode.assistant.provider.EngineCapabilities
-import com.auracode.assistant.service.AgentChatService
+import com.auracode.assistant.provider.EngineDescriptor
 import com.auracode.assistant.provider.codex.CodexModelCatalog
+import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.settings.SavedAgentDefinition
+import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
+import com.auracode.assistant.toolwindow.conversation.ConversationFileChangeKind
 import com.auracode.assistant.toolwindow.eventing.AppEvent
 import com.auracode.assistant.toolwindow.eventing.SubmissionMode
 import com.auracode.assistant.toolwindow.eventing.UiIntent
 import com.auracode.assistant.toolwindow.execution.PendingApprovalRequestUiModel
 import com.auracode.assistant.toolwindow.execution.PlanCompletionPromptUiModel
-import com.auracode.assistant.toolwindow.conversation.ConversationFileChange
-import com.auracode.assistant.toolwindow.conversation.ConversationFileChangeKind
 import com.auracode.assistant.toolwindow.execution.ToolUserInputOptionUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputPromptUiModel
 import com.auracode.assistant.toolwindow.execution.ToolUserInputQuestionUiModel
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
-import kotlin.test.assertFalse
 
 class SubmissionAreaStoreTest {
     @Test
@@ -1670,33 +1670,21 @@ class SubmissionAreaStoreTest {
     }
 
     @Test
-    fun `pending submissions update syncs queue and can clear current draft`() {
+    fun `live acknowledgement clears only the submitted draft and preserves interactive state`() {
         val store = SubmissionAreaStore()
-        store.onEvent(AppEvent.UiIntentPublished(UiIntent.InputChanged("queued prompt")))
-
-        store.onEvent(
-            AppEvent.PendingSubmissionsUpdated(
-                submissions = listOf(
-                    PendingSubmission(
-                        id = "pending-1",
-                        prompt = "queued prompt",
-                        systemInstructions = emptyList(),
-                        contextFiles = listOf(ContextFile(path = "/tmp/A.kt")),
-                        imageAttachments = emptyList(),
-                        fileAttachments = emptyList(),
-                        stagedAttachments = emptyList(),
-                        selectedModel = CodexModelCatalog.defaultModel,
-                        selectedReasoning = com.auracode.assistant.toolwindow.eventing.SubmissionReasoning.MEDIUM,
-                        executionMode = SubmissionMode.AUTO,
-                        planEnabled = false,
-                    ),
-                ),
-                clearSubmissionDraft = true,
-            ),
-        )
-
-        assertEquals(1, store.state.value.pendingSubmissions.size)
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.InputChanged("first")))
+        val firstDraft = store.state.value.draftSnapshot()
+        store.onEvent(AppEvent.UiIntentPublished(UiIntent.InputChanged("new edit")))
+        store.onEvent(AppEvent.SubmissionDraftAccepted(firstDraft))
+        assertEquals("new edit", store.state.value.inputText)
+        val plan = SubmissionPlanCompletionState("turn-1", null, SubmissionMode.AUTO, "Plan", "summary", "body")
+        store.restoreState(store.state.value.copy(planCompletion = plan))
+        store.onEvent(AppEvent.ToolUserInputRequested(toolUserInputPrompt()))
+        val toolPrompt = store.state.value.toolUserInputPrompt
+        store.onEvent(AppEvent.SubmissionDraftAccepted(store.state.value.draftSnapshot()))
         assertEquals("", store.state.value.document.text)
+        assertEquals(plan, store.state.value.planCompletion)
+        assertEquals(toolPrompt, store.state.value.toolUserInputPrompt)
     }
 
     @Test

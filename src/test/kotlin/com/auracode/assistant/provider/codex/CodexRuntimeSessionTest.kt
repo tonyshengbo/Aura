@@ -1,19 +1,36 @@
 package com.auracode.assistant.provider.codex
 
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.EOFException
 import java.util.Collections
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
 
 /**
  * Verifies that app-server notifications preserve wire order while being dispatched to higher layers.
  */
 class CodexRuntimeSessionTest {
+    @Test
+    fun `EOF releases a live request waiting for its acknowledgement`() = runBlocking {
+        val session = CodexProcessRuntimeSession(ScriptedProcess(emptyList()), {})
+        val request = async {
+            assertFailsWith<EOFException> { session.request("turn/steer", buildJsonObject {}) }
+        }
+        // Let the request register before the finite scripted stdout reaches EOF.
+        delay(20)
+        session.start()
+        withTimeout(2_000) { request.await() }
+        session.close()
+    }
+
 
     /**
      * Ensures later notifications cannot overtake earlier ones when the first handler suspends.

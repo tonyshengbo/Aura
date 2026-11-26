@@ -4,37 +4,34 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.auracode.assistant.conversation.ConversationCapabilities
 import com.auracode.assistant.model.AgentRequest
+import com.auracode.assistant.persistence.chat.SQLiteChatSessionRepository
+import com.auracode.assistant.protocol.ItemKind
+import com.auracode.assistant.protocol.ItemStatus
+import com.auracode.assistant.protocol.ProviderEvent
+import com.auracode.assistant.protocol.ProviderFileChange
+import com.auracode.assistant.protocol.ProviderItem
+import com.auracode.assistant.protocol.ProviderPlanStep
+import com.auracode.assistant.protocol.ProviderRunningPlanPresentation
+import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
+import com.auracode.assistant.protocol.ProviderToolUserInputQuestion
+import com.auracode.assistant.protocol.TurnOutcome
 import com.auracode.assistant.provider.AgentProvider
 import com.auracode.assistant.provider.AgentProviderFactory
 import com.auracode.assistant.provider.EngineCapabilities
 import com.auracode.assistant.provider.EngineDescriptor
 import com.auracode.assistant.provider.ProviderRegistry
 import com.auracode.assistant.provider.claude.ClaudeModelCatalog
-import com.auracode.assistant.protocol.ItemKind
-import com.auracode.assistant.protocol.ItemStatus
-import com.auracode.assistant.protocol.ProviderRunningPlanPresentation
-import com.auracode.assistant.protocol.TurnOutcome
-import com.auracode.assistant.protocol.ProviderEvent
-import com.auracode.assistant.protocol.ProviderFileChange
-import com.auracode.assistant.protocol.ProviderItem
-import com.auracode.assistant.protocol.ProviderPlanStep
-import com.auracode.assistant.protocol.ProviderToolUserInputPrompt
-import com.auracode.assistant.protocol.ProviderToolUserInputQuestion
+import com.auracode.assistant.provider.input.LiveInput
+import com.auracode.assistant.provider.input.LiveInputResult
 import com.auracode.assistant.service.AgentChatService
 import com.auracode.assistant.settings.AgentSettingsService
-import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
-import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
-import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
-import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
-import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
 import com.auracode.assistant.toolwindow.conversation.ConversationActivityItem
+import com.auracode.assistant.toolwindow.conversation.ConversationAreaStore
+import com.auracode.assistant.toolwindow.execution.ExecutionStatusAreaStore
+import com.auracode.assistant.toolwindow.sessions.SessionTabsAreaStore
 import com.auracode.assistant.toolwindow.shared.UiText
-import com.auracode.assistant.persistence.chat.SQLiteChatSessionRepository
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
+import com.auracode.assistant.toolwindow.shell.SidePanelAreaStore
+import com.auracode.assistant.toolwindow.submission.SubmissionAreaStore
 import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -44,6 +41,12 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ToolWindowCoordinatorMultiSessionTest {
@@ -608,77 +611,93 @@ class ToolWindowCoordinatorMultiSessionTest {
     }
 
     @Test
-    fun `queued background session submission dispatches without mutating the active tab`() {
+    fun `live acknowledgement clears the original session draft without mutating another tab`() {
         val harness = CoordinatorHarness()
-
         val sessionA = harness.service.getCurrentSessionId()
         val sessionB = harness.createSession()
         harness.eventHub.publishUiIntent(UiIntent.SwitchSession(sessionA))
         harness.waitUntil { harness.chatService.getCurrentSessionId() == sessionA }
-
-        harness.eventHub.publishUiIntent(UiIntent.UpdateDocument(TextFieldValue("run-a-1", TextRange(7))))
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("run-a"))
         harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
         harness.waitUntil { harness.provider.requests.size == 1 }
-        harness.provider.emit("run-a-1", ProviderEvent.ThreadStarted(threadId = "thread-a"))
-        harness.provider.emit("run-a-1", ProviderEvent.TurnStarted(turnId = "turn-a-1", threadId = "thread-a"))
-
-        harness.eventHub.publishUiIntent(UiIntent.UpdateDocument(TextFieldValue("run-a-2", TextRange(7))))
+        harness.provider.liveGate = CompletableDeferred()
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("follow-a"))
         harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
-        harness.waitUntil { harness.submissionStore.state.value.pendingSubmissions.size == 1 }
-
+        harness.waitUntil { harness.provider.liveInputs.size == 1 }
         harness.eventHub.publishUiIntent(UiIntent.SwitchSession(sessionB))
-        harness.waitUntil {
-            harness.chatService.getCurrentSessionId() == sessionB &&
-                harness.submissionStore.state.value.currentSessionId == sessionB &&
-                harness.submissionStore.state.value.pendingSubmissions.isEmpty()
-        }
-        assertTrue(harness.submissionStore.state.value.pendingSubmissions.isEmpty())
-
-        harness.provider.emit("run-a-1", ProviderEvent.TurnCompleted(turnId = "turn-a-1", outcome = TurnOutcome.SUCCESS))
-        harness.waitUntil { harness.provider.requests.size == 2 }
-        assertEquals("run-a-2", harness.provider.requests.last().prompt)
-        assertTrue(
-            harness.conversationStore.state.value.nodes.filterIsInstance<ConversationActivityItem.MessageNode>().none { it.text == "run-a-2" },
-        )
-
+        harness.waitUntil { harness.chatService.getCurrentSessionId() == sessionB }
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("draft-b"))
+        harness.waitUntil { harness.submissionStore.state.value.inputText == "draft-b" }
+        harness.provider.liveGate!!.complete(LiveInputResult.Accepted("turn-a"))
+        harness.waitUntil { !harness.submissionStore.state.value.sendingInput }
+        assertEquals("draft-b", harness.submissionStore.state.value.inputText)
         harness.eventHub.publishUiIntent(UiIntent.SwitchSession(sessionA))
         harness.waitUntil {
-            harness.conversationStore.state.value.nodes.filterIsInstance<ConversationActivityItem.MessageNode>().any { it.text == "run-a-2" }
+            harness.chatService.getCurrentSessionId() == sessionA &&
+                !harness.submissionStore.state.value.sendingInput &&
+                harness.submissionStore.state.value.inputText.isBlank()
         }
-
+        assertEquals(1, harness.provider.requests.size)
+        assertEquals("follow-a", harness.provider.liveInputs.single().second.prompt)
+        assertEquals(harness.provider.requests.single().requestId, harness.provider.liveInputs.single().first)
         harness.dispose()
     }
 
-    /** Verifies queued submissions survive session view restoration and stay scoped to their original session. */
     @Test
-    fun `queued submission restores after switching away and back to the original session`() {
+    fun `failed live input retains draft and does not start another run`() {
         val harness = CoordinatorHarness()
-
-        val sessionA = harness.service.getCurrentSessionId()
-        val sessionB = harness.createSession()
-        harness.eventHub.publishUiIntent(UiIntent.SwitchSession(sessionA))
-        harness.waitUntil { harness.chatService.getCurrentSessionId() == sessionA }
-
-        harness.eventHub.publishUiIntent(UiIntent.UpdateDocument(TextFieldValue("run-a-1", TextRange(7))))
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("running"))
         harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
         harness.waitUntil { harness.provider.requests.size == 1 }
-        harness.provider.emit("run-a-1", ProviderEvent.ThreadStarted(threadId = "thread-a"))
-        harness.provider.emit("run-a-1", ProviderEvent.TurnStarted(turnId = "turn-a-1", threadId = "thread-a"))
-
-        harness.eventHub.publishUiIntent(UiIntent.UpdateDocument(TextFieldValue("run-a-2", TextRange(7))))
+        harness.provider.liveGate = CompletableDeferred()
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("follow-up"))
         harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
-        harness.waitUntil { harness.submissionStore.state.value.pendingSubmissions.size == 1 }
+        harness.waitUntil { harness.provider.liveInputs.size == 1 }
+        harness.provider.liveGate!!.complete(LiveInputResult.Rejected("pipe closed"))
+        harness.waitUntil { !harness.submissionStore.state.value.sendingInput }
+        assertEquals("follow-up", harness.submissionStore.state.value.inputText)
+        assertEquals(1, harness.provider.requests.size)
+        harness.dispose()
+    }
 
-        harness.eventHub.publishUiIntent(UiIntent.SwitchSession(sessionB))
-        harness.waitUntil { harness.chatService.getCurrentSessionId() == sessionB }
-        harness.waitUntil { harness.submissionStore.state.value.pendingSubmissions.isEmpty() }
+    @Test
+    fun `live acceptance after native completion does not revive the finished turn`() {
+        val harness = CoordinatorHarness()
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("running"))
+        harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
+        harness.waitUntil { harness.provider.requests.size == 1 }
+        harness.provider.emit("running", ProviderEvent.TurnStarted("turn-native", "thread-native"))
+        harness.provider.liveGate = CompletableDeferred()
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("follow-up"))
+        harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
+        harness.waitUntil { harness.provider.liveInputs.size == 1 }
+        harness.provider.emit("running", ProviderEvent.TurnCompleted("turn-native", TurnOutcome.SUCCESS))
+        harness.waitUntil { !harness.conversationStore.state.value.isRunning }
+        harness.provider.liveGate!!.complete(LiveInputResult.Accepted("turn-native"))
+        harness.waitUntil { !harness.submissionStore.state.value.sendingInput }
+        assertFalse(harness.conversationStore.state.value.isRunning)
+        assertEquals(1, harness.provider.requests.size)
+        harness.dispose()
+    }
 
-        harness.eventHub.publishUiIntent(UiIntent.SwitchSession(sessionA))
-        harness.waitUntil { harness.chatService.getCurrentSessionId() == sessionA }
-        harness.waitUntil { harness.submissionStore.state.value.pendingSubmissions.size == 1 }
-
-        assertEquals("run-a-2", harness.submissionStore.state.value.pendingSubmissions.single().prompt)
-
+    @Test
+    fun `duplicate live sends are blocked and later edits survive acceptance`() {
+        val harness = CoordinatorHarness()
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("running"))
+        harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
+        harness.waitUntil { harness.provider.requests.size == 1 }
+        harness.provider.liveGate = CompletableDeferred()
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("follow-up"))
+        harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
+        harness.waitUntil { harness.provider.liveInputs.size == 1 }
+        harness.eventHub.publishUiIntent(UiIntent.SendPrompt)
+        harness.eventHub.publishUiIntent(UiIntent.InputChanged("later edit"))
+        harness.waitUntil { harness.submissionStore.state.value.inputText == "later edit" }
+        harness.provider.liveGate!!.complete(LiveInputResult.Accepted("turn-native"))
+        harness.waitUntil { !harness.submissionStore.state.value.sendingInput }
+        assertEquals("later edit", harness.submissionStore.state.value.inputText)
+        assertEquals(1, harness.provider.liveInputs.size)
+        assertEquals(1, harness.provider.requests.size)
         harness.dispose()
     }
 
@@ -1035,6 +1054,13 @@ class ToolWindowCoordinatorMultiSessionTest {
 
     private class RecordingMultiSessionProvider : AgentProvider {
         val requests = CopyOnWriteArrayList<AgentRequest>()
+        val liveInputs = CopyOnWriteArrayList<Pair<String, LiveInput>>()
+        var liveGate: CompletableDeferred<LiveInputResult>? = null
+
+        override suspend fun submitLiveInput(requestId: String, input: LiveInput): LiveInputResult {
+            liveInputs += requestId to input
+            return liveGate?.await() ?: LiveInputResult.Accepted("turn-live")
+        }
         private val sinks = ConcurrentHashMap<String, kotlinx.coroutines.channels.SendChannel<com.auracode.assistant.session.kernel.SessionDomainEvent>>()
 
         override fun capabilities(): ConversationCapabilities = ConversationCapabilities(

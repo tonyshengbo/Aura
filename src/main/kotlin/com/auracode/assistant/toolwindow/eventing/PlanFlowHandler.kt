@@ -292,6 +292,7 @@ internal class PlanFlowHandler(
                 message.timestamp,
                 message.turnId,
                 message.attachments,
+                true,
             )
         }
         context.publishSessionSnapshot()
